@@ -26,6 +26,14 @@ interface ProviderErrorShape {
   };
 }
 
+interface CompletionChoiceShape {
+  message: {
+    content: string | null;
+    tool_calls?: ChatCompletionMessageToolCall[];
+  };
+  finish_reason: string | null;
+}
+
 function inferProviderErrorCategory(status: number | undefined, message: string): string {
   if (status === 401 || status === 403) {
     return "auth";
@@ -194,6 +202,58 @@ function mapStopReason(reason: string | null): GenerateResult["stopReason"] {
   return "end_turn";
 }
 
+function responseKeys(response: unknown): string[] | undefined {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    return undefined;
+  }
+
+  return Object.keys(response);
+}
+
+function getFirstChoice(response: unknown): CompletionChoiceShape {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: "Provider returned malformed chat completion response: expected an object",
+      details: {
+        responseType: Array.isArray(response) ? "array" : typeof response,
+      },
+    });
+  }
+
+  const maybeChoices = (response as { choices?: unknown }).choices;
+  if (!Array.isArray(maybeChoices)) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: "Provider returned malformed chat completion response: missing choices array",
+      details: {
+        responseKeys: responseKeys(response),
+      },
+    });
+  }
+
+  const choice = maybeChoices[0];
+  if (!choice) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: "Provider returned no completion choices",
+    });
+  }
+
+  const message = (choice as { message?: unknown }).message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: "Provider returned malformed chat completion response: missing assistant message",
+      details: {
+        choiceKeys: responseKeys(choice),
+      },
+    });
+  }
+
+  return choice as CompletionChoiceShape;
+}
+
 export class OpenAICompatibleModelAdapter implements ModelAdapter {
   readonly name: string;
   readonly connection: Required<Pick<OpenAICompatibleModelAdapterOptions, "provider" | "model">> &
@@ -237,13 +297,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
       throw extractProviderError(error);
     }
 
-    const choice = response.choices[0];
-    if (!choice) {
-      throw new RuntimeError({
-        code: "MODEL_ERROR",
-        message: "Provider returned no completion choices",
-      });
-    }
+    const choice = getFirstChoice(response);
 
     return {
       message: mapAssistantMessage(choice.message),

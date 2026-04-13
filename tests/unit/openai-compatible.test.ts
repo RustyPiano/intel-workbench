@@ -3,6 +3,42 @@ import { describe, expect, test } from "vitest";
 import { OpenAICompatibleModelAdapter } from "../../src/model/openai-compatible.js";
 
 describe("OpenAICompatibleModelAdapter", () => {
+  test("rejects malformed provider responses that omit the choices array", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      provider: "openai-compatible",
+      model: "nvidia/nemotron-3-super-120b-a12b:free",
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return {
+              id: "chatcmpl_malformed",
+              object: "chat.completion",
+            };
+          },
+        },
+      },
+    };
+
+    await expect(
+      adapter.generate({
+        systemPrompt: "You are a test.",
+        messages: [],
+        tools: [],
+      }),
+    ).rejects.toMatchObject({
+      code: "MODEL_ERROR",
+      message: "Provider returned malformed chat completion response: missing choices array",
+      details: {
+        responseKeys: ["id", "object"],
+      },
+    });
+  });
+
   test("surfaces upstream provider details from OpenRouter-style 429 errors", async () => {
     const adapter = new OpenAICompatibleModelAdapter({
       provider: "openai-compatible",

@@ -103,6 +103,8 @@
 
 为 session loader、session resume、session inspection、corruption handling 提供统一判定标准。
 
+当前实现对应的字段说明、加载模式和恢复语义见 [reference/session-format.md](reference/session-format.md)。
+
 ### 5.2 Session Entry 类型
 
 `v1.1` 将 session entry 明确划分为以下类型：
@@ -251,6 +253,8 @@ session loader 至少应输出以下之一：
 
 将工具执行从“工具自行决定行为”提升为“runtime 统一施加约束”。
 
+当前 runtime contract、path policy、mutation queue 和 built-in tool envelope 见 [reference/tool-contracts.md](reference/tool-contracts.md)。
+
 ### 6.2 统一输入校验
 
 必须满足：
@@ -369,6 +373,8 @@ type ToolResult = {
 
 提高模型/provider 问题、session 问题和环境问题的可诊断性。
 
+CLI/config 的当前表面见 [reference/cli-and-config.md](reference/cli-and-config.md)，provider adapter 的错误映射与信号传播见 [reference/model-adapter.md](reference/model-adapter.md)。
+
 ### 7.2 `doctor` 最小增强要求
 
 `doctor` 至少应输出以下分组结果：
@@ -419,52 +425,28 @@ CLI 应避免把 provider 侧问题压成单一消息。至少应区分：
 
 ## 8. Maintainer Documentation
 
-`v1.1` 必须新增或完善以下文档：
+`v1.1` 将 maintainer-facing 细节从 delta spec 中拆出，形成以下文档集：
 
-### 8.1 `docs/session-format.md`
+- [reference/session-format.md](reference/session-format.md)
+- [reference/tool-contracts.md](reference/tool-contracts.md)
+- [reference/model-adapter.md](reference/model-adapter.md)
+- [how-to/write-a-skill.md](how-to/write-a-skill.md)
 
-至少说明：
+本 spec 继续承担：
 
-- session entry 类型
-- entry 字段示例
-- 合法顺序
-- corruption 行为
-- resume / recover 行为
+- 范围边界
+- 规范性要求
+- 测试与验收标准
 
-### 8.2 `docs/tool-contracts.md`
-
-至少说明：
-
-- 统一 result envelope
-- timeout / abort
-- artifact 规则
-- path policy
-- mutation queue
-
-### 8.3 `docs/model-adapter.md`
-
-至少说明：
-
-- adapter interface
-- tool call 映射约定
-- error surfacing 规则
-- signal 传播约定
-
-### 8.4 `docs/write-a-skill.md`
-
-至少说明：
-
-- Skill 目录结构
-- `SKILL.md` frontmatter 约定
-- activation 行为
-- progressive disclosure
-- 如何为 Skill 准备测试夹具
+字段级示例、当前实现细节和作者操作步骤应优先维护在上述 reference / how-to 文档中。
 
 ---
 
 ## 9. First-skill Readiness
 
 `v1.1` 不要求实现完整业务 Skill，但必须为其落地做好准备。
+
+Skill 作者侧操作说明见 [how-to/write-a-skill.md](how-to/write-a-skill.md)。
 
 ### 9.1 要求
 

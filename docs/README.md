@@ -27,6 +27,7 @@ This directory is organized by document type.
 - [Runtime architecture](./explanation/runtime-architecture.md)
 - [Spec author handoff: v1 status](./explanation/spec-author-handoff-2026-04-13.md)
 - [Spec author handoff: v1.1 completion](./explanation/spec-author-handoff-v1.1-completion-2026-04-13.md)
+- [Spec author handoff: v1.2 observable runtime](./explanation/spec-author-handoff-v1.2-observable-runtime-2026-04-13.md)
 
 ## Specs and planning history
 

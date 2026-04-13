@@ -66,18 +66,14 @@
 
 ### Gate B：规格收口完成最小闭环
 
-状态：**部分满足**
+状态：**已满足**
 
 依据：
 
-- `docs/mini-agent-runtime-v1.1-spec.md` 已包含 `Session Grammar`、`Tool Execution Contract`、`Corruption / Recovery` 草案
-- 但这些规则仍主要停留在增量规格里，尚未拆成稳定的 maintainer reference 文档
-- `valid / degraded / corrupted` 的三态设计已写进 v1.1 draft，但当前实现还未进入该模型
-
-判断：
-
-- 可以开始做 v1.1 规划
-- 还不适合把 Gate B 视为“实现与文档都收口完毕”
+- `docs/mini-agent-runtime-v1.1-spec.md` 已明确 `Session Grammar`、`Tool Execution Contract`、`Corruption / Recovery`
+- 相关 maintainer reference 已拆出：`docs/reference/session-format.md`、`docs/reference/tool-contracts.md`、`docs/reference/model-adapter.md`
+- 当前实现已具备 `valid / degraded / corrupted` 状态与 strict / recover load mode
+- 当前行为与新增文档已能形成可 review 的 conformance 基线
 
 ### Gate C：范围冻结
 
@@ -91,42 +87,47 @@
 
 ### Gate D：运维与诊断准备
 
-状态：**未满足**
+状态：**部分满足**
 
 依据：
 
 - 当前仍缺少一个 confirmed known-good provider smoke path
 - 最近一次 OpenRouter 实测得到的是 provider-side quota error，而不是稳定可复现的成功路径
-- `doctor` 目前能展示基础配置，但还没有 v1.1 draft 里要求的分组诊断与 smoke-path 状态
+- `doctor` 已具备分组诊断输出与 smoke-path 状态展示
+- provider 错误类别已经具有明确命名与 surfacing
 
 ### Gate E：业务验证方向
 
-状态：**部分满足**
+状态：**已满足**
 
 依据：
 
-- 首个真实 Skill 方向已经比较明确，`intel-bulletin` 仍是最合理的首选
-- 但仓库内还没有正式落地的输入样本、夹具、成功标准文档与 readiness 包
+- 首个真实 Skill 已明确选定为 `intel-bulletin`
+- 仓库内已有正式输入样本与期望输出夹具：`fixtures/intel-bulletin/source-note.md`、`fixtures/intel-bulletin/expected-report.md`
+- 已有 readiness 集成测试覆盖 discover / activate / built-in tools / render path：`tests/integration/intel-bulletin-readiness.test.ts`
+- 成功标准已从“能跑”收紧为“渲染结果与固定期望输出一致，且 session 中可见 `skill_activation`”
 
 ## 2.2 当前进入判定
 
-当前更适合的判断不是“直接开始做全部 v1.1 项目”，而是：
+当前更适合的判断不是“继续停留在规划阶段”，而是：
 
-1. **允许进入 v1.1 规划阶段**
-2. **允许启动 v1.1 的 gate-closing tasks**
-3. **暂不建议把 v1.1 当作已完全开工的执行阶段**
+1. **允许继续执行 v1.1 的主体 hardening 工作**
+2. **允许把已完成事项按 gate 逐项关闭**
+3. **在 smoke path 确认前，暂不宣布 entry gate 全部关闭**
 
 换句话说：
 
 - Gate A 已过
+- Gate B 已过
 - Gate C 在文档层已过
-- Gate B、D、E 仍需要通过第一轮计划化工作来真正关闭
+- Gate E 已过
+- Gate D 仍需要通过 smoke path 确认来真正关闭
 
 因此，进入顺序应当是：
 
-1. 先把 Gate B/D/E 变成明确任务
-2. 再进入 v1.1 主体实现
-3. 避免一边补 gate、一边扩 scope
+1. 继续推进 v1.1 主体实现
+2. 把 Gate D 作为当前唯一未关闭的 entry-gate 项
+3. 避免在 smoke path 未确认前扩展 v1.2 范围
 
 ---
 
@@ -283,6 +284,11 @@
 完成标志：
 
 - 已选定 skill 名称、目录、输入样本与验收方式。
+- 当前仓库中的对应落地点为：
+  - `intel-bulletin`
+  - `fixtures/intel-bulletin/source-note.md`
+  - `fixtures/intel-bulletin/expected-report.md`
+  - `tests/integration/intel-bulletin-readiness.test.ts`
 
 ---
 

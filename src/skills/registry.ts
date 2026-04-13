@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
 
-import { discoverSkills, type DiscoverSkillsOptions } from "./discover.js";
+import { discoverSkills, readSkillResources, type DiscoverSkillsOptions } from "./discover.js";
 import { renderSkillContent } from "./catalog.js";
+import { parseSkillFile } from "./parse-skill.js";
 import type { DiscoveryResult, SkillMeta, SkillRecord } from "./types.js";
 
 export interface ActiveSkillState {
@@ -18,7 +20,7 @@ export interface ActivatedSkill {
 }
 
 export class SkillRegistry {
-  private readonly catalogRecords: Map<string, SkillRecord>;
+  private readonly catalogRecords: Map<string, SkillMeta>;
   private readonly catalogMeta: SkillMeta[];
   readonly warnings: string[];
   private readonly active = new Map<string, { record: SkillRecord; state: ActiveSkillState }>();
@@ -47,12 +49,10 @@ export class SkillRegistry {
   }
 
   async activate(name: string): Promise<ActivatedSkill> {
-    const record = this.catalogRecords.get(name);
-    if (!record) {
+    const meta = this.catalogRecords.get(name);
+    if (!meta) {
       throw new Error(`Skill not found: ${name}`);
     }
-
-    const contentHash = `sha256:${crypto.createHash("sha256").update(record.body).digest("hex")}`;
     const existing = this.active.get(name);
 
     if (existing) {
@@ -64,6 +64,11 @@ export class SkillRegistry {
         renderedContent: renderSkillContent(existing.record),
       };
     }
+
+    const rawContent = await readFile(meta.skillFile, "utf8");
+    const record = parseSkillFile(rawContent, meta.rootDir, meta.skillFile);
+    record.resources = await readSkillResources(meta.rootDir);
+    const contentHash = `sha256:${crypto.createHash("sha256").update(record.body).digest("hex")}`;
 
     const state: ActiveSkillState = {
       activatedAt: new Date().toISOString(),

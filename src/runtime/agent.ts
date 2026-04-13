@@ -25,7 +25,7 @@ export interface RuntimeAgentOptions {
   allowReadOutsideWorkspace?: boolean;
   allowWriteOutsideWorkspace?: boolean;
   sessionDir?: string;
-  toolConfig?: Pick<RuntimeConfig, "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
+  toolConfig?: Pick<RuntimeConfig, "toolTimeoutMs" | "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
   logger?: Logger;
 }
 
@@ -47,12 +47,13 @@ export class RuntimeConversation {
     this.messages = messages;
   }
 
-  async send(prompt: string): Promise<RuntimeRunResult> {
+  async send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<RuntimeRunResult> {
     const loopResult = await runAgentLoop(prompt, this.sessionId, {
       modelAdapter: this.agent.modelAdapter,
       toolRegistry: this.agent.toolRegistry,
       sessionStore: this.agent.sessionStore,
       eventBus: this.agent.eventBus,
+      signal,
       maxTurns: this.agent.maxTurns,
       createSystemPrompt: () =>
         buildSystemPrompt({
@@ -64,12 +65,18 @@ export class RuntimeConversation {
         workspaceRoot: this.agent.workspaceRoot,
         sessionId: this.sessionId,
         toolCallId: toolCall.id,
-        signal: new AbortController().signal,
+        signal,
         logger: this.agent.logger,
         skillRegistry: this.agent.skillRegistry,
         policy: this.agent.policy,
         fileMutationQueue: this.agent.fileMutationQueue,
         config: this.agent.toolConfig,
+        onUpdate: (partial) =>
+          this.agent.eventBus.emit({
+            type: "tool_execution_update",
+            toolCallId: toolCall.id,
+            partial,
+          }),
       }),
     }, this.messages);
 
@@ -99,7 +106,7 @@ export class RuntimeAgent {
   private readonly allowReadOutsideWorkspace: boolean;
   private readonly allowWriteOutsideWorkspace: boolean;
   private readonly sessionDir?: string;
-  readonly toolConfig: Pick<RuntimeConfig, "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
+  readonly toolConfig: Pick<RuntimeConfig, "toolTimeoutMs" | "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
   private initialized = false;
   skillRegistry!: SkillRegistry;
   policy = createPolicyEngine({ workspaceRoot: ".", readOnly: false });
@@ -126,17 +133,20 @@ export class RuntimeAgent {
     this.allowWriteOutsideWorkspace = options.allowWriteOutsideWorkspace ?? false;
     this.sessionDir = options.sessionDir;
     this.toolConfig = options.toolConfig ?? {
+      toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,
     };
   }
 
-  async run(prompt: string): Promise<RuntimeRunResult> {
+  async run(prompt: string, signal?: AbortSignal): Promise<RuntimeRunResult> {
     const conversation = await this.createConversation();
-    const result = await conversation.send(prompt);
-    this.eventBus.emit({ type: "agent_end", sessionId: conversation.sessionId });
-    return result;
+    try {
+      return await conversation.send(prompt, signal);
+    } finally {
+      this.eventBus.emit({ type: "agent_end", sessionId: conversation.sessionId });
+    }
   }
 
   async createConversation(sessionId?: string): Promise<RuntimeConversation> {
@@ -174,32 +184,64 @@ export class RuntimeAgent {
   }
 
   private async tryLoadConversation(sessionId: string): Promise<RuntimeConversation | null> {
-    try {
-      const loaded = await this.sessionStore.loadSession(sessionId);
-      const messages = this.replayMessages(loaded.entries);
-      return new RuntimeConversation(this, sessionId, loaded.path, messages);
-    } catch {
+    const knownSessionIds = new Set((await this.sessionStore.listSessions()).map((session) => session.sessionId));
+    if (!knownSessionIds.has(sessionId)) {
       return null;
+    }
+
+    const loaded = await this.sessionStore.loadSession(sessionId);
+    await this.restoreActivatedSkills(loaded.entries);
+    const messages = this.replayMessages(loaded.entries);
+    return new RuntimeConversation(this, sessionId, loaded.path, messages);
+  }
+
+  private async restoreActivatedSkills(entries: SessionEntry[]): Promise<void> {
+    const activatedSkills = new Set(
+      entries
+        .filter((entry): entry is Extract<SessionEntry, { type: "skill_activation" }> => entry.type === "skill_activation")
+        .map((entry) => entry.skill),
+    );
+
+    for (const skill of activatedSkills) {
+      await this.skillRegistry.activate(skill);
     }
   }
 
   private replayMessages(entries: SessionEntry[]): RuntimeMessage[] {
     return entries
       .flatMap((entry) => {
-        if (entry.type !== "message") {
-          return [];
+        if (entry.type === "message") {
+          return [
+            {
+              role: entry.role,
+              content: entry.content,
+              messageId: entry.messageId,
+              toolCallId: entry.toolCallId,
+              toolName: entry.toolName,
+              toolCalls: entry.toolCalls,
+            } satisfies RuntimeMessage,
+          ];
         }
 
-        return [
-          {
-            role: entry.role,
-            content: entry.content,
-            messageId: entry.messageId,
-            toolCallId: entry.toolCallId,
-            toolName: entry.toolName,
-            toolCalls: entry.toolCalls,
-          } satisfies RuntimeMessage,
-        ];
+        if (entry.type === "tool_result") {
+          return [
+            {
+              role: "tool",
+              content: JSON.stringify({
+                ok: entry.ok,
+                content: entry.content,
+                data: entry.data,
+                error: entry.error,
+              }),
+              messageId: `tool_${entry.toolCallId}`,
+              toolCallId: entry.toolCallId,
+              toolName: undefined,
+              toolCalls: undefined,
+            } satisfies RuntimeMessage,
+          ];
+        }
+
+        return [];
       });
   }
 }

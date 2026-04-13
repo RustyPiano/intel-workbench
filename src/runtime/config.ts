@@ -95,7 +95,7 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     provider: process.env.MINI_AGENT_PROVIDER,
     model: process.env.MINI_AGENT_MODEL,
     baseURL: process.env.MINI_AGENT_BASE_URL,
-    apiKey: process.env.MINI_AGENT_API_KEY,
+    apiKey: process.env.MINI_AGENT_API_KEY ?? process.env.OPENAI_API_KEY,
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),

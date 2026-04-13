@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { RuntimeAgent } from "../../src/runtime/agent.js";
 import { ScriptedModelAdapter } from "../../src/model/mock.js";
@@ -248,6 +248,34 @@ describe("RuntimeAgent", () => {
     });
   });
 
+  test("persists model errors into the session before surfacing them", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: {
+        name: "mock",
+        async generate() {
+          throw new Error("model exploded");
+        },
+      },
+    });
+
+    const conversation = await agent.createConversation();
+
+    await expect(conversation.send("Trigger a model failure.")).rejects.toThrow("model exploded");
+
+    const session = await agent.sessionStore.loadSession(conversation.sessionId);
+    expect(session.entries.find((entry) => entry.type === "error")).toMatchObject({
+      type: "error",
+      error: {
+        code: "MODEL_ERROR",
+        message: "model exploded",
+      },
+    });
+  });
+
   test("returns EDIT_NO_MATCH when a requested edit target does not exist", async () => {
     const workspaceRoot = await createWorkspace();
     await writeFile(path.join(workspaceRoot, "notes.md"), "hello world\n", "utf8");
@@ -299,5 +327,170 @@ describe("RuntimeAgent", () => {
       ok: false,
       error: { code: "EDIT_NO_MATCH" },
     });
+  });
+
+  test("replays tool results back into the model context when resuming a session", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "README.md"), "resume me\n", "utf8");
+
+    const firstModel = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Reading before resume.",
+          toolCalls: [{ id: "call_read_resume", name: "read", arguments: { path: "README.md" } }],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "First turn complete.",
+        },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const firstAgent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: firstModel,
+    });
+
+    const firstResult = await firstAgent.run("Read the file, then stop.");
+
+    const resumedModel = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Resumed turn complete.",
+        },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const resumedAgent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: resumedModel,
+    });
+
+    const resumedConversation = await resumedAgent.createConversation(firstResult.sessionId);
+    await resumedConversation.send("Continue from the previous turn.");
+
+    const resumedMessages = resumedModel.inputs[0]?.messages ?? [];
+    expect(
+      resumedMessages.some(
+        (message) => message.role === "tool" && message.toolCallId === "call_read_resume" && message.content.includes("resume me"),
+      ),
+    ).toBe(true);
+  });
+
+  test("restores activated skills into the system prompt when resuming a session", async () => {
+    const workspaceRoot = await createWorkspace();
+    await createIntelBulletinSkill(workspaceRoot);
+
+    const firstModel = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Activating the skill.",
+          toolCalls: [{ id: "call_activate_resume", name: "activate_skill", arguments: { name: "intel-bulletin" } }],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Skill activated.",
+        },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const firstAgent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: firstModel,
+    });
+
+    const firstResult = await firstAgent.run("Activate the skill.");
+
+    const resumedModel = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Resumed with the skill.",
+        },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const resumedAgent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: resumedModel,
+    });
+
+    const resumedConversation = await resumedAgent.createConversation(firstResult.sessionId);
+    await resumedConversation.send("Continue with the activated skill.");
+
+    expect(resumedModel.inputs[0]?.systemPrompt).toContain("# Intel Bulletin");
+  });
+
+  test("forwards the run abort signal into model generation", async () => {
+    const workspaceRoot = await createWorkspace();
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+
+    const agent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: {
+        name: "mock",
+        async generate(input) {
+          receivedSignal = input.signal;
+          return {
+            message: {
+              role: "assistant",
+              content: "Done.",
+            },
+            stopReason: "end_turn",
+          };
+        },
+      },
+    });
+
+    await agent.run("Test signal forwarding.", controller.signal);
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
+
+  test("propagates resume failures for existing sessions instead of creating a replacement session", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: new ScriptedModelAdapter([
+        {
+          message: {
+            role: "assistant",
+            content: "Done.",
+          },
+          stopReason: "end_turn",
+        },
+      ]),
+    });
+
+    await agent.sessionStore.createSession("sess_existing");
+    vi.spyOn(agent.sessionStore, "loadSession").mockRejectedValue(new Error("load failed"));
+
+    await expect(agent.createConversation("sess_existing")).rejects.toThrow("load failed");
   });
 });

@@ -38,6 +38,7 @@ function createContext(workspaceRoot: string): ToolContext {
     policy: createPolicyEngine({ workspaceRoot }),
     fileMutationQueue: new FileMutationQueue(),
     config: {
+      toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,

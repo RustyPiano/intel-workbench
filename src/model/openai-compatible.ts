@@ -26,6 +26,26 @@ interface ProviderErrorShape {
   };
 }
 
+function inferProviderErrorCategory(status: number | undefined, message: string): string {
+  if (status === 401 || status === 403) {
+    return "auth";
+  }
+
+  if (status === 429 || /resource_exhausted|quota|billing|credits/i.test(message)) {
+    return "quota";
+  }
+
+  if (status === 400 && /model|unsupported/i.test(message)) {
+    return "unsupported_model";
+  }
+
+  if (/network|fetch failed|econn|enotfound|timedout/i.test(message)) {
+    return "network";
+  }
+
+  return "provider";
+}
+
 function extractProviderError(error: unknown): RuntimeError {
   const status = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : undefined;
   const providerError = (error as { error?: ProviderErrorShape })?.error;
@@ -45,13 +65,19 @@ function extractProviderError(error: unknown): RuntimeError {
   }
 
   const fallbackMessage = error instanceof Error ? error.message : "Provider request failed";
-  const message = [providerName, upstreamMessage ?? providerError?.message ?? fallbackMessage].filter(Boolean).join(": ");
+  const effectiveProviderMessage = upstreamMessage ?? providerError?.message ?? fallbackMessage;
+  const message = [providerName, effectiveProviderMessage].filter(Boolean).join(": ");
+  const category = inferProviderErrorCategory(
+    status,
+    [providerError?.metadata?.raw, upstreamMessage, providerError?.message, fallbackMessage].filter(Boolean).join(" "),
+  );
 
   return new RuntimeError({
     code: "MODEL_ERROR",
     message: status ? `${status} ${message}` : message,
     retriable: status === 429,
     details: {
+      category,
       status,
       provider: providerName,
       providerCode: providerError?.code,

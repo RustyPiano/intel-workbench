@@ -52,6 +52,7 @@ describe("ToolRegistry", () => {
           return {
             ok: true,
             content: "should not run",
+            meta: { skipped: true },
           };
         },
       } satisfies RuntimeTool,

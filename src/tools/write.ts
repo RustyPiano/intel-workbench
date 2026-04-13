@@ -75,7 +75,7 @@ export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
         return {
           ok: true,
           content: `Wrote ${args.content.length} bytes to ${args.path}`,
-          data: {
+          meta: {
             path: filePath,
             bytesWritten: Buffer.byteLength(args.content, "utf8"),
           },

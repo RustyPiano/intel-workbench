@@ -3,6 +3,7 @@
 import path from "node:path";
 import process from "node:process";
 
+import { collectSessionHealth, formatDoctorReport, resolveDoctorSkillDirs } from "./doctor.js";
 import { createModelAdapter } from "../model/factory.js";
 import { RuntimeAgent } from "../runtime/agent.js";
 import { resolveRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
@@ -34,7 +35,7 @@ function printHelp(): void {
 Commands:
   mini-agent skills list
   mini-agent session list
-  mini-agent session show <id>
+  mini-agent session show <id> [--recover]
   mini-agent doctor`);
 }
 
@@ -130,12 +131,15 @@ async function handleSessionCommand(config: RuntimeConfig, command: string[]): P
   }
 
   if (command[1] === "show" && command[2]) {
-    const session = await store.loadSession(command[2]);
+    const session = await store.loadSession(command[2], {
+      mode: command.includes("--recover") ? "recover" : "strict",
+    });
     console.log(JSON.stringify(session.header, null, 2));
+    console.log(`status\t${session.status}`);
     for (const entry of session.entries) {
       console.log(JSON.stringify(entry, null, 2));
     }
-    if (session.corrupted && session.repairReportPath) {
+    if (session.repairReportPath) {
       console.log(`repair-report\t${session.repairReportPath}`);
     }
     return;
@@ -156,18 +160,28 @@ async function handleDoctorCommand(config: RuntimeConfig): Promise<void> {
     model: config.model,
     sessionDir: config.sessionDir,
   });
-  const sessions = await sessionStore.listSessions();
+  const sessionHealth = await collectSessionHealth(sessionStore);
 
-  console.log(`workspace\t${config.workspaceRoot}`);
-  console.log(`provider\t${config.provider}`);
-  console.log(`model\t${config.model}`);
-  console.log(`base_url\t${config.baseURL ?? "(default OpenAI endpoint)"}`);
-  console.log(`api_key\t${config.apiKey ? "configured" : "missing"}`);
-  console.log(`skills\t${registry.getCatalog().length}`);
-  console.log(`sessions\t${sessions.length}`);
-  for (const warning of registry.warnings) {
-    console.log(`warning\t${warning}`);
-  }
+  process.stdout.write(
+    formatDoctorReport({
+      workspaceRoot: config.workspaceRoot,
+      sessionDir: path.resolve(config.workspaceRoot, config.sessionDir),
+      skillDirs: resolveDoctorSkillDirs(config),
+      provider: config.provider,
+      model: config.model,
+      baseURL: config.baseURL,
+      apiKeyConfigured: Boolean(config.apiKey),
+      skillCount: registry.getCatalog().length,
+      warnings: registry.warnings,
+      sessionHealth,
+      smokePath: {
+        configured: Boolean(config.smokeProvider || config.smokeModel || config.smokeBaseURL),
+        provider: config.smokeProvider,
+        model: config.smokeModel,
+        baseURL: config.smokeBaseURL,
+      },
+    }),
+  );
 }
 
 function createRuntimeAgent(config: RuntimeConfig): RuntimeAgent {

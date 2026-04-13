@@ -57,6 +57,7 @@ export interface ToolResultEntry {
   ok: boolean;
   content: string;
   timestamp: string;
+  meta?: Record<string, unknown>;
   data?: Record<string, unknown>;
   error?: RuntimeErrorShape;
 }

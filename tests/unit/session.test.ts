@@ -71,11 +71,89 @@ describe("SessionStore", () => {
 
     const loaded = await store.loadSession(session.sessionId);
 
+    expect(loaded.status).toBe("corrupted");
     expect(loaded.corrupted).toBe(true);
     expect(loaded.repairReportPath).toBeTruthy();
     expect(loaded.entries).toHaveLength(1);
     const report = await readFile(loaded.repairReportPath!, "utf8");
     expect(report).toContain("missing matching tool_call");
+  });
+
+  test("recovers the longest valid prefix in recover mode", async () => {
+    const workspaceRoot = await createWorkspace();
+    const store = new SessionStore({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+    });
+    const session = await store.createSession("sess_recoverable");
+    const { appendFile } = await import("node:fs/promises");
+
+    await appendFile(
+      session.path,
+      `${JSON.stringify({
+        type: "message",
+        role: "user",
+        messageId: "msg_user",
+        timestamp: "2026-04-13T00:00:00.000Z",
+        content: "hello",
+      })}\n`,
+    );
+    await appendFile(
+      session.path,
+      `${JSON.stringify({
+        type: "tool_result",
+        toolCallId: "missing",
+        ok: true,
+        content: "oops",
+        timestamp: "2026-04-13T00:00:01.000Z",
+      })}\n`,
+    );
+
+    const recovered = await store.loadSession(session.sessionId, { mode: "recover" });
+
+    expect(recovered.status).toBe("degraded");
+    expect(recovered.corrupted).toBe(false);
+    expect(recovered.recoveredFromPath).toBe(session.path);
+    expect(recovered.entries).toHaveLength(1);
+    expect(recovered.entries[0]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: "hello",
+    });
+    expect(recovered.repairNotes.some((note) => note.includes("missing matching tool_call"))).toBe(true);
+  });
+
+  test("recover mode returns no entries when the session header is missing", async () => {
+    const workspaceRoot = await createWorkspace();
+    const sessionDir = path.join(workspaceRoot, ".mini-agent", "sessions");
+    const sessionPath = path.join(sessionDir, "2026-04-13T00-00-00.000Z_sess_missing_header.jsonl");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      sessionPath,
+      `${JSON.stringify({
+        type: "message",
+        role: "user",
+        messageId: "msg_1",
+        timestamp: "2026-04-13T00:00:00.000Z",
+        content: "orphaned entry",
+      })}\n`,
+      "utf8",
+    );
+
+    const store = new SessionStore({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+    });
+
+    const recovered = await store.loadSession("sess_missing_header", { mode: "recover" });
+
+    expect(recovered.status).toBe("corrupted");
+    expect(recovered.entries).toEqual([]);
+    expect(recovered.repairNotes).toContain("missing or invalid session header");
   });
 
   test("round-trips generated session ids across store instances", async () => {

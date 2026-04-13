@@ -20,9 +20,19 @@ export interface CreatedSession {
 export interface LoadedSession {
   header: SessionHeader | null;
   entries: SessionEntry[];
+  status: SessionHealth;
   corrupted: boolean;
+  repairNotes: string[];
   repairReportPath?: string;
+  recoveredFromPath?: string;
   path: string;
+}
+
+export type SessionHealth = "valid" | "degraded" | "corrupted";
+export type SessionLoadMode = "strict" | "recover";
+
+export interface SessionLoadOptions {
+  mode?: SessionLoadMode;
 }
 
 export class SessionStore {
@@ -72,7 +82,8 @@ export class SessionStore {
     await writeJsonlLine(sessionPath, entry);
   }
 
-  async loadSession(sessionIdOrPath: string): Promise<LoadedSession> {
+  async loadSession(sessionIdOrPath: string, options: SessionLoadOptions = {}): Promise<LoadedSession> {
+    const mode = options.mode ?? "strict";
     const sessionPath = sessionIdOrPath.endsWith(".jsonl")
       ? path.resolve(sessionIdOrPath)
       : await this.resolveSessionPath(sessionIdOrPath);
@@ -80,19 +91,23 @@ export class SessionStore {
 
     let header: SessionHeader | null = null;
     const entries: SessionEntry[] = [];
+    const recoverableEntries: SessionEntry[] = [];
     const repairNotes: string[] = [];
     const seenToolCalls = new Map<string, string>();
     const openToolCalls = new Set<string>();
     let pendingAssistantToolCalls = new Set<string>();
     let lastActivatableToolCallId: string | null = null;
+    let recoverable = true;
 
     for (const [index, line] of lines.entries()) {
       try {
         const parsed = JSON.parse(line) as SessionEntry;
+        const entryNotes: string[] = [];
 
         if (index === 0) {
           if (parsed.type !== "session_header") {
             repairNotes.push("missing or invalid session header");
+            recoverable = false;
             continue;
           }
 
@@ -102,7 +117,7 @@ export class SessionStore {
 
         if (parsed.type === "message") {
           if (openToolCalls.size > 0 || pendingAssistantToolCalls.size > 0) {
-            repairNotes.push(`${parsed.role} message appears before pending tool calls completed`);
+            entryNotes.push(`${parsed.role} message appears before pending tool calls completed`);
           }
 
           pendingAssistantToolCalls =
@@ -115,7 +130,7 @@ export class SessionStore {
         if (parsed.type === "tool_call") {
           const declaredByAssistant = pendingAssistantToolCalls.has(parsed.toolCallId);
           if (!declaredByAssistant) {
-            repairNotes.push(`tool_call ${parsed.toolCallId} is out of order`);
+            entryNotes.push(`tool_call ${parsed.toolCallId} is out of order`);
           } else {
             pendingAssistantToolCalls.delete(parsed.toolCallId);
           }
@@ -127,9 +142,9 @@ export class SessionStore {
 
         if (parsed.type === "tool_result") {
           if (!seenToolCalls.has(parsed.toolCallId)) {
-            repairNotes.push(`tool_result ${parsed.toolCallId} is missing matching tool_call`);
+            entryNotes.push(`tool_result ${parsed.toolCallId} is missing matching tool_call`);
           } else if (!openToolCalls.has(parsed.toolCallId)) {
-            repairNotes.push(`tool_result ${parsed.toolCallId} is out of order`);
+            entryNotes.push(`tool_result ${parsed.toolCallId} is out of order`);
           } else {
             openToolCalls.delete(parsed.toolCallId);
           }
@@ -140,15 +155,29 @@ export class SessionStore {
         if (parsed.type === "skill_activation") {
           const activatingToolName = lastActivatableToolCallId ? seenToolCalls.get(lastActivatableToolCallId) : undefined;
           if (activatingToolName !== "activate_skill") {
-            repairNotes.push(`skill_activation ${parsed.skill} is out of order`);
+            entryNotes.push(`skill_activation ${parsed.skill} is out of order`);
           }
 
           lastActivatableToolCallId = null;
         }
 
+        if (entryNotes.length > 0) {
+          repairNotes.push(...entryNotes);
+          recoverable = false;
+        }
+
         entries.push(parsed);
+        if (recoverable) {
+          recoverableEntries.push(parsed);
+        } else if (mode === "recover") {
+          break;
+        }
       } catch (error) {
         repairNotes.push(`invalid json at line ${index + 1}: ${error instanceof Error ? error.message : "unknown parse error"}`);
+        recoverable = false;
+        if (mode === "recover") {
+          break;
+        }
       }
     }
 
@@ -160,7 +189,9 @@ export class SessionStore {
       return {
         header,
         entries,
+        status: "valid",
         corrupted: false,
+        repairNotes,
         path: sessionPath,
       };
     }
@@ -170,11 +201,18 @@ export class SessionStore {
     const reportPath = path.join(this.reportDir, `${sessionStem}-repair-report.txt`);
     await writeFile(reportPath, repairNotes.join("\n"), "utf8");
 
+    const status: SessionHealth = mode === "recover" && header ? "degraded" : "corrupted";
+
+    const recoveredEntries = mode === "recover" ? recoverableEntries : entries;
+
     return {
       header,
-      entries,
-      corrupted: true,
+      entries: recoveredEntries,
+      status,
+      corrupted: status === "corrupted",
+      repairNotes,
       repairReportPath: reportPath,
+      recoveredFromPath: status === "degraded" ? sessionPath : undefined,
       path: sessionPath,
     };
   }

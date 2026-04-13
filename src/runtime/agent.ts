@@ -189,7 +189,10 @@ export class RuntimeAgent {
       return null;
     }
 
-    const loaded = await this.sessionStore.loadSession(sessionId);
+    const loaded = await this.sessionStore.loadSession(sessionId, { mode: "strict" });
+    if (loaded.status === "corrupted") {
+      throw new Error(`Session ${sessionId} is corrupted and cannot be resumed in strict mode`);
+    }
     await this.restoreActivatedSkills(loaded.entries);
     const messages = this.replayMessages(loaded.entries);
     return new RuntimeConversation(this, sessionId, loaded.path, messages);
@@ -230,7 +233,7 @@ export class RuntimeAgent {
               content: JSON.stringify({
                 ok: entry.ok,
                 content: entry.content,
-                data: entry.data,
+                meta: entry.meta ?? entry.data,
                 error: entry.error,
               }),
               messageId: `tool_${entry.toolCallId}`,

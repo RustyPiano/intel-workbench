@@ -91,7 +91,7 @@ export const readTool: RuntimeTool<ReadArgs, ReadData> = {
       return {
         ok: true,
         content: sliced,
-        data: {
+        meta: {
           path: filePath,
           offset,
           limit,

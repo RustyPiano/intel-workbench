@@ -6,6 +6,9 @@ export interface RuntimeConfig {
   model: string;
   baseURL?: string;
   apiKey?: string;
+  smokeProvider?: string;
+  smokeModel?: string;
+  smokeBaseURL?: string;
   workspaceRoot: string;
   sessionDir: string;
   maxTurns: number;
@@ -96,6 +99,9 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     model: process.env.MINI_AGENT_MODEL,
     baseURL: process.env.MINI_AGENT_BASE_URL,
     apiKey: process.env.MINI_AGENT_API_KEY ?? process.env.OPENAI_API_KEY,
+    smokeProvider: process.env.MINI_AGENT_SMOKE_PROVIDER,
+    smokeModel: process.env.MINI_AGENT_SMOKE_MODEL,
+    smokeBaseURL: process.env.MINI_AGENT_SMOKE_BASE_URL,
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),

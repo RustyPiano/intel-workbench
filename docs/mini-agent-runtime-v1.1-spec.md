@@ -1,9 +1,9 @@
 # Mini Agent Runtime v1.1 Spec
 
 - 项目代号：`mini-agent`
-- 文档版本：`v1.1-draft`
-- 状态：`Draft / 待进入实现`
-- 前置版本：`working v1 baseline`
+- 文档版本：`v1.1`
+- 状态：`Implemented / Completed`
+- 前置版本：`v1.0 baseline`
 - 文档类型：`增量规格（delta spec）`
 - 目标读者：Runtime 开发者、维护者、课程项目作者、Skill 作者
 
@@ -11,13 +11,15 @@
 
 ## 1. 文档目的
 
-本文档定义 `mini-agent` 在 `working v1 baseline` 之后的下一个明确迭代：`v1.1`。
+本文档定义 `mini-agent` 在 `v1.0 baseline` 之后的明确增量迭代：`v1.1`。
 
 `v1.1` 的目标不是扩大功能面，而是在保留现有架构前提下，完成以下三类工作：
 
 1. **Spec Hardening**：把已经在实现中修正过的关键规则正式写入规格。
 2. **Operator Readiness**：让 provider/model 诊断、CLI 错误提示、doctor 检查更适合持续使用。
 3. **Maintainer Readiness**：让后续开发者与 Skill 作者能理解和扩展系统，而不必只读源码。
+
+当前仓库状态已经实现本 spec 所描述的 v1.1 范围。
 
 因此，`v1.1` 是一次 **收口与加固迭代**，不是一次新功能扩张迭代。
 
@@ -505,7 +507,7 @@ Skill 作者侧操作说明见 [how-to/write-a-skill.md](how-to/write-a-skill.md
 4. CLI/doctor 对 provider/model 问题更透明。
 5. maintainer docs 至少完成最小可用版本。
 6. 已选定并准备首个真实 Skill 的目录、样例和验收方式。
-7. 所有新增测试通过，且不破坏现有 working v1 baseline。
+7. 所有新增测试通过，且不破坏现有 v1.0 baseline。
 
 ---
 
@@ -526,7 +528,7 @@ Skill 作者侧操作说明见 [how-to/write-a-skill.md](how-to/write-a-skill.md
 
 ## 13. 结论
 
-`v1.1` 的本质不是把 `mini-agent` 变得更“重”，而是让它从一个 working v1 baseline 变成一个：
+`v1.1` 的本质不是把 `mini-agent` 变得更“重”，而是让它从一个 v1.0 baseline 变成一个：
 
 - 规则更清楚
 - 故障更透明

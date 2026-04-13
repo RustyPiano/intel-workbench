@@ -8,6 +8,7 @@ import { createModelAdapter } from "../model/factory.js";
 import { RuntimeAgent } from "../runtime/agent.js";
 import { resolveRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
 import { SessionStore } from "../runtime/session.js";
+import { RUNTIME_VERSION } from "../runtime/version.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { startRepl } from "./repl.js";
 
@@ -117,7 +118,7 @@ async function handleSkillsCommand(config: RuntimeConfig): Promise<void> {
 async function handleSessionCommand(config: RuntimeConfig, command: string[]): Promise<void> {
   const store = new SessionStore({
     workspaceRoot: config.workspaceRoot,
-    runtimeVersion: "1.0.0",
+    runtimeVersion: RUNTIME_VERSION,
     model: config.model,
     sessionDir: config.sessionDir,
   });
@@ -156,7 +157,7 @@ async function handleDoctorCommand(config: RuntimeConfig): Promise<void> {
   });
   const sessionStore = new SessionStore({
     workspaceRoot: config.workspaceRoot,
-    runtimeVersion: "1.0.0",
+    runtimeVersion: RUNTIME_VERSION,
     model: config.model,
     sessionDir: config.sessionDir,
   });
@@ -194,7 +195,7 @@ function createRuntimeAgent(config: RuntimeConfig): RuntimeAgent {
 
   return new RuntimeAgent({
     workspaceRoot: config.workspaceRoot,
-    runtimeVersion: "1.0.0",
+    runtimeVersion: RUNTIME_VERSION,
     modelName: config.model,
     modelAdapter: adapter,
     explicitSkillDirs: config.explicitSkillDirs.map((skillDir) => path.resolve(config.workspaceRoot, skillDir)),

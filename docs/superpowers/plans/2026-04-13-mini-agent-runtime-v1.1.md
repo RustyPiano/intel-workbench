@@ -1,5 +1,7 @@
 # Mini Agent Runtime v1.1 Implementation Plan
 
+> Status: Completed on 2026-04-13. This file is preserved as the historical execution plan for the released v1.1 work. See [docs/releases/v1.1.0.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/releases/v1.1.0.md) and [docs/explanation/spec-author-handoff-v1.1-completion-2026-04-13.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/explanation/spec-author-handoff-v1.1-completion-2026-04-13.md) for the finalized outcome.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the `v1.1` hardening scope from [docs/mini-agent-runtime-v1.1-spec.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/mini-agent-runtime-v1.1-spec.md) without expanding the runtime beyond its current architecture.

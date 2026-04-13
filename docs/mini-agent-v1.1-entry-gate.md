@@ -87,14 +87,17 @@
 
 ### Gate D：运维与诊断准备
 
-状态：**部分满足**
+状态：**已满足**
 
 依据：
 
-- 当前仍缺少一个 confirmed known-good provider smoke path
-- 最近一次 OpenRouter 实测得到的是 provider-side quota error，而不是稳定可复现的成功路径
 - `doctor` 已具备分组诊断输出与 smoke-path 状态展示
 - provider 错误类别已经具有明确命名与 surfacing
+- 已在 2026-04-13 确认一个可复现的 smoke path：
+  - provider: `openai-compatible`
+  - model: `nvidia/nemotron-3-super-120b-a12b:free`
+  - base URL: `https://openrouter.ai/api/v1`
+- 实测命令 `npm run dev -- --max-turns 1 "Do not use tools. Reply with exactly: smoke-ok"` 返回 `smoke-ok`
 
 ### Gate E：业务验证方向
 
@@ -109,25 +112,25 @@
 
 ## 2.2 当前进入判定
 
-当前更适合的判断不是“继续停留在规划阶段”，而是：
+当前更适合的判断是：
 
-1. **允许继续执行 v1.1 的主体 hardening 工作**
-2. **允许把已完成事项按 gate 逐项关闭**
-3. **在 smoke path 确认前，暂不宣布 entry gate 全部关闭**
+1. **v1.1 entry gate 已满足**
+2. **项目可以正式进入 v1.1 执行阶段**
+3. **后续工作应转向主体实现和下一阶段范围决策，而不是继续补 gate**
 
 换句话说：
 
 - Gate A 已过
 - Gate B 已过
 - Gate C 在文档层已过
+- Gate D 已过
 - Gate E 已过
-- Gate D 仍需要通过 smoke path 确认来真正关闭
 
 因此，进入顺序应当是：
 
 1. 继续推进 v1.1 主体实现
-2. 把 Gate D 作为当前唯一未关闭的 entry-gate 项
-3. 避免在 smoke path 未确认前扩展 v1.2 范围
+2. 把新增工作与已关闭 gate 区分开
+3. 避免在未明确 v1.2 目标前扩展范围
 
 ---
 

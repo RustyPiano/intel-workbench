@@ -98,7 +98,7 @@ export class ToolRegistry {
         ok: false,
         content: `Tool ${tool.name} was cancelled before execution`,
         error: {
-          code: "TOOL_TIMEOUT",
+          code: "RUN_ABORTED",
           message: `Tool ${tool.name} was cancelled before execution`,
           retriable: true,
         },

@@ -38,6 +38,7 @@ export interface MessageEntry {
   messageId: string;
   timestamp: string;
   content: string;
+  runId?: string;
   toolCallId?: string;
   toolName?: string;
   toolCalls?: ToolCall[];
@@ -49,6 +50,7 @@ export interface ToolCallEntry {
   toolName: string;
   args: Record<string, unknown>;
   timestamp: string;
+  runId?: string;
 }
 
 export interface ToolResultEntry {
@@ -57,6 +59,7 @@ export interface ToolResultEntry {
   ok: boolean;
   content: string;
   timestamp: string;
+  runId?: string;
   meta?: Record<string, unknown>;
   data?: Record<string, unknown>;
   error?: RuntimeErrorShape;
@@ -67,11 +70,13 @@ export interface SkillActivationEntry {
   skill: string;
   contentHash: string;
   timestamp: string;
+  runId?: string;
 }
 
 export interface ErrorEntry {
   type: "error";
   timestamp: string;
+  runId?: string;
   error: RuntimeErrorShape;
 }
 

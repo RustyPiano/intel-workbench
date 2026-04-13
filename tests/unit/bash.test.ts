@@ -29,6 +29,7 @@ function createContext(
   return {
     workspaceRoot,
     sessionId: "sess_test",
+    runId: "run_test",
     toolCallId,
     signal: new AbortController().signal,
     logger: {
@@ -62,14 +63,14 @@ describe("bashTool", () => {
     expect(result.ok).toBe(true);
     expect(result.meta).toMatchObject({
       exitCode: 0,
-      logPath: ".mini-agent/artifacts/bash/call_bash_log.log",
+      logPath: ".mini-agent/runs/run_test/artifacts/bash/call_bash_log.log",
     });
     expect(result.artifacts).toContainEqual({
       type: "log",
-      path: ".mini-agent/artifacts/bash/call_bash_log.log",
+      path: ".mini-agent/runs/run_test/artifacts/bash/call_bash_log.log",
       description: "Full bash output log",
     });
-    const logPath = path.join(workspaceRoot, ".mini-agent", "artifacts", "bash", "call_bash_log.log");
+    const logPath = path.join(workspaceRoot, ".mini-agent", "runs", "run_test", "artifacts", "bash", "call_bash_log.log");
     expect(await readFile(logPath, "utf8")).toContain("stdout line");
     expect(await readFile(logPath, "utf8")).toContain("stderr line");
   });
@@ -86,6 +87,28 @@ describe("bashTool", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({
       code: "TOOL_TIMEOUT",
+    });
+  });
+
+  test("returns RUN_ABORTED when the runtime signal aborts the command", async () => {
+    const workspaceRoot = await createWorkspace();
+    const controller = new AbortController();
+    const pending = bashTool.execute(
+      {
+        command: "node -e \"setTimeout(() => console.log('late'), 500)\"",
+      },
+      {
+        ...createContext(workspaceRoot, "call_bash_abort", { bashTimeoutMs: 1_000 }),
+        signal: controller.signal,
+      },
+    );
+
+    setTimeout(() => controller.abort(), 0);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "RUN_ABORTED",
     });
   });
 
@@ -124,8 +147,52 @@ describe("bashTool", () => {
     expect(result.ok).toBe(true);
     expect(updates.length).toBeGreaterThanOrEqual(2);
     expect(result.meta?.stdoutTail.length).toBeLessThanOrEqual(16);
-    const logPath = path.join(workspaceRoot, ".mini-agent", "artifacts", "bash", "call_bash_stream.log");
+    const logPath = path.join(
+      workspaceRoot,
+      ".mini-agent",
+      "runs",
+      "run_test",
+      "artifacts",
+      "bash",
+      "call_bash_stream.log",
+    );
     expect(await readFile(logPath, "utf8")).toContain("1234567890abcdefghij");
+  });
+
+  test("reports files created before a nonzero exit as artifacts", async () => {
+    const workspaceRoot = await createWorkspace();
+    const result = await bashTool.execute(
+      {
+        command: "printf 'report' > report.txt; exit 7",
+      },
+      createContext(workspaceRoot, "call_bash_failure_artifact"),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.artifacts).toContainEqual({
+      type: "file",
+      path: "report.txt",
+      description: "File created by bash command",
+    });
+  });
+
+  test("reports overwritten output files as artifacts", async () => {
+    const workspaceRoot = await createWorkspace();
+    await import("node:fs/promises").then(({ writeFile }) => writeFile(path.join(workspaceRoot, "report.txt"), "old", "utf8"));
+
+    const result = await bashTool.execute(
+      {
+        command: "printf 'new report' > report.txt",
+      },
+      createContext(workspaceRoot, "call_bash_overwrite_artifact"),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.artifacts).toContainEqual({
+      type: "file",
+      path: "report.txt",
+      description: "File created by bash command",
+    });
   });
 
   test("caps the returned content to the configured tail budget", async () => {

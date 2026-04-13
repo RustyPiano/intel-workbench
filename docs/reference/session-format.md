@@ -16,6 +16,21 @@ Each line is one JSON object. Repair reports for damaged sessions are written un
 .mini-agent/artifacts/reports/<session-stem>-repair-report.txt
 ```
 
+Run traces are stored separately under:
+
+```text
+.mini-agent/runs/<run-id>/
+  meta.json
+  trace.jsonl
+  artifacts/
+```
+
+The latest diagnostics snapshot is written to:
+
+```text
+.mini-agent/diagnostics/last-run.json
+```
+
 ## Entry types
 
 ### `session_header`
@@ -50,6 +65,7 @@ Conversation messages are stored as `message` entries.
   "role": "assistant",
   "messageId": "msg_123",
   "timestamp": "2026-04-13T09:00:01.000Z",
+  "runId": "run_123",
   "content": "I will read the file first.",
   "toolCalls": [
     {
@@ -72,6 +88,8 @@ Current roles are:
 
 `assistant` messages may declare `toolCalls`. Replayed `tool` messages are synthesized from `tool_result` entries when a session is resumed.
 
+In v1.2 and later, user, assistant, tool-call, tool-result, skill-activation, and error entries may include `runId` to link the session transcript back to one run trace.
+
 ### `tool_call`
 
 Each requested tool call is logged separately.
@@ -81,6 +99,7 @@ Each requested tool call is logged separately.
   "type": "tool_call",
   "toolCallId": "call_123",
   "toolName": "read",
+  "runId": "run_123",
   "args": {
     "path": "README.md"
   },
@@ -99,6 +118,7 @@ Each tool result closes one `tool_call`.
   "ok": true,
   "content": "# README",
   "timestamp": "2026-04-13T09:00:03.000Z",
+  "runId": "run_123",
   "meta": {
     "path": "/workspace/README.md",
     "offset": 0,
@@ -123,7 +143,8 @@ Skill activation is recorded only after a successful `activate_skill` result.
   "type": "skill_activation",
   "skill": "intel-bulletin",
   "contentHash": "sha256:...",
-  "timestamp": "2026-04-13T09:00:04.000Z"
+  "timestamp": "2026-04-13T09:00:04.000Z",
+  "runId": "run_123"
 }
 ```
 
@@ -135,6 +156,7 @@ Structured runtime failures terminate the current turn.
 {
   "type": "error",
   "timestamp": "2026-04-13T09:00:05.000Z",
+  "runId": "run_123",
   "error": {
     "code": "MODEL_ERROR",
     "message": "429 Provider returned error",
@@ -216,3 +238,40 @@ During resume it rebuilds:
 - activated skills through `SkillRegistry.activate()`
 
 That means a resumed conversation has both the assistant tool calls and the corresponding tool-result transcript in memory.
+
+## Run trace linkage
+
+v1.2 keeps the session grammar backward-compatible by storing run traces outside the session JSONL and linking them back through `runId`.
+
+`meta.json` stores run-level counters and terminal status:
+
+- `run_id`
+- `trace_id`
+- `session_id`
+- `status`
+- `started_at`
+- `ended_at`
+- `provider`
+- `model`
+- `duration_ms`
+- `tool_calls`
+- `skill_activations`
+- `artifact_count`
+- `first_error_code`
+
+`trace.jsonl` stores one run event per line. Each event includes:
+
+- `schema_version`
+- `event_id`
+- `trace_id`
+- `run_id`
+- optional `session_id`
+- `seq`
+- `ts`
+- `type`
+- `phase`
+- `level`
+- `summary`
+- optional `data`
+
+Recover mode for run traces follows the same principle as session recover mode: the loader returns the longest valid prefix and marks the trace as `degraded` instead of claiming it is fully valid.

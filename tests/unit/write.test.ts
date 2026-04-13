@@ -26,6 +26,7 @@ function createContext(workspaceRoot: string): ToolContext {
   return {
     workspaceRoot,
     sessionId: "sess_test",
+    runId: "run_test",
     toolCallId: "call_write_1",
     signal: new AbortController().signal,
     logger: {

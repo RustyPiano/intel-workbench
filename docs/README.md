@@ -32,6 +32,7 @@ This directory is organized by document type.
 
 - [Runtime v1 spec](./mini-agent-runtime-spec.md)
 - [Runtime v1.1 spec](./mini-agent-runtime-v1.1-spec.md)
+- [Runtime v1.2 spec](./mini-agent-runtime-v1.2-spec.md)
 - [v1.1 entry gate](./mini-agent-v1.1-entry-gate.md)
 - [Runtime v1 plan](./superpowers/plans/2026-04-13-agent-runtime-v1.md)
 - [Runtime v1.1 plan](./superpowers/plans/2026-04-13-mini-agent-runtime-v1.1.md)

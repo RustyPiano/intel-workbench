@@ -103,6 +103,13 @@ export const editTool: RuntimeTool<EditArgs, EditData> = {
             path: filePath,
             replacements: replacementTargets.length,
           },
+          artifacts: [
+            {
+              type: "file",
+              path: args.path,
+              description: "Edited file",
+            },
+          ],
         };
       });
     } catch (error) {

@@ -30,6 +30,7 @@ export interface ToolRuntimeConfig {
 export interface ToolContext {
   workspaceRoot: string;
   sessionId: string;
+  runId: string;
   toolCallId: string;
   signal: AbortSignal;
   logger: Logger;

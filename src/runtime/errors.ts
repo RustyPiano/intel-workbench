@@ -6,6 +6,7 @@ export type RuntimeErrorCode =
   | "EDIT_AMBIGUOUS"
   | "TOOL_TIMEOUT"
   | "PROCESS_EXIT_NONZERO"
+  | "RUN_ABORTED"
   | "MODEL_ERROR"
   | "SESSION_CORRUPTED"
   | "SKILL_NOT_FOUND"

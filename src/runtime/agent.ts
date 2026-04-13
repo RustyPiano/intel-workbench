@@ -10,6 +10,8 @@ import { runAgentLoop } from "./loop.js";
 import type { RuntimeConfig } from "./config.js";
 import { createPolicyEngine } from "./policy.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { RunManager } from "./run-manager.js";
+import { RunStore } from "./run-store.js";
 import { SessionStore } from "./session.js";
 import type { AssistantMessage, RuntimeMessage, SessionEntry } from "./types.js";
 
@@ -17,6 +19,7 @@ export interface RuntimeAgentOptions {
   workspaceRoot: string;
   runtimeVersion: string;
   modelName: string;
+  providerName?: string;
   modelAdapter: ModelAdapter;
   explicitSkillDirs?: string[];
   globalSkillDirs?: string[];
@@ -30,6 +33,7 @@ export interface RuntimeAgentOptions {
 }
 
 export interface RuntimeRunResult {
+  runId: string;
   sessionId: string;
   sessionPath: string;
   finalMessage: AssistantMessage;
@@ -43,18 +47,31 @@ export class RuntimeConversation {
     readonly sessionId: string,
     readonly sessionPath: string,
     messages: RuntimeMessage[] = [],
+    private resumedFromStore = false,
   ) {
     this.messages = messages;
   }
 
   async send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<RuntimeRunResult> {
+    const runManager = await RunManager.start({
+      workspaceRoot: this.agent.workspaceRoot,
+      sessionId: this.sessionId,
+      provider: this.agent.providerName,
+      model: this.agent.modelName,
+      eventBus: this.agent.eventBus,
+      runStore: this.agent.runStore,
+      prompt,
+      maxTurns: this.agent.maxTurns,
+      resumedFromSession: this.resumedFromStore,
+    });
+
     const loopResult = await runAgentLoop(prompt, this.sessionId, {
       modelAdapter: this.agent.modelAdapter,
       toolRegistry: this.agent.toolRegistry,
       sessionStore: this.agent.sessionStore,
-      eventBus: this.agent.eventBus,
       signal,
       maxTurns: this.agent.maxTurns,
+      runManager,
       createSystemPrompt: () =>
         buildSystemPrompt({
           workspaceRoot: this.agent.workspaceRoot,
@@ -64,6 +81,7 @@ export class RuntimeConversation {
       createToolContext: (toolCall) => ({
         workspaceRoot: this.agent.workspaceRoot,
         sessionId: this.sessionId,
+        runId: runManager.runId,
         toolCallId: toolCall.id,
         signal,
         logger: this.agent.logger,
@@ -72,17 +90,15 @@ export class RuntimeConversation {
         fileMutationQueue: this.agent.fileMutationQueue,
         config: this.agent.toolConfig,
         onUpdate: (partial) =>
-          this.agent.eventBus.emit({
-            type: "tool_execution_update",
-            toolCallId: toolCall.id,
-            partial,
-          }),
+          void runManager.recordToolProgress(toolCall, partial),
       }),
     }, this.messages);
 
     this.messages = loopResult.messages;
+    this.resumedFromStore = false;
 
     return {
+      runId: runManager.runId,
       sessionId: this.sessionId,
       sessionPath: this.sessionPath,
       finalMessage: loopResult.finalMessage,
@@ -94,10 +110,12 @@ export class RuntimeAgent {
   readonly workspaceRoot: string;
   readonly runtimeVersion: string;
   readonly modelName: string;
+  readonly providerName: string;
   readonly modelAdapter: ModelAdapter;
   readonly logger: Logger;
   readonly eventBus = new EventBus();
   readonly sessionStore: SessionStore;
+  readonly runStore: RunStore;
 
   private readonly explicitSkillDirs: string[];
   private readonly globalSkillDirs: string[];
@@ -117,6 +135,7 @@ export class RuntimeAgent {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
     this.runtimeVersion = options.runtimeVersion;
     this.modelName = options.modelName;
+    this.providerName = options.providerName ?? "openai-compatible";
     this.modelAdapter = options.modelAdapter;
     this.logger = options.logger ?? createConsoleLogger();
     this.sessionStore = new SessionStore({
@@ -124,6 +143,9 @@ export class RuntimeAgent {
       runtimeVersion: this.runtimeVersion,
       model: this.modelName,
       sessionDir: options.sessionDir,
+    });
+    this.runStore = new RunStore({
+      workspaceRoot: this.workspaceRoot,
     });
     this.explicitSkillDirs = options.explicitSkillDirs ?? [];
     this.globalSkillDirs = options.globalSkillDirs ?? [];
@@ -142,11 +164,7 @@ export class RuntimeAgent {
 
   async run(prompt: string, signal?: AbortSignal): Promise<RuntimeRunResult> {
     const conversation = await this.createConversation();
-    try {
-      return await conversation.send(prompt, signal);
-    } finally {
-      this.eventBus.emit({ type: "agent_end", sessionId: conversation.sessionId });
-    }
+    return conversation.send(prompt, signal);
   }
 
   async createConversation(sessionId?: string): Promise<RuntimeConversation> {
@@ -154,12 +172,10 @@ export class RuntimeAgent {
 
     const existing = sessionId ? await this.tryLoadConversation(sessionId) : null;
     if (existing) {
-      this.eventBus.emit({ type: "agent_start", sessionId: existing.sessionId });
       return existing;
     }
 
     const session = await this.sessionStore.createSession(sessionId);
-    this.eventBus.emit({ type: "agent_start", sessionId: session.sessionId });
     return new RuntimeConversation(this, session.sessionId, session.path, []);
   }
 
@@ -195,7 +211,7 @@ export class RuntimeAgent {
     }
     await this.restoreActivatedSkills(loaded.entries);
     const messages = this.replayMessages(loaded.entries);
-    return new RuntimeConversation(this, sessionId, loaded.path, messages);
+    return new RuntimeConversation(this, sessionId, loaded.path, messages, true);
   }
 
   private async restoreActivatedSkills(entries: SessionEntry[]): Promise<void> {

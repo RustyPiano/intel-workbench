@@ -32,16 +32,20 @@ export const activateSkillTool: RuntimeTool<ActivateSkillArgs, ActivateSkillData
       }
 
       const activated = await ctx.skillRegistry.activate(args.name);
-      return {
-        ok: true,
-        content: activated.renderedContent,
-        meta: {
-          name: activated.record.meta.name,
-          rootDir: activated.record.meta.rootDir,
-          contentHash: activated.state.contentHash,
-          newlyActivated: activated.newlyActivated,
-        },
-      };
+        return {
+          ok: true,
+          content: activated.renderedContent,
+          meta: {
+            name: activated.record.meta.name,
+            rootDir: activated.record.meta.rootDir,
+            contentHash: activated.state.contentHash,
+            newlyActivated: activated.newlyActivated,
+            resourceCount:
+              activated.record.resources.scripts.length +
+              activated.record.resources.references.length +
+              activated.record.resources.assets.length,
+          },
+        };
     } catch (error) {
       return {
         ok: false,

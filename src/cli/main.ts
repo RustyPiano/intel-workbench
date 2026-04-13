@@ -191,6 +191,7 @@ function createRuntimeAgent(config: RuntimeConfig): RuntimeAgent {
     allowWriteOutsideWorkspace: config.allowWriteOutsideWorkspace,
     sessionDir: config.sessionDir,
     toolConfig: {
+      toolTimeoutMs: config.toolTimeoutMs,
       bashTimeoutMs: config.bashTimeoutMs,
       maxBashOutputBytes: config.maxBashOutputBytes,
       readMaxBytes: config.readMaxBytes,

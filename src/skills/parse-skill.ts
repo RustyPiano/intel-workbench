@@ -1,6 +1,6 @@
 import matter from "gray-matter";
 
-import type { SkillRecord } from "./types.js";
+import type { SkillMeta, SkillRecord } from "./types.js";
 
 function normalizeAllowedTools(input: unknown): string[] | undefined {
   if (typeof input === "string") {
@@ -17,10 +17,7 @@ function normalizeAllowedTools(input: unknown): string[] | undefined {
   return undefined;
 }
 
-export function parseSkillFile(rawContent: string, rootDir: string, skillFile: string): SkillRecord {
-  const parsed = matter(rawContent);
-  const { data, content } = parsed;
-
+function buildSkillMeta(data: Record<string, unknown>, rootDir: string, skillFile: string): SkillMeta {
   const name = typeof data.name === "string" ? data.name.trim() : "";
   const description = typeof data.description === "string" ? data.description.trim() : "";
 
@@ -33,16 +30,28 @@ export function parseSkillFile(rawContent: string, rootDir: string, skillFile: s
   }
 
   return {
-    meta: {
-      name,
-      description,
-      license: typeof data.license === "string" ? data.license : undefined,
-      compatibility: typeof data.compatibility === "string" ? data.compatibility : undefined,
-      metadata: typeof data.metadata === "object" && data.metadata !== null ? (data.metadata as Record<string, unknown>) : undefined,
-      allowedTools: normalizeAllowedTools(data["allowed-tools"]),
-      rootDir,
-      skillFile,
-    },
+    name,
+    description,
+    license: typeof data.license === "string" ? data.license : undefined,
+    compatibility: typeof data.compatibility === "string" ? data.compatibility : undefined,
+    metadata: typeof data.metadata === "object" && data.metadata !== null ? (data.metadata as Record<string, unknown>) : undefined,
+    allowedTools: normalizeAllowedTools(data["allowed-tools"]),
+    rootDir,
+    skillFile,
+  };
+}
+
+export function parseSkillMetadata(rawContent: string, rootDir: string, skillFile: string): SkillMeta {
+  const parsed = matter(rawContent);
+  return buildSkillMeta(parsed.data as Record<string, unknown>, rootDir, skillFile);
+}
+
+export function parseSkillFile(rawContent: string, rootDir: string, skillFile: string): SkillRecord {
+  const parsed = matter(rawContent);
+  const { content } = parsed;
+
+  return {
+    meta: buildSkillMeta(parsed.data as Record<string, unknown>, rootDir, skillFile),
     body: content.trim(),
     resources: {
       scripts: [],

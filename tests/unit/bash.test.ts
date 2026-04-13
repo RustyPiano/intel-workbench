@@ -21,7 +21,11 @@ async function createWorkspace() {
   return root;
 }
 
-function createContext(workspaceRoot: string, toolCallId = "call_bash_1"): ToolContext {
+function createContext(
+  workspaceRoot: string,
+  toolCallId = "call_bash_1",
+  configOverrides: Partial<ToolContext["config"]> = {},
+): ToolContext {
   return {
     workspaceRoot,
     sessionId: "sess_test",
@@ -36,9 +40,11 @@ function createContext(workspaceRoot: string, toolCallId = "call_bash_1"): ToolC
     skillRegistry: undefined,
     policy: createPolicyEngine({ workspaceRoot }),
     config: {
+      toolTimeoutMs: 1_000,
       bashTimeoutMs: 100,
       maxBashOutputBytes: 16,
       readMaxBytes: 256 * 1024,
+      ...configOverrides,
     },
   };
 }
@@ -76,5 +82,61 @@ describe("bashTool", () => {
     expect(result.error).toMatchObject({
       code: "TOOL_TIMEOUT",
     });
+  });
+
+  test("caps per-call timeout requests at the runtime maximum", async () => {
+    const workspaceRoot = await createWorkspace();
+    const result = await bashTool.execute(
+      {
+        command: "node -e \"setTimeout(() => console.log('late'), 80)\"",
+        timeout_ms: 1_000,
+      },
+      createContext(workspaceRoot, "call_bash_timeout_cap", { bashTimeoutMs: 25 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "TOOL_TIMEOUT",
+    });
+  });
+
+  test("emits incremental updates while keeping only a bounded tail in memory", async () => {
+    const workspaceRoot = await createWorkspace();
+    const updates: string[] = [];
+    const result = await bashTool.execute(
+      {
+        command:
+          "node -e \"process.stdout.write('1234567890'); setTimeout(() => process.stdout.write('abcdefghij'), 20); setTimeout(() => process.exit(0), 40)\"",
+      },
+      {
+        ...createContext(workspaceRoot, "call_bash_stream", { bashTimeoutMs: 1_000 }),
+        onUpdate(partial) {
+          updates.push(partial);
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(updates.length).toBeGreaterThanOrEqual(2);
+    expect(result.data?.stdoutTail.length).toBeLessThanOrEqual(16);
+    const logPath = path.join(workspaceRoot, ".mini-agent", "artifacts", "bash", "call_bash_stream.log");
+    expect(await readFile(logPath, "utf8")).toContain("1234567890abcdefghij");
+  });
+
+  test("caps the returned content to the configured tail budget", async () => {
+    const workspaceRoot = await createWorkspace();
+    const result = await bashTool.execute(
+      {
+        command: "node -e \"process.stdout.write('abc你def好')\"",
+      },
+      createContext(workspaceRoot, "call_bash_content_cap", {
+        bashTimeoutMs: 1_000,
+        maxBashOutputBytes: 8,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(8);
+    expect(result.content).not.toContain("\uFFFD");
   });
 });

@@ -81,7 +81,10 @@ export class SessionStore {
     let header: SessionHeader | null = null;
     const entries: SessionEntry[] = [];
     const repairNotes: string[] = [];
-    const seenToolCalls = new Set<string>();
+    const seenToolCalls = new Map<string, string>();
+    const openToolCalls = new Set<string>();
+    let pendingAssistantToolCalls = new Set<string>();
+    let lastActivatableToolCallId: string | null = null;
 
     for (const [index, line] of lines.entries()) {
       try {
@@ -97,12 +100,50 @@ export class SessionStore {
           continue;
         }
 
-        if (parsed.type === "tool_call") {
-          seenToolCalls.add(parsed.toolCallId);
+        if (parsed.type === "message") {
+          if (openToolCalls.size > 0 || pendingAssistantToolCalls.size > 0) {
+            repairNotes.push(`${parsed.role} message appears before pending tool calls completed`);
+          }
+
+          pendingAssistantToolCalls =
+            parsed.role === "assistant" && parsed.toolCalls?.length
+              ? new Set(parsed.toolCalls.map((toolCall) => toolCall.id))
+              : new Set<string>();
+          lastActivatableToolCallId = null;
         }
 
-        if (parsed.type === "tool_result" && !seenToolCalls.has(parsed.toolCallId)) {
-          repairNotes.push(`tool_result ${parsed.toolCallId} is missing matching tool_call`);
+        if (parsed.type === "tool_call") {
+          const declaredByAssistant = pendingAssistantToolCalls.has(parsed.toolCallId);
+          if (!declaredByAssistant) {
+            repairNotes.push(`tool_call ${parsed.toolCallId} is out of order`);
+          } else {
+            pendingAssistantToolCalls.delete(parsed.toolCallId);
+          }
+
+          seenToolCalls.set(parsed.toolCallId, parsed.toolName);
+          openToolCalls.add(parsed.toolCallId);
+          lastActivatableToolCallId = null;
+        }
+
+        if (parsed.type === "tool_result") {
+          if (!seenToolCalls.has(parsed.toolCallId)) {
+            repairNotes.push(`tool_result ${parsed.toolCallId} is missing matching tool_call`);
+          } else if (!openToolCalls.has(parsed.toolCallId)) {
+            repairNotes.push(`tool_result ${parsed.toolCallId} is out of order`);
+          } else {
+            openToolCalls.delete(parsed.toolCallId);
+          }
+
+          lastActivatableToolCallId = parsed.ok ? parsed.toolCallId : null;
+        }
+
+        if (parsed.type === "skill_activation") {
+          const activatingToolName = lastActivatableToolCallId ? seenToolCalls.get(lastActivatableToolCallId) : undefined;
+          if (activatingToolName !== "activate_skill") {
+            repairNotes.push(`skill_activation ${parsed.skill} is out of order`);
+          }
+
+          lastActivatableToolCallId = null;
         }
 
         entries.push(parsed);
@@ -144,7 +185,7 @@ export class SessionStore {
     return entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .map((entry) => {
-        const sessionId = entry.name.split("_").at(-1)?.replace(/\.jsonl$/u, "") ?? entry.name;
+        const sessionId = entry.name.replace(/^[^_]+_/u, "").replace(/\.jsonl$/u, "");
         const sessionPath = path.join(this.sessionDir, entry.name);
         this.sessionPaths.set(sessionId, sessionPath);
         return {

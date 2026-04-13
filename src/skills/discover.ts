@@ -1,10 +1,10 @@
-import { access, readFile } from "node:fs/promises";
+import { access, open } from "node:fs/promises";
 import path from "node:path";
 
 import fg from "fast-glob";
 
-import { parseSkillFile } from "./parse-skill.js";
-import type { DiscoveryResult, SkillRecord } from "./types.js";
+import { parseSkillMetadata } from "./parse-skill.js";
+import type { DiscoveryResult, SkillMeta } from "./types.js";
 
 export interface DiscoverSkillsOptions {
   workspaceRoot: string;
@@ -13,7 +13,7 @@ export interface DiscoverSkillsOptions {
 }
 
 interface Candidate {
-  record: SkillRecord;
+  meta: SkillMeta;
   priority: [number, number];
 }
 
@@ -56,7 +56,36 @@ async function listSkillRoots(skillBaseDir: string): Promise<string[]> {
   }).then((files) => files.map((file) => path.dirname(file)).sort());
 }
 
-async function readResources(rootDir: string) {
+const FRONTMATTER_PATTERN = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
+
+async function readSkillFrontmatter(skillFile: string): Promise<string> {
+  const handle = await open(skillFile, "r");
+  const buffer = Buffer.alloc(1024);
+  let position = 0;
+  let collected = "";
+
+  try {
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) {
+        break;
+      }
+
+      position += bytesRead;
+      collected += buffer.toString("utf8", 0, bytesRead);
+      const match = collected.match(FRONTMATTER_PATTERN);
+      if (match?.[0]) {
+        return match[0];
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+
+  return collected;
+}
+
+export async function readSkillResources(rootDir: string) {
   const scripts = await fg(["scripts/**/*"], {
     cwd: rootDir,
     onlyFiles: true,
@@ -106,28 +135,27 @@ export async function discoverSkills(options: DiscoverSkillsOptions): Promise<Di
 
     for (const rootDir of roots) {
       const skillFile = path.join(rootDir, "SKILL.md");
-      const rawContent = await readFile(skillFile, "utf8");
-      const record = parseSkillFile(rawContent, rootDir, skillFile);
-      record.resources = await readResources(rootDir);
+      const frontmatter = await readSkillFrontmatter(skillFile);
+      const meta = parseSkillMetadata(frontmatter, rootDir, skillFile);
 
       const priority: [number, number] = [commonPrefixScore(workspaceRoot, rootDir), sourceDir.sourceIndex];
-      const existing = selected.get(record.meta.name);
+      const existing = selected.get(meta.name);
 
       if (!existing || priority[0] > existing.priority[0] || (priority[0] === existing.priority[0] && priority[1] >= existing.priority[1])) {
         if (existing) {
-          warnings.push(`Skill conflict for ${record.meta.name}: ${rootDir}`);
+          warnings.push(`Skill conflict for ${meta.name}: ${rootDir}`);
         }
 
-        selected.set(record.meta.name, { record, priority });
+        selected.set(meta.name, { meta, priority });
       }
     }
   }
 
-  const records = new Map<string, SkillRecord>();
+  const records = new Map<string, SkillMeta>();
   const catalog = [...selected.values()]
-    .map(({ record }) => {
-      records.set(record.meta.name, record);
-      return record.meta;
+    .map(({ meta }) => {
+      records.set(meta.name, meta);
+      return meta;
     })
     .sort((left, right) => left.name.localeCompare(right.name));
 

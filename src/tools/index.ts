@@ -1,10 +1,59 @@
+import { toRuntimeErrorShape } from "../runtime/errors.js";
 import type { ToolCall } from "../runtime/types.js";
 import { activateSkillTool } from "./activate-skill.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
 import { readTool } from "./read.js";
-import type { RuntimeTool, ToolContext } from "./types.js";
+import type { JsonSchema, RuntimeTool, ToolContext, ToolExecutionResult } from "./types.js";
 import { writeTool } from "./write.js";
+
+function validateSchema(schema: JsonSchema, args: unknown): string | null {
+  if (schema.type !== "object") {
+    return null;
+  }
+
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return "Tool arguments must be an object";
+  }
+
+  const objectArgs = args as Record<string, unknown>;
+
+  const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
+  for (const field of required) {
+    if (!(field in objectArgs)) {
+      return `Missing required field: ${field}`;
+    }
+  }
+
+  const properties =
+    typeof schema.properties === "object" && schema.properties !== null
+      ? (schema.properties as Record<string, JsonSchema>)
+      : {};
+
+  for (const [field, definition] of Object.entries(properties)) {
+    if (!(field in objectArgs) || definition.type === undefined) {
+      continue;
+    }
+
+    const value = objectArgs[field];
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (definition.type === "array") {
+      if (!Array.isArray(value)) {
+        return `Field ${field} must be an array`;
+      }
+      continue;
+    }
+
+    if (typeof value !== definition.type) {
+      return `Field ${field} must be a ${definition.type}`;
+    }
+  }
+
+  return null;
+}
 
 export class ToolRegistry {
   private readonly tools = new Map<string, RuntimeTool>();
@@ -22,10 +71,79 @@ export class ToolRegistry {
   async execute(toolCall: ToolCall, ctx: ToolContext) {
     const tool = this.tools.get(toolCall.name);
     if (!tool) {
-      throw new Error(`Unknown tool: ${toolCall.name}`);
+      return {
+        ok: false,
+        content: `Unknown tool: ${toolCall.name}`,
+        error: {
+          code: "INVALID_ARGS",
+          message: `Unknown tool: ${toolCall.name}`,
+        },
+      } satisfies ToolExecutionResult;
     }
 
-    return tool.execute(toolCall.arguments, ctx);
+    const validationError = validateSchema(tool.inputSchema, toolCall.arguments);
+    if (validationError) {
+      return {
+        ok: false,
+        content: validationError,
+        error: {
+          code: "INVALID_ARGS",
+          message: validationError,
+        },
+      } satisfies ToolExecutionResult;
+    }
+
+    if (ctx.signal.aborted) {
+      return {
+        ok: false,
+        content: `Tool ${tool.name} was cancelled before execution`,
+        error: {
+          code: "TOOL_TIMEOUT",
+          message: `Tool ${tool.name} was cancelled before execution`,
+          retriable: true,
+        },
+      } satisfies ToolExecutionResult;
+    }
+
+    const controller = new AbortController();
+    const handleAbort = () => controller.abort();
+    ctx.signal.addEventListener("abort", handleAbort, { once: true });
+
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        controller.abort();
+        resolve({
+          ok: false,
+          content: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+          error: {
+            code: "TOOL_TIMEOUT",
+            message: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+            retriable: true,
+          },
+        });
+      }, ctx.config.toolTimeoutMs);
+    });
+
+    const executionPromise: Promise<ToolExecutionResult> = tool
+      .execute(toolCall.arguments, {
+        ...ctx,
+        signal: controller.signal,
+      })
+      .catch((error) => ({
+        ok: false,
+        content: error instanceof Error ? error.message : "Tool execution failed",
+        error: toRuntimeErrorShape(error, "INTERNAL_ERROR"),
+      }) satisfies ToolExecutionResult);
+
+    try {
+      return await Promise.race([executionPromise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      ctx.signal.removeEventListener("abort", handleAbort);
+    }
   }
 }
 

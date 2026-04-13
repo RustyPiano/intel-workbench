@@ -24,6 +24,6 @@ export interface SkillRecord {
 export interface DiscoveryResult {
   catalog: SkillMeta[];
   warnings: string[];
-  records: Map<string, SkillRecord>;
+  records: Map<string, SkillMeta>;
   skillRoots: string[];
 }

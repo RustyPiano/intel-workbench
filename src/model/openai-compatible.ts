@@ -157,6 +157,8 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
       tool_choice: input.tools.length ? "auto" : undefined,
       temperature: input.temperature,
       max_completion_tokens: input.maxTokens,
+    }, {
+      signal: input.signal,
     });
 
     const choice = response.choices[0];

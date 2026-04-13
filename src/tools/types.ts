@@ -20,6 +20,7 @@ export interface ToolExecutionResult<T = unknown> {
 }
 
 export interface ToolRuntimeConfig {
+  toolTimeoutMs: number;
   bashTimeoutMs: number;
   maxBashOutputBytes: number;
   readMaxBytes: number;
@@ -37,6 +38,7 @@ export interface ToolContext {
   policy: PolicyEngine;
   config: ToolRuntimeConfig;
   fileMutationQueue?: FileMutationQueue;
+  onUpdate?(partial: string): void;
 }
 
 export interface RuntimeTool<TArgs = unknown, TResult = unknown> {

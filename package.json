@@ -1,0 +1,30 @@
+{
+  "name": "mini-agent",
+  "version": "1.0.0",
+  "description": "A minimal local-first agent runtime with skills, tools, sessions, and a model adapter interface.",
+  "type": "module",
+  "bin": {
+    "mini-agent": "./dist/src/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/main.ts",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm run test:run"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3",
+    "gray-matter": "^4.0.3",
+    "nanoid": "^5.1.7",
+    "openai": "^6.34.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

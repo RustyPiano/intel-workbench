@@ -1,0 +1,182 @@
+import OpenAI from "openai";
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionMessageToolCall,
+  ChatCompletionTool,
+} from "openai/resources/chat/completions/completions";
+
+import { RuntimeError } from "../runtime/errors.js";
+import type { AssistantMessage, RuntimeMessage, ToolCall } from "../runtime/types.js";
+import type { GenerateInput, GenerateResult, ModelAdapter } from "./types.js";
+
+export interface OpenAICompatibleModelAdapterOptions {
+  provider?: string;
+  apiKey?: string;
+  model: string;
+  baseURL?: string;
+}
+
+function mapToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
+  if (toolCall.type !== "function") {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: `Unsupported OpenAI-compatible tool call type: ${toolCall.type}`,
+    });
+  }
+
+  try {
+    return {
+      id: toolCall.id,
+      name: toolCall.function.name,
+      arguments: JSON.parse(toolCall.function.arguments) as Record<string, unknown>,
+    };
+  } catch (error) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: `Provider returned invalid tool arguments for ${toolCall.function.name}`,
+      details: {
+        arguments: toolCall.function.arguments,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+}
+
+function mapMessage(message: RuntimeMessage): ChatCompletionMessageParam {
+  switch (message.role) {
+    case "system":
+      return {
+        role: "system",
+        content: message.content,
+      };
+    case "user":
+      return {
+        role: "user",
+        content: message.content,
+      };
+    case "assistant":
+      return {
+        role: "assistant",
+        content: message.content || null,
+        tool_calls: message.toolCalls?.map((toolCall) => ({
+          id: toolCall.id,
+          type: "function",
+          function: {
+            name: toolCall.name,
+            arguments: JSON.stringify(toolCall.arguments),
+          },
+        })),
+      };
+    case "tool":
+      if (!message.toolCallId) {
+        throw new RuntimeError({
+          code: "MODEL_ERROR",
+          message: "Tool messages must include toolCallId",
+        });
+      }
+
+      return {
+        role: "tool",
+        content: message.content,
+        tool_call_id: message.toolCallId,
+      };
+    default:
+      throw new RuntimeError({
+        code: "MODEL_ERROR",
+        message: `Unsupported message role: ${String((message as RuntimeMessage).role)}`,
+      });
+  }
+}
+
+function mapTools(input: GenerateInput): ChatCompletionTool[] {
+  return input.tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.inputSchema,
+      strict: true,
+    },
+  }));
+}
+
+function mapAssistantMessage(message: {
+  content: string | null;
+  tool_calls?: ChatCompletionMessageToolCall[];
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: message.content ?? "",
+    toolCalls: message.tool_calls?.map(mapToolCall),
+  };
+}
+
+function mapStopReason(reason: string | null): GenerateResult["stopReason"] {
+  if (reason === "tool_calls" || reason === "function_call") {
+    return "tool_use";
+  }
+
+  if (reason === "length") {
+    return "max_tokens";
+  }
+
+  return "end_turn";
+}
+
+export class OpenAICompatibleModelAdapter implements ModelAdapter {
+  readonly name: string;
+  readonly connection: Required<Pick<OpenAICompatibleModelAdapterOptions, "provider" | "model">> &
+    Pick<OpenAICompatibleModelAdapterOptions, "baseURL" | "apiKey">;
+  private readonly client: OpenAI;
+
+  constructor(private readonly options: OpenAICompatibleModelAdapterOptions) {
+    this.name = options.model;
+    this.connection = {
+      provider: options.provider ?? "openai-compatible",
+      model: options.model,
+      baseURL: options.baseURL,
+      apiKey: options.apiKey,
+    };
+    this.client = new OpenAI({
+      apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
+      baseURL: options.baseURL,
+    });
+  }
+
+  async generate(input: GenerateInput): Promise<GenerateResult> {
+    const response = await this.client.chat.completions.create({
+      model: this.options.model,
+      messages: [
+        {
+          role: "system",
+          content: input.systemPrompt,
+        },
+        ...input.messages.map(mapMessage),
+      ],
+      tools: mapTools(input),
+      tool_choice: input.tools.length ? "auto" : undefined,
+      temperature: input.temperature,
+      max_completion_tokens: input.maxTokens,
+    });
+
+    const choice = response.choices[0];
+    if (!choice) {
+      throw new RuntimeError({
+        code: "MODEL_ERROR",
+        message: "Provider returned no completion choices",
+      });
+    }
+
+    return {
+      message: mapAssistantMessage(choice.message),
+      stopReason: mapStopReason(choice.finish_reason),
+      usage: response.usage
+        ? {
+            inputTokens: response.usage.prompt_tokens,
+            outputTokens: response.usage.completion_tokens,
+          }
+        : undefined,
+      rawResponse: response,
+    };
+  }
+}

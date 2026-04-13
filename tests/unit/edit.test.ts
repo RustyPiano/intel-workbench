@@ -62,6 +62,10 @@ describe("editTool", () => {
     );
 
     expect(result.ok).toBe(true);
+    expect(result.meta).toMatchObject({
+      path: filePath,
+      replacements: 1,
+    });
     expect(await readFile(filePath, "utf8")).toBe("Status:\n\"DONE\" - shipped\n");
   });
 

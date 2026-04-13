@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { RuntimeAgent } from "../../src/runtime/agent.js";
+import { SessionStore } from "../../src/runtime/session.js";
 import { ScriptedModelAdapter } from "../../src/model/mock.js";
 
 const tempRoots: string[] = [];
@@ -492,5 +493,44 @@ describe("RuntimeAgent", () => {
     vi.spyOn(agent.sessionStore, "loadSession").mockRejectedValue(new Error("load failed"));
 
     await expect(agent.createConversation("sess_existing")).rejects.toThrow("load failed");
+  });
+
+  test("refuses to resume corrupted sessions in strict mode", async () => {
+    const workspaceRoot = await createWorkspace();
+    const store = new SessionStore({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+    });
+    const session = await store.createSession("sess_corrupted_resume");
+    const { appendFile } = await import("node:fs/promises");
+
+    await appendFile(
+      session.path,
+      `${JSON.stringify({
+        type: "tool_result",
+        toolCallId: "missing",
+        ok: true,
+        content: "oops",
+        timestamp: "2026-04-13T00:00:01.000Z",
+      })}\n`,
+    );
+
+    const agent = new RuntimeAgent({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: new ScriptedModelAdapter([
+        {
+          message: {
+            role: "assistant",
+            content: "Done.",
+          },
+          stopReason: "end_turn",
+        },
+      ]),
+    });
+
+    await expect(agent.createConversation(session.sessionId)).rejects.toThrow(/corrupted/i);
   });
 });

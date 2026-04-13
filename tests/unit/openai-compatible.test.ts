@@ -50,21 +50,30 @@ describe("OpenAICompatibleModelAdapter", () => {
     };
 
     await expect(
-      adapter.generate({
-        systemPrompt: "You are a test.",
-        messages: [],
-        tools: [],
-      }),
-    ).rejects.toMatchObject({
-      code: "MODEL_ERROR",
-      message: "429 Google AI Studio: Your prepayment credits are depleted.",
-      retriable: true,
-      details: {
-        status: 429,
-        provider: "Google AI Studio",
-        providerStatus: "RESOURCE_EXHAUSTED",
-        isByok: true,
-      },
-    });
+      (async () => {
+        try {
+          await adapter.generate({
+            systemPrompt: "You are a test.",
+            messages: [],
+            tools: [],
+          });
+          throw new Error("expected provider error");
+        } catch (error) {
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toMatchObject({
+            code: "MODEL_ERROR",
+            retriable: true,
+            details: {
+              category: "quota",
+              status: 429,
+              provider: "Google AI Studio",
+              providerStatus: "RESOURCE_EXHAUSTED",
+              isByok: true,
+            },
+          });
+          expect((error as Error).message).toContain("429 Google AI Studio: Your prepayment credits are depleted.");
+        }
+      })(),
+    ).resolves.toBeUndefined();
   });
 });

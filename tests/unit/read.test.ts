@@ -59,7 +59,7 @@ describe("readTool", () => {
 
     expect(result.ok).toBe(true);
     expect(result.content).toBe("hello runtime");
-    expect(result.data).toMatchObject({
+    expect(result.meta).toMatchObject({
       path: path.join(workspaceRoot, "notes.txt"),
       offset: 0,
       truncated: false,
@@ -75,7 +75,7 @@ describe("readTool", () => {
 
     expect(result.ok).toBe(true);
     expect(result.content).toBe("abcde");
-    expect(result.data).toMatchObject({
+    expect(result.meta).toMatchObject({
       truncated: true,
       limit: 5,
       size: 26,

@@ -61,6 +61,10 @@ describe("writeTool", () => {
     );
 
     expect(result.ok).toBe(true);
+    expect(result.meta).toMatchObject({
+      path: path.join(workspaceRoot, "reports", "output.txt"),
+      bytesWritten: Buffer.byteLength("fresh content", "utf8"),
+    });
     expect(await readFile(path.join(workspaceRoot, "reports", "output.txt"), "utf8")).toBe("fresh content");
     await expect(access(path.join(workspaceRoot, "reports", "output.txt.tmp"))).rejects.toThrow();
   });

@@ -60,9 +60,14 @@ describe("bashTool", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.data).toMatchObject({
+    expect(result.meta).toMatchObject({
       exitCode: 0,
       logPath: ".mini-agent/artifacts/bash/call_bash_log.log",
+    });
+    expect(result.artifacts).toContainEqual({
+      type: "log",
+      path: ".mini-agent/artifacts/bash/call_bash_log.log",
+      description: "Full bash output log",
     });
     const logPath = path.join(workspaceRoot, ".mini-agent", "artifacts", "bash", "call_bash_log.log");
     expect(await readFile(logPath, "utf8")).toContain("stdout line");
@@ -118,7 +123,7 @@ describe("bashTool", () => {
 
     expect(result.ok).toBe(true);
     expect(updates.length).toBeGreaterThanOrEqual(2);
-    expect(result.data?.stdoutTail.length).toBeLessThanOrEqual(16);
+    expect(result.meta?.stdoutTail.length).toBeLessThanOrEqual(16);
     const logPath = path.join(workspaceRoot, ".mini-agent", "artifacts", "bash", "call_bash_stream.log");
     expect(await readFile(logPath, "utf8")).toContain("1234567890abcdefghij");
   });

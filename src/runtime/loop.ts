@@ -108,8 +108,8 @@ export async function runAgentLoop(
           ok: result.ok,
           content: result.content,
           timestamp: new Date().toISOString(),
-          data:
-            typeof result.data === "object" && result.data !== null ? (result.data as Record<string, unknown>) : undefined,
+          meta:
+            typeof result.meta === "object" && result.meta !== null ? (result.meta as Record<string, unknown>) : undefined,
           error: result.error,
         };
         await dependencies.sessionStore.appendEntry(sessionId, toolResultEntry);
@@ -124,17 +124,17 @@ export async function runAgentLoop(
         if (
           toolCall.name === "activate_skill" &&
           result.ok &&
-          toolResultEntry.data?.name &&
-          toolResultEntry.data?.contentHash &&
-          toolResultEntry.data.newlyActivated !== false
+          toolResultEntry.meta?.name &&
+          toolResultEntry.meta?.contentHash &&
+          toolResultEntry.meta.newlyActivated !== false
         ) {
           await dependencies.sessionStore.appendEntry(sessionId, {
             type: "skill_activation",
-            skill: String(toolResultEntry.data.name),
-            contentHash: String(toolResultEntry.data.contentHash),
+            skill: String(toolResultEntry.meta.name),
+            contentHash: String(toolResultEntry.meta.contentHash),
             timestamp: new Date().toISOString(),
           });
-          dependencies.eventBus.emit({ type: "skill_activation", name: String(toolResultEntry.data.name) });
+          dependencies.eventBus.emit({ type: "skill_activation", name: String(toolResultEntry.meta.name) });
         }
 
         dependencies.eventBus.emit({ type: "tool_execution_end", toolCallId: toolCall.id, ok: result.ok });

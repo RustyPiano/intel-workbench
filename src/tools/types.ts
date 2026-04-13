@@ -7,14 +7,15 @@ import type { FileMutationQueue } from "./file-mutation-queue.js";
 export type JsonSchema = Record<string, unknown>;
 
 export interface ToolArtifact {
-  kind: string;
+  type: "log" | "file" | "json";
   path: string;
+  description?: string;
 }
 
 export interface ToolExecutionResult<T = unknown> {
   ok: boolean;
   content: string;
-  data?: T;
+  meta?: T;
   error?: RuntimeErrorShape;
   artifacts?: ToolArtifact[];
 }

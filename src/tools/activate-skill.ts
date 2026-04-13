@@ -35,7 +35,7 @@ export const activateSkillTool: RuntimeTool<ActivateSkillArgs, ActivateSkillData
       return {
         ok: true,
         content: activated.renderedContent,
-        data: {
+        meta: {
           name: activated.record.meta.name,
           rootDir: activated.record.meta.rootDir,
           contentHash: activated.state.contentHash,

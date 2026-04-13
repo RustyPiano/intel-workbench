@@ -187,7 +187,7 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
       return {
         ok: true,
         content: combined,
-        data: {
+        meta: {
           exitCode,
           stdoutTail: stdout,
           stderrTail: stderr,
@@ -195,8 +195,9 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
         },
         artifacts: [
           {
-            kind: "bash_log",
+            type: "log",
             path: relativeLogPath,
+            description: "Full bash output log",
           },
         ],
       };
@@ -206,7 +207,7 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
       return {
         ok: false,
         content: error instanceof Error ? error.message : "Failed to execute command",
-        data: {
+        meta: {
           exitCode: error instanceof RuntimeError && typeof error.details?.exitCode === "number" ? (error.details.exitCode as number) : null,
           stdoutTail: stdout,
           stderrTail: stderr,
@@ -215,8 +216,9 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
         error: toRuntimeErrorShape(error, timedOut ? "TOOL_TIMEOUT" : "INTERNAL_ERROR"),
         artifacts: [
           {
-            kind: "bash_log",
+            type: "log",
             path: relativeLogPath,
+            description: "Full bash output log",
           },
         ],
       };

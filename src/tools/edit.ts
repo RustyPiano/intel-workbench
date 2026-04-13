@@ -99,7 +99,7 @@ export const editTool: RuntimeTool<EditArgs, EditData> = {
         return {
           ok: true,
           content: `Edited ${replacementTargets.length} occurrence(s) in ${args.path}`,
-          data: {
+          meta: {
             path: filePath,
             replacements: replacementTargets.length,
           },

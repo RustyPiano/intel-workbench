@@ -8,6 +8,7 @@ function createContext(): ToolContext {
   return {
     workspaceRoot: process.cwd(),
     sessionId: "sess_test",
+    runId: "run_test",
     toolCallId: "call_test",
     signal: new AbortController().signal,
     logger: {
@@ -146,7 +147,7 @@ describe("ToolRegistry", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({
-      code: "TOOL_TIMEOUT",
+      code: "RUN_ABORTED",
     });
     expect(executed).toBe(false);
   });

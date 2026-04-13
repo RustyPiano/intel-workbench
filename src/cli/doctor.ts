@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { RuntimeConfig } from "../runtime/config.js";
 import type { SessionStore } from "../runtime/session.js";
+import type { RunMeta } from "../runtime/trace.js";
 
 export interface DoctorSessionHealth {
   total: number;
@@ -26,6 +27,13 @@ export interface DoctorReportInput {
     provider?: string;
     model?: string;
     baseURL?: string;
+  };
+  lastRun?: Partial<RunMeta> & {
+    error_layer?: string;
+    user_message?: string;
+    trace_path?: string;
+    artifacts_dir?: string;
+    trace_status?: string;
   };
 }
 
@@ -96,6 +104,27 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `smoke_model\t${input.smokePath.model ?? "(unset)"}`,
     `smoke_base_url\t${input.smokePath.baseURL ?? "(unset)"}`,
   ];
+
+  if (input.lastRun) {
+    lines.push(
+      "",
+      "[last_run]",
+      `run_id\t${input.lastRun.run_id ?? "(unknown)"}`,
+      `status\t${input.lastRun.status ?? "(unknown)"}`,
+      `provider\t${input.lastRun.provider ?? "(unknown)"}`,
+      `model\t${input.lastRun.model ?? "(unknown)"}`,
+      `duration_ms\t${input.lastRun.duration_ms ?? "(unknown)"}`,
+      `tool_calls\t${input.lastRun.tool_calls ?? 0}`,
+      `skill_activations\t${input.lastRun.skill_activations ?? 0}`,
+      `artifact_count\t${input.lastRun.artifact_count ?? 0}`,
+      `first_error_code\t${input.lastRun.first_error_code ?? "(none)"}`,
+      `error_layer\t${input.lastRun.error_layer ?? "(none)"}`,
+      `user_message\t${input.lastRun.user_message ?? "(none)"}`,
+      `trace_status\t${input.lastRun.trace_status ?? "(unknown)"}`,
+      `trace_path\t${input.lastRun.trace_path ?? "(unknown)"}`,
+      `artifacts_dir\t${input.lastRun.artifacts_dir ?? "(unknown)"}`,
+    );
+  }
 
   return `${lines.join("\n")}\n`;
 }

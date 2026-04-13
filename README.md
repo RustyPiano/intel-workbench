@@ -9,18 +9,18 @@ It provides:
 - built-in `read`, `write`, `edit`, `bash`, and `activate_skill` tools
 - skill discovery and activation
 - JSONL session persistence
+- per-run trace capture with timeline rendering
 - a small CLI with one-shot and REPL execution modes
 
-## What v1 ships
+## What v1.2 adds
 
-- Runtime loop with tool execution and turn limits
-- File tools: `read`, `write`, `edit`
-- Shell tool: `bash` with artifact logs and timeouts
-- Skill discovery from workspace, explicit, and global directories
-- `activate_skill` with active-skill caching
-- JSONL sessions with corruption reporting
-- Event bus for runtime lifecycle events
-- OpenAI-compatible model connection support with configurable `provider`, `baseURL`, and `apiKey`
+- Run-scoped trace storage under `.mini-agent/runs/<run-id>/`
+- Compact and verbose timeline output in one-shot and REPL execution
+- `run list` and `run show`
+- `session show --trace`
+- `doctor --last-run` and `doctor --run <id>`
+- Safe planning/progress summaries instead of raw private reasoning
+- Run-level artifact visibility for file writes, edits, and bash logs/output
 
 ## Install And Verify
 
@@ -69,7 +69,11 @@ Utility commands:
 
 ```bash
 npm run dev -- skills list
+npm run dev -- run list
+npm run dev -- run show <run-id>
 npm run dev -- session list
+npm run dev -- session show <session-id> --trace
+npm run dev -- doctor --last-run
 npm run dev -- doctor
 ```
 
@@ -124,6 +128,9 @@ mini-agent [prompt]
   --api-key <token>
   --session <id>
   --skill-dir <path>
+  --trace compact|verbose|json
+  --show-plan
+  --hide-debug
   --json-events
   --read-only
   --max-turns <n>
@@ -133,14 +140,17 @@ mini-agent [prompt]
 Commands:
 
 - `mini-agent skills list`
+- `mini-agent run list`
+- `mini-agent run show <id> [--format timeline|json|jsonl|markdown] [--verbose] [--recover]`
 - `mini-agent session list`
-- `mini-agent session show <id>`
-- `mini-agent doctor`
+- `mini-agent session show <id> [--recover] [--trace] [--run <id>]`
+- `mini-agent doctor [--last-run | --run <id>]`
 
 ## Documentation Map
 
 - Tutorial: [docs/tutorials/quickstart.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/tutorials/quickstart.md)
 - How-to: [docs/how-to/connect-openai-compatible-models.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/connect-openai-compatible-models.md)
 - Reference: [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
+- Reference: [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)
 - Explanation: [docs/explanation/runtime-architecture.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/explanation/runtime-architecture.md)
 - Example skill: [.agents/skills/intel-bulletin](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/intel-bulletin)

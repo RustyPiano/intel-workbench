@@ -95,6 +95,22 @@ describe("doctor helpers", () => {
         model: "gpt-4.1",
         baseURL: "https://example.com/v1",
       },
+      lastRun: {
+        run_id: "run_123",
+        status: "failed",
+        provider: "openai-compatible",
+        model: "gpt-4.1",
+        duration_ms: 2400,
+        tool_calls: 2,
+        skill_activations: 1,
+        artifact_count: 1,
+        first_error_code: "provider_quota_error",
+        error_layer: "provider",
+        user_message: "quota exhausted",
+        trace_status: "valid",
+        trace_path: "/tmp/workspace/.mini-agent/runs/run_123/trace.jsonl",
+        artifacts_dir: "/tmp/workspace/.mini-agent/runs/run_123/artifacts",
+      },
     });
 
     expect(report).toContain("[runtime_basics]");
@@ -102,7 +118,12 @@ describe("doctor helpers", () => {
     expect(report).toContain("[skill_discovery]");
     expect(report).toContain("[session_health]");
     expect(report).toContain("[smoke_path]");
+    expect(report).toContain("[last_run]");
     expect(report).toContain("smoke_configured\tyes");
     expect(report).toContain("corrupted_sessions\t1");
+    expect(report).toContain("run_id\trun_123");
+    expect(report).toContain("first_error_code\tprovider_quota_error");
+    expect(report).toContain("error_layer\tprovider");
+    expect(report).toContain("trace_path\t/tmp/workspace/.mini-agent/runs/run_123/trace.jsonl");
   });
 });

@@ -4,14 +4,14 @@ import type { AssistantMessage, RuntimeMessage, ToolCall, ToolResultEntry } from
 import { createId } from "../utils/ids.js";
 import type { ToolRegistry } from "../tools/index.js";
 import type { ToolContext, ToolExecutionResult } from "../tools/types.js";
-import type { EventBus } from "./events.js";
-import { isRuntimeError, toRuntimeErrorShape } from "./errors.js";
+import { isRuntimeError, RuntimeError, toRuntimeErrorShape } from "./errors.js";
+import type { RunManager } from "./run-manager.js";
 
 export interface LoopDependencies {
   modelAdapter: ModelAdapter;
   toolRegistry: ToolRegistry;
   sessionStore: SessionStore;
-  eventBus: EventBus;
+  runManager: RunManager;
   signal?: AbortSignal;
   createSystemPrompt: () => Promise<string>;
   createToolContext: (toolCall: ToolCall) => ToolContext;
@@ -21,6 +21,26 @@ export interface LoopDependencies {
 export interface LoopResult {
   finalMessage: AssistantMessage;
   messages: RuntimeMessage[];
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (isRuntimeError(error) && error.code === "RUN_ABORTED") {
+    return true;
+  }
+
+  return (error instanceof Error && error.name === "AbortError") || (signal?.aborted === true && error === signal.reason);
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  throw new RuntimeError({
+    code: "RUN_ABORTED",
+    message: "Run aborted by signal",
+    retriable: true,
+  });
 }
 
 function serializeToolResult(result: ToolExecutionResult): string {
@@ -46,6 +66,7 @@ export async function runAgentLoop(
     messageId: userMessageId,
     timestamp: new Date().toISOString(),
     content: prompt,
+    runId: dependencies.runManager.runId,
   });
 
   let turn = 0;
@@ -53,10 +74,14 @@ export async function runAgentLoop(
 
   try {
     while (turn < dependencies.maxTurns) {
+      throwIfAborted(dependencies.signal);
       turn += 1;
-      dependencies.eventBus.emit({ type: "turn_start", turn });
+      if (turn > 1) {
+        await dependencies.runManager.emitPlanningSummary("progress", "Review tool results and plan the next step.");
+      }
 
       const systemPrompt = await dependencies.createSystemPrompt();
+      await dependencies.runManager.recordModelRequest(turn);
       const assistant = await dependencies.modelAdapter.generate({
         systemPrompt,
         messages,
@@ -67,6 +92,8 @@ export async function runAgentLoop(
           inputSchema: tool.inputSchema,
         })),
       });
+      throwIfAborted(dependencies.signal);
+      await dependencies.runManager.recordModelResponse(turn, assistant);
 
       const assistantMessageId = createId("msg");
       const assistantMessage: AssistantMessage = {
@@ -82,23 +109,32 @@ export async function runAgentLoop(
         messageId: assistantMessageId,
         timestamp: new Date().toISOString(),
         content: assistantMessage.content,
+        runId: dependencies.runManager.runId,
         toolCalls: assistantMessage.toolCalls,
       });
 
+      if (assistantMessage.toolCalls?.length) {
+        await dependencies.runManager.emitPlanningSummary(
+          turn === 1 ? "decision" : "progress",
+          assistantMessage.content || `Preparing to call ${assistantMessage.toolCalls.map((toolCall) => toolCall.name).join(", ")}.`,
+        );
+      }
+
       if (!assistantMessage.toolCalls?.length) {
         finalMessage = assistantMessage;
-        dependencies.eventBus.emit({ type: "turn_end", turn });
         break;
       }
 
       for (const toolCall of assistantMessage.toolCalls) {
-        dependencies.eventBus.emit({ type: "tool_execution_start", toolCallId: toolCall.id, toolName: toolCall.name });
+        throwIfAborted(dependencies.signal);
+        await dependencies.runManager.recordToolStarted(toolCall);
         await dependencies.sessionStore.appendEntry(sessionId, {
           type: "tool_call",
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           args: toolCall.arguments,
           timestamp: new Date().toISOString(),
+          runId: dependencies.runManager.runId,
         });
 
         const result = await dependencies.toolRegistry.execute(toolCall, dependencies.createToolContext(toolCall));
@@ -108,6 +144,7 @@ export async function runAgentLoop(
           ok: result.ok,
           content: result.content,
           timestamp: new Date().toISOString(),
+          runId: dependencies.runManager.runId,
           meta:
             typeof result.meta === "object" && result.meta !== null ? (result.meta as Record<string, unknown>) : undefined,
           error: result.error,
@@ -133,23 +170,40 @@ export async function runAgentLoop(
             skill: String(toolResultEntry.meta.name),
             contentHash: String(toolResultEntry.meta.contentHash),
             timestamp: new Date().toISOString(),
+            runId: dependencies.runManager.runId,
           });
-          dependencies.eventBus.emit({ type: "skill_activation", name: String(toolResultEntry.meta.name) });
+          await dependencies.runManager.recordSkillActivated(
+            String(toolResultEntry.meta.name),
+            typeof toolResultEntry.meta.rootDir === "string" ? toolResultEntry.meta.rootDir : undefined,
+            typeof toolResultEntry.meta.resourceCount === "number" ? toolResultEntry.meta.resourceCount : undefined,
+          );
         }
 
-        dependencies.eventBus.emit({ type: "tool_execution_end", toolCallId: toolCall.id, ok: result.ok });
+        await dependencies.runManager.recordToolCompleted(toolCall, result);
+        if (result.error?.code === "RUN_ABORTED") {
+          throw new RuntimeError(result.error);
+        }
       }
-
-      dependencies.eventBus.emit({ type: "turn_end", turn });
     }
   } catch (error) {
-    const runtimeError = toRuntimeErrorShape(error, isRuntimeError(error) ? error.code : "MODEL_ERROR");
+    const runtimeError = isAbortError(error, dependencies.signal)
+      ? new RuntimeError({
+          code: "RUN_ABORTED",
+          message: error instanceof Error ? error.message : "Run aborted by signal",
+          retriable: true,
+        }).toJSON()
+      : toRuntimeErrorShape(error, isRuntimeError(error) ? error.code : "MODEL_ERROR");
     await dependencies.sessionStore.appendEntry(sessionId, {
       type: "error",
       timestamp: new Date().toISOString(),
+      runId: dependencies.runManager.runId,
       error: runtimeError,
     });
-    dependencies.eventBus.emit({ type: "runtime_error", error: runtimeError });
+    if (runtimeError.code === "RUN_ABORTED") {
+      await dependencies.runManager.cancel(runtimeError);
+    } else {
+      await dependencies.runManager.fail(runtimeError);
+    }
     throw error;
   }
 
@@ -166,8 +220,12 @@ export async function runAgentLoop(
       messageId: finalMessage.messageId!,
       timestamp: new Date().toISOString(),
       content: finalMessage.content,
+      runId: dependencies.runManager.runId,
     });
   }
+
+  await dependencies.runManager.recordAssistantCompleted(finalMessage);
+  await dependencies.runManager.complete();
 
   return {
     finalMessage,

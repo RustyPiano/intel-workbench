@@ -79,6 +79,13 @@ export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
             path: filePath,
             bytesWritten: Buffer.byteLength(args.content, "utf8"),
           },
+          artifacts: [
+            {
+              type: "file",
+              path: args.path,
+              description: "Written file",
+            },
+          ],
         };
       });
     } catch (error) {

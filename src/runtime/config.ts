@@ -20,6 +20,9 @@ export interface RuntimeConfig {
   explicitSkillDirs: string[];
   allowReadOutsideWorkspace: boolean;
   allowWriteOutsideWorkspace: boolean;
+  traceMode: "compact" | "verbose" | "json";
+  showPlan: boolean;
+  hideDebug: boolean;
   jsonEventMode: boolean;
   readOnly: boolean;
   sessionId?: string;
@@ -44,6 +47,9 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   explicitSkillDirs: [],
   allowReadOutsideWorkspace: false,
   allowWriteOutsideWorkspace: false,
+  traceMode: "compact",
+  showPlan: true,
+  hideDebug: false,
   jsonEventMode: false,
   readOnly: false,
 };
@@ -93,7 +99,17 @@ function parseList(value: string | undefined): string[] | undefined {
     .filter(Boolean);
 }
 
+function parseTraceMode(value: string | undefined): RuntimeConfig["traceMode"] | undefined {
+  if (value === "compact" || value === "verbose" || value === "json") {
+    return value;
+  }
+
+  return undefined;
+}
+
 function readEnvConfig(): Partial<RuntimeConfig> {
+  const traceMode = parseTraceMode(process.env.MINI_AGENT_TRACE_MODE);
+  const jsonEvents = parseBoolean(process.env.MINI_AGENT_JSON_EVENTS);
   return {
     provider: process.env.MINI_AGENT_PROVIDER,
     model: process.env.MINI_AGENT_MODEL,
@@ -111,7 +127,10 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     globalSkillDirs: parseList(process.env.MINI_AGENT_GLOBAL_SKILL_DIRS),
     allowReadOutsideWorkspace: parseBoolean(process.env.MINI_AGENT_ALLOW_READ_OUTSIDE_WORKSPACE),
     allowWriteOutsideWorkspace: parseBoolean(process.env.MINI_AGENT_ALLOW_WRITE_OUTSIDE_WORKSPACE),
-    jsonEventMode: parseBoolean(process.env.MINI_AGENT_JSON_EVENTS),
+    traceMode: traceMode ?? (jsonEvents ? "json" : undefined),
+    showPlan: parseBoolean(process.env.MINI_AGENT_SHOW_PLAN),
+    hideDebug: parseBoolean(process.env.MINI_AGENT_HIDE_DEBUG),
+    jsonEventMode: jsonEvents,
     readOnly: parseBoolean(process.env.MINI_AGENT_READ_ONLY),
   };
 }
@@ -136,5 +155,9 @@ export async function resolveRuntimeConfig(options: ResolveConfigOptions = {}): 
     sessionDir: merged.sessionDir,
     globalSkillDirs: merged.globalSkillDirs ?? [],
     explicitSkillDirs: merged.explicitSkillDirs ?? [],
+    traceMode: merged.traceMode ?? (merged.jsonEventMode ? "json" : "compact"),
+    showPlan: merged.showPlan ?? true,
+    hideDebug: merged.hideDebug ?? false,
+    jsonEventMode: merged.traceMode === "json" || merged.jsonEventMode,
   };
 }

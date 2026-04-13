@@ -1,0 +1,9 @@
+dist/
+node_modules/
+.DS_Store
+coverage/
+*.tsbuildinfo
+.mini-agent/
+!.mini-agent/sessions/
+!.mini-agent/logs/
+!.mini-agent/artifacts/

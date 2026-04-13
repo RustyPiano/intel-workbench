@@ -24,6 +24,14 @@ Current verification status:
 - `npm run build` passes
 - all unit and integration tests pass
 
+Entry-gate status after the latest v1.1 gate-closing work:
+
+- Gate A closed
+- Gate B closed
+- Gate C closed
+- Gate D closed
+- Gate E closed
+
 Recent commits:
 
 - `a284eb2` `feat(runtime): implement v1 agent runtime`
@@ -120,34 +128,31 @@ It can:
 
 ### OpenRouter / OpenAI-compatible path
 
-The runtime can talk to OpenAI-compatible endpoints correctly, but the specific live repro against OpenRouter failed upstream with a provider quota error.
+The runtime now has a confirmed known-good OpenRouter smoke path.
 
 Observed command:
 
 ```bash
-npm run dev -- "Summarize the workspace"
+npm run dev -- --max-turns 1 "Do not use tools. Reply with exactly: smoke-ok"
 ```
 
 Observed result with:
 
 - `MINI_AGENT_PROVIDER=openai-compatible`
-- `MINI_AGENT_MODEL=google/gemma-4-31b-it:free`
+- `MINI_AGENT_MODEL=nvidia/nemotron-3-super-120b-a12b:free`
 - `MINI_AGENT_BASE_URL=https://openrouter.ai/api/v1`
 
-Current surfaced error:
+Observed result:
 
 ```text
-429 Google AI Studio: Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing.
+smoke-ok
 ```
 
 Interpretation:
 
-- this is not currently a malformed request bug in the runtime
-- the request reaches OpenRouter
-- OpenRouter forwards to an upstream provider route
-- the upstream route reports quota/billing exhaustion
-
-That means adapter correctness improved, but end-to-end success still depends on a provider/model pair that is actually available to the configured account.
+- this confirms a working end-to-end OpenAI-compatible path through OpenRouter
+- the runtime can now point to one verified provider/model/baseURL combination as an operator smoke reference
+- upstream quota or unsupported-model failures remain possible on other routes, but they are no longer blocking entry-gate closure
 
 ## What is in good shape now
 
@@ -159,6 +164,8 @@ The following areas look solid enough for the next round of feature planning:
 4. Built-in tool baseline and runtime guardrails
 5. Config plumbing for OpenAI-compatible providers
 6. Test coverage around the major review regressions
+7. Maintainer-facing reference docs
+8. First-skill readiness fixtures for `intel-bulletin`
 
 ## What still looks like planning work, not emergency bug work
 
@@ -196,18 +203,7 @@ Possible next steps:
 - provider-specific diagnostics in `doctor`
 - clearer CLI guidance when a configured model is unsupported or quota-exhausted
 
-### 4. Expand documentation from "enough to use" to "enough to extend"
-
-The runtime now has user-facing docs, but the implementation has moved faster than the docs in some areas.
-
-Most useful additions:
-
-- a maintainer-facing explanation of session invariants
-- a reference page for session entry formats and corruption behavior
-- a how-to for adding a new model adapter
-- a how-to for writing and testing a skill
-
-### 5. Decide whether the spec should explicitly separate MVP from post-MVP hardening
+### 4. Decide whether the spec should explicitly separate MVP from post-MVP hardening
 
 The last round of review mostly found invariant and recovery issues rather than missing top-level features. That is a sign that the project is entering a hardening phase.
 
@@ -226,10 +222,10 @@ That will make planning less ambiguous.
 If planning starts from the current tree, this is the order I would use.
 
 1. Lock down the session consistency grammar in the spec and add any missing corruption/recovery tests.
-2. Improve operator ergonomics for model/provider failures in the CLI and `doctor`.
-3. Add maintainer-facing reference docs for session format, tool contracts, and adapter expectations.
-4. Decide whether assistant streaming is part of the next milestone.
-5. Add one more real-provider smoke path using a known-working OpenAI-compatible model/account combination.
+2. Decide whether assistant streaming is part of the next milestone.
+3. Decide whether provider fallback belongs in the runtime or should stay out of scope.
+4. Add a second independent smoke path if operator redundancy becomes important.
+5. Start choosing the first true post-gate v1.1 implementation slice or the v1.2 boundary.
 
 ## Bottom line
 
@@ -240,6 +236,8 @@ It is now in a better place:
 - core v1 runtime exists
 - the major review findings were fixed
 - the provider adapter reports real upstream failures accurately
-- the remaining work is mostly spec tightening, operator ergonomics, and next-scope decisions
+- a known-good OpenRouter smoke path has been confirmed
+- the v1.1 entry gate is now closed
+- the remaining work is mostly next-scope decisions rather than unresolved baseline risk
 
-That is a reasonable point for the spec author to treat the project as a working v1 baseline and plan the next increment deliberately instead of continuing ad hoc bug triage.
+That is a reasonable point for the spec author to treat the project as a stable working baseline, consider the v1.1 gate work closed, and plan the next increment deliberately instead of continuing ad hoc bug triage.

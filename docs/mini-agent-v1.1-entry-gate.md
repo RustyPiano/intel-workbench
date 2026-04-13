@@ -1,10 +1,10 @@
 # Mini Agent Runtime：进入 v1.1 前工作清单与准入门槛
 
 - 项目代号：`mini-agent`
-- 文档版本：`v1.0`
-- 状态：`Draft / 已补充当前 gate assessment`
+- 文档版本：`v1.1`
+- 状态：`Closed / Entry Gate Satisfied`
 - 适用范围：Runtime 核心开发、维护者、课程项目规划
-- 对应基线：`runtime v1 已实现并通过当前 check/build/test`
+- 对应基线：`runtime v1.1 已完成并通过当前 check/build/test`
 
 ---
 

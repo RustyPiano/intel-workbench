@@ -30,7 +30,7 @@ The first line of every session file must be a header.
   "createdAt": "2026-04-13T09:00:00.000Z",
   "workspaceRoot": "/workspace",
   "model": "gpt-4.1",
-  "runtimeVersion": "1.0.0"
+  "runtimeVersion": "1.1.0"
 }
 ```
 

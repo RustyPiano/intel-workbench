@@ -16,6 +16,51 @@ export interface OpenAICompatibleModelAdapterOptions {
   baseURL?: string;
 }
 
+interface ProviderErrorShape {
+  message?: string;
+  code?: string | number;
+  metadata?: {
+    raw?: string;
+    provider_name?: string;
+    is_byok?: boolean;
+  };
+}
+
+function extractProviderError(error: unknown): RuntimeError {
+  const status = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : undefined;
+  const providerError = (error as { error?: ProviderErrorShape })?.error;
+  const providerName = providerError?.metadata?.provider_name;
+  const raw = providerError?.metadata?.raw;
+
+  let upstreamMessage: string | undefined;
+  let upstreamStatus: string | undefined;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { error?: { message?: string; status?: string } };
+      upstreamMessage = parsed.error?.message;
+      upstreamStatus = parsed.error?.status;
+    } catch {
+      upstreamMessage = raw.trim();
+    }
+  }
+
+  const fallbackMessage = error instanceof Error ? error.message : "Provider request failed";
+  const message = [providerName, upstreamMessage ?? providerError?.message ?? fallbackMessage].filter(Boolean).join(": ");
+
+  return new RuntimeError({
+    code: "MODEL_ERROR",
+    message: status ? `${status} ${message}` : message,
+    retriable: status === 429,
+    details: {
+      status,
+      provider: providerName,
+      providerCode: providerError?.code,
+      providerStatus: upstreamStatus,
+      isByok: providerError?.metadata?.is_byok,
+    },
+  });
+}
+
 function mapToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
   if (toolCall.type !== "function") {
     throw new RuntimeError({
@@ -144,22 +189,27 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
   }
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
-    const response = await this.client.chat.completions.create({
-      model: this.options.model,
-      messages: [
-        {
-          role: "system",
-          content: input.systemPrompt,
-        },
-        ...input.messages.map(mapMessage),
-      ],
-      tools: mapTools(input),
-      tool_choice: input.tools.length ? "auto" : undefined,
-      temperature: input.temperature,
-      max_completion_tokens: input.maxTokens,
-    }, {
-      signal: input.signal,
-    });
+    let response;
+    try {
+      response = await this.client.chat.completions.create({
+        model: this.options.model,
+        messages: [
+          {
+            role: "system",
+            content: input.systemPrompt,
+          },
+          ...input.messages.map(mapMessage),
+        ],
+        tools: mapTools(input),
+        tool_choice: input.tools.length ? "auto" : undefined,
+        temperature: input.temperature,
+        max_completion_tokens: input.maxTokens,
+      }, {
+        signal: input.signal,
+      });
+    } catch (error) {
+      throw extractProviderError(error);
+    }
 
     const choice = response.choices[0];
     if (!choice) {

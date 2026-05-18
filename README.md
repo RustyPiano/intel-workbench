@@ -22,6 +22,69 @@ It provides:
 - Safe planning/progress summaries instead of raw private reasoning
 - Run-level artifact visibility for file writes, edits, and bash logs/output
 
+## What v1.3 adds (next release, breaking)
+
+- **`RuntimeAgent.create(options)`** is the only supported construction
+  path; the previous `new RuntimeAgent(...)` two-phase initialization is
+  gone (`skillRegistry` and `policy` are now `readonly` and resolved
+  before the instance exists).
+- **`RuntimeConversation.send` is concurrency-safe**: overlapping calls
+  on the same conversation serialize through an internal queue, so
+  `messages` and the session JSONL stay consistent.
+- **System prompt is cached per conversation.** `AGENTS.md` is read
+  once; `<active_skills>` is rebuilt only when the active set actually
+  changes.
+- **Tool input schemas are now `zod` schemas.** `RuntimeTool.inputSchema`
+  is a `z.ZodTypeAny`; `getToolJsonSchema(tool)` derives the JSON Schema
+  forwarded to the model with `additionalProperties: false` and every
+  declared property in `required` (OpenAI strict-mode compatible).
+- **`bash` snapshot is opt-in.** Pass `track_artifacts: true` to have
+  the tool diff the workspace and report created files. Default `false`
+  keeps every `bash` call O(commanded work). The new ignore list adds
+  `.git`, `dist`, `build`, `.next`, `.cache`, `.turbo`, `coverage`,
+  `.venv`, `.pytest_cache`, and `*.log`.
+- **Atomic writes.** Both `write` and `edit` go through
+  `atomicWriteFile` (`tmp + rename` with random suffix); partial writes
+  no longer leave half-files in the workspace.
+- **`RunStatus` collapses to 5 monotonic values**: `pending → running →
+  finalizing → (completed | failed | cancelled)`. The previous
+  `planning ↔ executing` oscillation is gone (the phase distinction
+  moves onto events).
+- **`EventBus` is bounded.** Defaults to a ring buffer of 2000 events
+  exposed via `getBufferedEvents()`; the old unbounded `events` field is
+  removed.
+- **New error codes** with friendly user messages:
+  `SESSION_NOT_FOUND`, `MAX_TURNS_EXCEEDED`, `PATH_NOT_ALLOWED`
+  (replaces ad-hoc `Error` throws from `PolicyEngine`). Reaching the
+  turn limit now ends the run as `failed`, not `completed`.
+- **CLI argv hardening.** Missing values, unknown flags
+  (`--frobnicate`), bad `--trace` enum values, and non-positive
+  `--max-turns` all exit non-zero with a clear `CliError` message.
+- **CLI entry point moved.** `bin` is now `dist/src/cli/bin.js` (and
+  `npm run dev` uses `tsx src/cli/bin.ts`); `src/cli/main.ts` only
+  exports the CLI building blocks.
+- **Sensitive paths.** `~/.aws`, `~/.gnupg`, `/root`, `/var/run/docker.sock`
+  join `/etc` and `~/.ssh` in the policy blocklist. `~/.config` is
+  deliberately omitted so dev-tool configs in there remain reachable.
+- **Trace redaction.** `redact → normalize → truncate` ordering plus new
+  patterns for Slack `xox[abprs]-`, GitHub `gh{p,o,u,s,r}_`, and AWS
+  `AKIA…` tokens. `AGENTS.md` content is redacted before it enters the
+  system prompt.
+
+### Migration notes
+
+- Any external code that did `new RuntimeAgent(...)` needs to switch to
+  `await RuntimeAgent.create(...)`.
+- Tool authors must replace JSON Schema `inputSchema` with a zod
+  schema. Use `getToolJsonSchema(tool)` to obtain a JSON Schema if you
+  forward tools to your own model adapter.
+- Existing `bash` callers that relied on seeing newly created files in
+  artifacts need to pass `track_artifacts: true`.
+- Consumers reading `EventBus.events` directly must call
+  `getBufferedEvents()` instead.
+- Scripts that checked for `status === "planning"` or `"executing"`
+  should switch to `status === "running"`.
+
 ## Install And Verify
 
 Install dependencies and run the verification suite:

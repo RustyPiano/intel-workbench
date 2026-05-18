@@ -216,6 +216,7 @@ function getFirstChoice(response: unknown): CompletionChoiceShape {
       code: "MODEL_ERROR",
       message: "Provider returned malformed chat completion response: expected an object",
       details: {
+        category: "incompatible_response",
         responseType: Array.isArray(response) ? "array" : typeof response,
       },
     });
@@ -227,6 +228,7 @@ function getFirstChoice(response: unknown): CompletionChoiceShape {
       code: "MODEL_ERROR",
       message: "Provider returned malformed chat completion response: missing choices array",
       details: {
+        category: "incompatible_response",
         responseKeys: responseKeys(response),
       },
     });
@@ -237,6 +239,9 @@ function getFirstChoice(response: unknown): CompletionChoiceShape {
     throw new RuntimeError({
       code: "MODEL_ERROR",
       message: "Provider returned no completion choices",
+      details: {
+        category: "incompatible_response",
+      },
     });
   }
 
@@ -246,6 +251,7 @@ function getFirstChoice(response: unknown): CompletionChoiceShape {
       code: "MODEL_ERROR",
       message: "Provider returned malformed chat completion response: missing assistant message",
       details: {
+        category: "incompatible_response",
         choiceKeys: responseKeys(choice),
       },
     });

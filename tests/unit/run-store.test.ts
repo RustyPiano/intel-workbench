@@ -155,6 +155,17 @@ describe("trace helpers", () => {
 
     expect(
       classifyRunFailure({
+        code: "MODEL_ERROR",
+        message: "Provider returned malformed chat completion response: missing choices array",
+        details: { category: "incompatible_response" },
+      }),
+    ).toMatchObject({
+      error_code: "provider_incompatibility",
+      error_layer: "provider",
+    });
+
+    expect(
+      classifyRunFailure({
         code: "PROCESS_EXIT_NONZERO",
         message: "Command exited with code 2",
       }),

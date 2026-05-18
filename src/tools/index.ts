@@ -23,6 +23,24 @@ function formatZodError(error: ZodError): string {
     .join("; ");
 }
 
+function normalizeStrictModeNulls(value: unknown): unknown {
+  if (value === null) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeStrictModeNulls);
+  }
+
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, normalizeStrictModeNulls(entryValue)]),
+    );
+  }
+
+  return value;
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, RuntimeTool>();
 
@@ -50,16 +68,23 @@ export class ToolRegistry {
     }
 
     const parsed = tool.inputSchema.safeParse(toolCall.arguments);
-    if (!parsed.success) {
-      const message = formatZodError(parsed.error);
-      return {
-        ok: false,
-        content: message,
-        error: {
-          code: "INVALID_ARGS",
-          message,
-        },
-      } satisfies ToolExecutionResult;
+    let parsedArgs: unknown;
+    if (parsed.success) {
+      parsedArgs = parsed.data;
+    } else {
+      const normalizedParsed = tool.inputSchema.safeParse(normalizeStrictModeNulls(toolCall.arguments));
+      if (!normalizedParsed.success) {
+        const message = formatZodError(parsed.error);
+        return {
+          ok: false,
+          content: message,
+          error: {
+            code: "INVALID_ARGS",
+            message,
+          },
+        } satisfies ToolExecutionResult;
+      }
+      parsedArgs = normalizedParsed.data;
     }
 
     if (ctx.signal.aborted) {
@@ -95,7 +120,7 @@ export class ToolRegistry {
     });
 
     const executionPromise: Promise<ToolExecutionResult> = tool
-      .execute(parsed.data, {
+      .execute(parsedArgs, {
         ...ctx,
         signal: controller.signal,
       })

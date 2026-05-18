@@ -1,9 +1,5 @@
-#!/usr/bin/env node
-
-import { realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 
 import { collectSessionHealth, formatDoctorReport, resolveDoctorSkillDirs } from "./doctor.js";
 import { formatRunTraceReport, formatSessionTraceReport } from "./run-report.js";
@@ -64,7 +60,7 @@ function parsePositiveInt(value: string, flag: string): number {
   return parsed;
 }
 
-function printHelp(): void {
+export function printHelp(): void {
   console.log(`mini-agent [prompt]
   --cwd <path>
   --provider <name>
@@ -414,7 +410,7 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
   });
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.help) {
     printHelp();
@@ -488,31 +484,3 @@ async function main(): Promise<void> {
   });
 }
 
-const isDirectInvocation = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  try {
-    const modulePath = fileURLToPath(import.meta.url);
-    if (modulePath === entry) {
-      return true;
-    }
-    return realpathSync(entry) === modulePath;
-  } catch {
-    return false;
-  }
-})();
-
-if (isDirectInvocation) {
-  main().catch((error) => {
-    if (error instanceof CliError) {
-      printHelp();
-      console.error(error.message);
-      process.exitCode = 2;
-      return;
-    }
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
-}

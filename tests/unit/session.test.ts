@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { SessionStore } from "../../src/runtime/session.js";
+import { SessionStore, toFileSafeIso } from "../../src/runtime/session.js";
+import { RuntimeError } from "../../src/runtime/errors.js";
 
 const tempRoots: string[] = [];
 
@@ -74,7 +75,7 @@ describe("SessionStore", () => {
     expect(loaded.status).toBe("corrupted");
     expect(loaded.corrupted).toBe(true);
     expect(loaded.repairReportPath).toBeTruthy();
-    expect(loaded.entries).toHaveLength(1);
+    expect(loaded.entries).toEqual([]);
     const report = await readFile(loaded.repairReportPath!, "utf8");
     expect(report).toContain("missing matching tool_call");
   });
@@ -254,5 +255,47 @@ describe("SessionStore", () => {
     expect(loaded.corrupted).toBe(true);
     const report = await readFile(loaded.repairReportPath!, "utf8");
     expect(report).toContain("assistant message appears before pending tool calls completed");
+  });
+
+  test("toFileSafeIso replaces colons, plus signs, and dots", () => {
+    const result = toFileSafeIso(new Date("2024-05-01T03:04:05.678+08:00"));
+    expect(result).not.toContain(":");
+    expect(result).not.toContain("+");
+    expect(result).not.toContain(".");
+  });
+
+  test("throws RuntimeError with SESSION_CORRUPTED when sessionId is unknown", async () => {
+    const workspaceRoot = await createWorkspace();
+    const store = new SessionStore({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+    });
+
+    await expect(store.appendEntry("sess_does_not_exist", {
+      type: "message",
+      role: "user",
+      messageId: "msg_1",
+      timestamp: "2026-04-13T00:00:00.000Z",
+      content: "hello",
+    })).rejects.toMatchObject({
+      name: "RuntimeError",
+      code: "SESSION_CORRUPTED",
+    });
+
+    try {
+      await store.appendEntry("sess_does_not_exist", {
+        type: "message",
+        role: "user",
+        messageId: "msg_2",
+        timestamp: "2026-04-13T00:00:00.000Z",
+        content: "hello",
+      });
+      throw new Error("expected error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeError);
+      expect((error as RuntimeError).code).toBe("SESSION_CORRUPTED");
+      expect((error as RuntimeError).message.startsWith("Session not found:")).toBe(true);
+    }
   });
 });

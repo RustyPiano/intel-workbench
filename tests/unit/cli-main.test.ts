@@ -133,4 +133,17 @@ describe("parseArgs", () => {
     const parsed = parseArgs(["--cwd", "/tmp/workspace"]);
     expect(parsed.overrides.workspaceRoot).toBe("/tmp/workspace");
   });
+
+  test("rejects unknown top-level flags before any subcommand", () => {
+    expect(() => parseArgs(["--frobnicate"])).toThrowError(CliError);
+    expect(() => parseArgs(["hi", "--frobnicate"])).toThrowError(CliError);
+  });
+
+  test("forwards subcommand-local flags verbatim through positionals", () => {
+    // run show <id> --format json --verbose --recover are consumed by
+    // handleRunCommand, not parseArgs.
+    const parsed = parseArgs(["run", "show", "abc", "--format", "json", "--verbose", "--recover"]);
+    expect(parsed.command).toEqual(["run", "show", "abc", "--format", "json", "--verbose", "--recover"]);
+    expect(parsed.prompt).toBeUndefined();
+  });
 });

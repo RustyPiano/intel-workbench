@@ -19,12 +19,15 @@ export interface PolicyEngine {
   resolveExecCwd(inputPath?: string): string;
 }
 
+// Roots that contain credentials or platform-level state we never want a tool
+// to touch. `~/.config` is intentionally absent: many dev tools (gh, nvim,
+// starship, ...) live there and including it would block legitimate workspace
+// reads; rely on the per-tool path-allowlist instead for that directory.
 const SENSITIVE_PATH_PREFIXES = [
   path.resolve("/etc"),
   path.resolve(os.homedir(), ".ssh"),
   path.resolve(os.homedir(), ".aws"),
   path.resolve(os.homedir(), ".gnupg"),
-  path.resolve(os.homedir(), ".config"),
   path.resolve("/root"),
   path.resolve("/var/run/docker.sock"),
 ];

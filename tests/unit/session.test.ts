@@ -264,7 +264,7 @@ describe("SessionStore", () => {
     expect(result).not.toContain(".");
   });
 
-  test("throws RuntimeError with SESSION_CORRUPTED when sessionId is unknown", async () => {
+  test("throws RuntimeError with SESSION_NOT_FOUND when sessionId is unknown", async () => {
     const workspaceRoot = await createWorkspace();
     const store = new SessionStore({
       workspaceRoot,
@@ -280,7 +280,7 @@ describe("SessionStore", () => {
       content: "hello",
     })).rejects.toMatchObject({
       name: "RuntimeError",
-      code: "SESSION_CORRUPTED",
+      code: "SESSION_NOT_FOUND",
     });
 
     try {
@@ -294,7 +294,7 @@ describe("SessionStore", () => {
       throw new Error("expected error");
     } catch (error) {
       expect(error).toBeInstanceOf(RuntimeError);
-      expect((error as RuntimeError).code).toBe("SESSION_CORRUPTED");
+      expect((error as RuntimeError).code).toBe("SESSION_NOT_FOUND");
       expect((error as RuntimeError).message.startsWith("Session not found:")).toBe(true);
     }
   });

@@ -34,6 +34,7 @@ describe("OpenAICompatibleModelAdapter", () => {
       code: "MODEL_ERROR",
       message: "Provider returned malformed chat completion response: missing choices array",
       details: {
+        category: "incompatible_response",
         responseKeys: ["id", "object"],
       },
     });

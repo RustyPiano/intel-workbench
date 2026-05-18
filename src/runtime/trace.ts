@@ -173,6 +173,16 @@ export function classifyRunFailure(error: RuntimeErrorShape): RunFailure {
         };
       }
 
+      if (providerCategory === "incompatible_response") {
+        return {
+          error_code: "provider_incompatibility",
+          error_layer: "provider",
+          user_message: "The provider returned a response that is incompatible with the OpenAI chat completion contract. Check the model and endpoint combination.",
+          debug_message: error.message,
+          retriable: error.retriable,
+        };
+      }
+
       if (providerCategory === "network") {
         return {
           error_code: "provider_network_error",

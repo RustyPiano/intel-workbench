@@ -188,6 +188,47 @@ describe("ToolRegistry", () => {
     expect([...(schema.required as string[])].sort()).toEqual(["flag", "mandatory", "maybe"]);
   });
 
+  test("normalizes strict-mode null optional fields before executing tools", async () => {
+    let receivedArgs: unknown;
+    const registry = new ToolRegistry([
+      {
+        name: "nullable_optional_probe",
+        description: "fixture",
+        inputSchema: z
+          .object({
+            mandatory: z.string(),
+            maybe: z.string().optional(),
+            flag: z.boolean().optional(),
+          })
+          .strict(),
+        async execute(args) {
+          receivedArgs = args;
+          return { ok: true, content: "executed" };
+        },
+      } satisfies RuntimeTool,
+    ]);
+
+    const result = await registry.execute(
+      {
+        id: "call_nullable_optional",
+        name: "nullable_optional_probe",
+        arguments: {
+          mandatory: "ok",
+          maybe: null,
+          flag: null,
+        },
+      },
+      createContext(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(receivedArgs).toEqual({
+      mandatory: "ok",
+      maybe: undefined,
+      flag: undefined,
+    });
+  });
+
   test("does not execute tools when the runtime signal is already aborted", async () => {
     let executed = false;
     const registry = new ToolRegistry([

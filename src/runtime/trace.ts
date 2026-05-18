@@ -76,6 +76,9 @@ export interface RunFailure {
 const SECRET_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._-]+\b/giu,
   /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/gu,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/gu,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/gu,
+  /\bAKIA[A-Z0-9]{16}\b/gu,
   /\b(?:api[_-]?key|token|secret|authorization)\s*[:=]\s*[^\s,;]+/giu,
 ];
 
@@ -110,8 +113,9 @@ export function truncateText(input: string, maxLength = 120): string {
 }
 
 export function createTraceSummary(input: string, maxLength = 120): string {
-  const normalized = input.replace(/\s+/gu, " ").trim();
-  return truncateText(redactSensitiveText(normalized), maxLength);
+  const redacted = redactSensitiveText(input);
+  const normalized = redacted.replace(/\s+/gu, " ").trim();
+  return truncateText(normalized, maxLength);
 }
 
 export function previewValue(value: unknown, maxLength = 120): string {

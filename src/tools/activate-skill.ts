@@ -1,9 +1,15 @@
+import { z } from "zod";
+
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
 import type { RuntimeTool } from "./types.js";
 
-interface ActivateSkillArgs {
-  name: string;
-}
+const activateSkillArgsSchema = z
+  .object({
+    name: z.string().min(1),
+  })
+  .strict();
+
+type ActivateSkillArgs = z.infer<typeof activateSkillArgsSchema>;
 
 interface ActivateSkillData {
   name: string;
@@ -15,13 +21,7 @@ interface ActivateSkillData {
 export const activateSkillTool: RuntimeTool<ActivateSkillArgs, ActivateSkillData> = {
   name: "activate_skill",
   description: "Load the full contents of a discovered skill.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      name: { type: "string" },
-    },
-    required: ["name"],
-  },
+  inputSchema: activateSkillArgsSchema,
   async execute(args, ctx) {
     try {
       if (!ctx.skillRegistry) {

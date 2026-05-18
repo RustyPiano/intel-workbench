@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -159,11 +159,28 @@ describe("bashTool", () => {
     expect(await readFile(logPath, "utf8")).toContain("1234567890abcdefghij");
   });
 
-  test("reports files created before a nonzero exit as artifacts", async () => {
+  test("by default does not report workspace file mutations as artifacts", async () => {
+    const workspaceRoot = await createWorkspace();
+    const result = await bashTool.execute(
+      {
+        command: "printf 'report' > report.txt",
+      },
+      createContext(workspaceRoot, "call_bash_default_no_track"),
+    );
+
+    expect(result.ok).toBe(true);
+    const fileArtifacts = (result.artifacts ?? []).filter((artifact) => artifact.type === "file");
+    expect(fileArtifacts).toEqual([]);
+    const logArtifacts = (result.artifacts ?? []).filter((artifact) => artifact.type === "log");
+    expect(logArtifacts).toHaveLength(1);
+  });
+
+  test("reports files created before a nonzero exit as artifacts when track_artifacts is true", async () => {
     const workspaceRoot = await createWorkspace();
     const result = await bashTool.execute(
       {
         command: "printf 'report' > report.txt; exit 7",
+        track_artifacts: true,
       },
       createContext(workspaceRoot, "call_bash_failure_artifact"),
     );
@@ -176,13 +193,14 @@ describe("bashTool", () => {
     });
   });
 
-  test("reports overwritten output files as artifacts", async () => {
+  test("reports overwritten output files as artifacts when track_artifacts is true", async () => {
     const workspaceRoot = await createWorkspace();
-    await import("node:fs/promises").then(({ writeFile }) => writeFile(path.join(workspaceRoot, "report.txt"), "old", "utf8"));
+    await writeFile(path.join(workspaceRoot, "report.txt"), "old", "utf8");
 
     const result = await bashTool.execute(
       {
         command: "printf 'new report' > report.txt",
+        track_artifacts: true,
       },
       createContext(workspaceRoot, "call_bash_overwrite_artifact"),
     );
@@ -193,6 +211,31 @@ describe("bashTool", () => {
       path: "report.txt",
       description: "File created by bash command",
     });
+  });
+
+  test("ignores .git, dist, build, and other heavy directories when tracking artifacts", async () => {
+    const workspaceRoot = await createWorkspace();
+    await mkdir(path.join(workspaceRoot, ".git"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, ".git", "HEAD"), "ref: refs/heads/main", "utf8");
+    await mkdir(path.join(workspaceRoot, "dist"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, "dist", "bundle.js"), "console.log(1)", "utf8");
+
+    const result = await bashTool.execute(
+      {
+        // Touch a tracked file so we know snapshot diffing is working, but the
+        // .git/HEAD and dist/bundle.js entries above must remain invisible to
+        // the snapshot regardless of whether the command touches them.
+        command: "printf 'tracked' > tracked.txt; touch .git/HEAD",
+        track_artifacts: true,
+      },
+      createContext(workspaceRoot, "call_bash_ignore_check"),
+    );
+
+    expect(result.ok).toBe(true);
+    const fileArtifacts = (result.artifacts ?? []).filter((artifact) => artifact.type === "file");
+    expect(fileArtifacts.map((artifact) => artifact.path)).toContain("tracked.txt");
+    expect(fileArtifacts.map((artifact) => artifact.path)).not.toContain(".git/HEAD");
+    expect(fileArtifacts.map((artifact) => artifact.path)).not.toContain("dist/bundle.js");
   });
 
   test("caps the returned content to the configured tail budget", async () => {

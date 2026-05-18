@@ -3,15 +3,21 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import fg from "fast-glob";
+import { z } from "zod";
 
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
-import type { RuntimeTool } from "./types.js";
+import type { RuntimeTool, ToolArtifact } from "./types.js";
 
-interface BashArgs {
-  command: string;
-  cwd?: string;
-  timeout_ms?: number;
-}
+const bashArgsSchema = z
+  .object({
+    command: z.string(),
+    cwd: z.string().optional(),
+    timeout_ms: z.number().optional(),
+    track_artifacts: z.boolean().optional(),
+  })
+  .strict();
+
+type BashArgs = z.infer<typeof bashArgsSchema>;
 
 interface BashData {
   exitCode: number | null;
@@ -22,12 +28,27 @@ interface BashData {
 
 type WorkspaceSnapshot = Map<string, string>;
 
+const SNAPSHOT_IGNORE = [
+  ".mini-agent/**",
+  "node_modules/**",
+  ".git/**",
+  "dist/**",
+  "build/**",
+  ".next/**",
+  ".cache/**",
+  ".turbo/**",
+  "coverage/**",
+  ".venv/**",
+  ".pytest_cache/**",
+  "**/*.log",
+];
+
 async function snapshotWorkspaceFiles(workspaceRoot: string): Promise<WorkspaceSnapshot> {
   const filePaths = await fg(["**/*"], {
     cwd: workspaceRoot,
     onlyFiles: true,
     dot: true,
-    ignore: [".mini-agent/**", "node_modules/**"],
+    ignore: SNAPSHOT_IGNORE,
   });
 
   const snapshot = new Map<string, string>();
@@ -97,22 +118,15 @@ function terminateProcessTree(pid: number | undefined): void {
 export const bashTool: RuntimeTool<BashArgs, BashData> = {
   name: "bash",
   description: "Execute a shell command inside the workspace.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      command: { type: "string" },
-      cwd: { type: "string" },
-      timeout_ms: { type: "number" },
-    },
-    required: ["command"],
-  },
+  inputSchema: bashArgsSchema,
   async execute(args, ctx) {
     const cwd = ctx.policy.resolveExecCwd(args.cwd ?? ".");
     const timeoutMs = Math.max(1, Math.min(args.timeout_ms ?? ctx.config.bashTimeoutMs, ctx.config.bashTimeoutMs));
     const artifactDir = path.join(ctx.workspaceRoot, ".mini-agent", "runs", ctx.runId, "artifacts", "bash");
     const relativeLogPath = path.join(".mini-agent", "runs", ctx.runId, "artifacts", "bash", `${ctx.toolCallId}.log`);
     const absoluteLogPath = path.join(ctx.workspaceRoot, relativeLogPath);
-    const filesBefore = await snapshotWorkspaceFiles(ctx.workspaceRoot);
+    const trackArtifacts = args.track_artifacts === true;
+    const filesBefore = trackArtifacts ? await snapshotWorkspaceFiles(ctx.workspaceRoot) : null;
 
     await mkdir(artifactDir, { recursive: true });
     const logStream = createWriteStream(absoluteLogPath, { encoding: "utf8" });
@@ -160,6 +174,31 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
       if (logStreamError) {
         throw logStreamError;
       }
+    };
+
+    const buildArtifacts = async (): Promise<ToolArtifact[]> => {
+      const artifacts: ToolArtifact[] = [
+        {
+          type: "log",
+          path: relativeLogPath,
+          description: "Full bash output log",
+        },
+      ];
+
+      if (!trackArtifacts || !filesBefore) {
+        return artifacts;
+      }
+
+      const filesAfter = await snapshotWorkspaceFiles(ctx.workspaceRoot);
+      const createdFiles = collectChangedFiles(filesBefore, filesAfter);
+      for (const filePath of createdFiles) {
+        artifacts.push({
+          type: "file",
+          path: filePath,
+          description: "File created by bash command",
+        });
+      }
+      return artifacts;
     };
 
     try {
@@ -225,9 +264,6 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
         });
       }
 
-      const filesAfter = await snapshotWorkspaceFiles(ctx.workspaceRoot);
-      const createdFiles = collectChangedFiles(filesBefore, filesAfter);
-
       return {
         ok: true,
         content: combined,
@@ -237,23 +273,10 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
           stderrTail: stderr,
           logPath: relativeLogPath,
         },
-        artifacts: [
-          {
-            type: "log",
-            path: relativeLogPath,
-            description: "Full bash output log",
-          },
-          ...createdFiles.map((filePath) => ({
-            type: "file" as const,
-            path: filePath,
-            description: "File created by bash command",
-          })),
-        ],
+        artifacts: await buildArtifacts(),
       };
     } catch (error) {
       await finalizeLog();
-      const filesAfter = await snapshotWorkspaceFiles(ctx.workspaceRoot);
-      const createdFiles = collectChangedFiles(filesBefore, filesAfter);
 
       return {
         ok: false,
@@ -265,18 +288,7 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
           logPath: relativeLogPath,
         },
         error: toRuntimeErrorShape(error, timedOut ? "TOOL_TIMEOUT" : "INTERNAL_ERROR"),
-        artifacts: [
-          {
-            type: "log",
-            path: relativeLogPath,
-            description: "Full bash output log",
-          },
-          ...createdFiles.map((filePath) => ({
-            type: "file" as const,
-            path: filePath,
-            description: "File created by bash command",
-          })),
-        ],
+        artifacts: await buildArtifacts(),
       };
     }
   },

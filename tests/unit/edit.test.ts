@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { createPolicyEngine } from "../../src/runtime/policy.js";
 import { editTool } from "../../src/tools/edit.js";
 import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
+import { ToolRegistry } from "../../src/tools/index.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 const tempRoots: string[] = [];
@@ -87,5 +88,28 @@ describe("editTool", () => {
     expect(result.error).toMatchObject({
       code: "EDIT_AMBIGUOUS",
     });
+  });
+
+  test("rejects unknown arguments via the strict tool schema", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "notes.md"), "TODO", "utf8");
+    const registry = new ToolRegistry([editTool]);
+
+    const result = await registry.execute(
+      {
+        id: "call_edit_unknown",
+        name: "edit",
+        arguments: {
+          path: "notes.md",
+          old_text: "TODO",
+          new_text: "DONE",
+          mode: "fast",
+        },
+      },
+      createContext(workspaceRoot),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
   });
 });

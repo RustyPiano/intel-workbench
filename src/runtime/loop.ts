@@ -3,7 +3,7 @@ import type { SessionStore } from "./session.js";
 import type { AssistantMessage, RuntimeMessage, ToolCall, ToolResultEntry } from "./types.js";
 import { createId } from "../utils/ids.js";
 import type { ToolRegistry } from "../tools/index.js";
-import type { ToolContext, ToolExecutionResult } from "../tools/types.js";
+import { getToolJsonSchema, type ToolContext, type ToolExecutionResult } from "../tools/types.js";
 import { isRuntimeError, RuntimeError, toRuntimeErrorShape } from "./errors.js";
 import type { RunManager } from "./run-manager.js";
 
@@ -89,7 +89,7 @@ export async function runAgentLoop(
         tools: dependencies.toolRegistry.list().map((tool) => ({
           name: tool.name,
           description: tool.description,
-          inputSchema: tool.inputSchema,
+          inputSchema: getToolJsonSchema(tool),
         })),
       });
       throwIfAborted(dependencies.signal);

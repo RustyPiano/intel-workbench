@@ -384,7 +384,7 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
   );
 }
 
-function createRuntimeAgent(config: RuntimeConfig): RuntimeAgent {
+async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> {
   const adapter = createModelAdapter({
     provider: config.provider,
     model: config.model,
@@ -392,7 +392,7 @@ function createRuntimeAgent(config: RuntimeConfig): RuntimeAgent {
     apiKey: config.apiKey,
   });
 
-  return new RuntimeAgent({
+  return RuntimeAgent.create({
     workspaceRoot: config.workspaceRoot,
     runtimeVersion: RUNTIME_VERSION,
     modelName: config.model,
@@ -446,7 +446,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const agent = createRuntimeAgent(config);
+  const agent = await createRuntimeAgent(config);
   if (config.traceMode === "json") {
     agent.eventBus.subscribe((event) => {
       console.log(JSON.stringify(event));

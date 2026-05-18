@@ -4,13 +4,14 @@ import type { ModelAdapter } from "../model/types.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { createDefaultToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
+import type { ToolExecutionResult } from "../tools/types.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
 import { RuntimeError } from "./errors.js";
 import { EventBus } from "./events.js";
-import { runAgentLoop } from "./loop.js";
+import { formatToolMessageContent, runAgentLoop } from "./loop.js";
 import type { RuntimeConfig } from "./config.js";
-import { createPolicyEngine } from "./policy.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { createPolicyEngine, type PolicyEngine } from "./policy.js";
+import { buildActiveSkillsBlock, buildBaseSystemPrompt } from "./prompt.js";
 import { RunManager } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
 import { SessionStore } from "./session.js";
@@ -42,6 +43,15 @@ export interface RuntimeRunResult {
 
 export class RuntimeConversation {
   private messages: RuntimeMessage[];
+  // Serialize concurrent send() invocations so the shared `messages` array
+  // cannot be mutated by overlapping turns. Failures are swallowed for the
+  // queue tail so a single rejection does not block subsequent sends; callers
+  // still receive their own rejection through the returned promise.
+  private sendQueue: Promise<unknown> = Promise.resolve();
+  // Per-conversation cache of the base system prompt. AGENTS.md and the skill
+  // catalog do not change for the lifetime of a conversation, so we build the
+  // base once and reuse it across every send().
+  private cachedBaseSystemPrompt: Promise<string> | null = null;
 
   constructor(
     private readonly agent: RuntimeAgent,
@@ -53,7 +63,23 @@ export class RuntimeConversation {
     this.messages = messages;
   }
 
-  async send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<RuntimeRunResult> {
+  send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<RuntimeRunResult> {
+    const next = this.sendQueue.then(() => this.sendInternal(prompt, signal));
+    this.sendQueue = next.catch(() => {});
+    return next;
+  }
+
+  private getBaseSystemPrompt(): Promise<string> {
+    if (this.cachedBaseSystemPrompt === null) {
+      this.cachedBaseSystemPrompt = buildBaseSystemPrompt({
+        workspaceRoot: this.agent.workspaceRoot,
+        availableSkills: this.agent.skillRegistry.getCatalog(),
+      });
+    }
+    return this.cachedBaseSystemPrompt;
+  }
+
+  private async sendInternal(prompt: string, signal: AbortSignal): Promise<RuntimeRunResult> {
     const runManager = await RunManager.start({
       workspaceRoot: this.agent.workspaceRoot,
       sessionId: this.sessionId,
@@ -73,12 +99,9 @@ export class RuntimeConversation {
       signal,
       maxTurns: this.agent.maxTurns,
       runManager,
-      createSystemPrompt: () =>
-        buildSystemPrompt({
-          workspaceRoot: this.agent.workspaceRoot,
-          availableSkills: this.agent.skillRegistry.getCatalog(),
-          activeSkills: this.agent.skillRegistry.getActiveRecords(),
-        }),
+      createBaseSystemPrompt: () => this.getBaseSystemPrompt(),
+      createActiveSkillsBlock: () => buildActiveSkillsBlock(this.agent.skillRegistry.getActiveRecords()),
+      getActiveSkillNames: () => this.agent.skillRegistry.getActiveRecords().map((skill) => skill.meta.name),
       createToolContext: (toolCall) => ({
         workspaceRoot: this.agent.workspaceRoot,
         sessionId: this.sessionId,
@@ -117,22 +140,18 @@ export class RuntimeAgent {
   readonly eventBus = new EventBus();
   readonly sessionStore: SessionStore;
   readonly runStore: RunStore;
-
-  private readonly explicitSkillDirs: string[];
-  private readonly globalSkillDirs: string[];
   readonly maxTurns: number;
-  private readonly readOnly: boolean;
-  private readonly allowReadOutsideWorkspace: boolean;
-  private readonly allowWriteOutsideWorkspace: boolean;
-  private readonly sessionDir?: string;
   readonly toolConfig: Pick<RuntimeConfig, "toolTimeoutMs" | "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
-  private initialized = false;
-  skillRegistry!: SkillRegistry;
-  policy = createPolicyEngine({ workspaceRoot: ".", readOnly: false });
   readonly toolRegistry = createDefaultToolRegistry();
   readonly fileMutationQueue = new FileMutationQueue();
+  readonly skillRegistry: SkillRegistry;
+  readonly policy: PolicyEngine;
 
-  constructor(options: RuntimeAgentOptions) {
+  private constructor(
+    options: RuntimeAgentOptions,
+    skillRegistry: SkillRegistry,
+    policy: PolicyEngine,
+  ) {
     this.workspaceRoot = path.resolve(options.workspaceRoot);
     this.runtimeVersion = options.runtimeVersion;
     this.modelName = options.modelName;
@@ -148,19 +167,32 @@ export class RuntimeAgent {
     this.runStore = new RunStore({
       workspaceRoot: this.workspaceRoot,
     });
-    this.explicitSkillDirs = options.explicitSkillDirs ?? [];
-    this.globalSkillDirs = options.globalSkillDirs ?? [];
     this.maxTurns = options.maxTurns ?? 12;
-    this.readOnly = options.readOnly ?? false;
-    this.allowReadOutsideWorkspace = options.allowReadOutsideWorkspace ?? false;
-    this.allowWriteOutsideWorkspace = options.allowWriteOutsideWorkspace ?? false;
-    this.sessionDir = options.sessionDir;
     this.toolConfig = options.toolConfig ?? {
       toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,
     };
+    this.skillRegistry = skillRegistry;
+    this.policy = policy;
+  }
+
+  static async create(options: RuntimeAgentOptions): Promise<RuntimeAgent> {
+    const workspaceRoot = path.resolve(options.workspaceRoot);
+    const skillRegistry = await SkillRegistry.discover({
+      workspaceRoot,
+      explicitSkillDirs: options.explicitSkillDirs ?? [],
+      globalSkillDirs: options.globalSkillDirs ?? [],
+    });
+    const policy = createPolicyEngine({
+      workspaceRoot,
+      skillRoots: skillRegistry.getSkillRoots(),
+      readOnly: options.readOnly ?? false,
+      allowReadOutsideWorkspace: options.allowReadOutsideWorkspace ?? false,
+      allowWriteOutsideWorkspace: options.allowWriteOutsideWorkspace ?? false,
+    });
+    return new RuntimeAgent(options, skillRegistry, policy);
   }
 
   async run(prompt: string, signal?: AbortSignal): Promise<RuntimeRunResult> {
@@ -169,34 +201,12 @@ export class RuntimeAgent {
   }
 
   async createConversation(sessionId?: string): Promise<RuntimeConversation> {
-    await this.initialize();
-
     if (sessionId) {
       return this.loadConversation(sessionId);
     }
 
     const session = await this.sessionStore.createSession();
     return new RuntimeConversation(this, session.sessionId, session.path, []);
-  }
-
-  private async initialize(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    this.skillRegistry = await SkillRegistry.discover({
-      workspaceRoot: this.workspaceRoot,
-      explicitSkillDirs: this.explicitSkillDirs,
-      globalSkillDirs: this.globalSkillDirs,
-    });
-    this.policy = createPolicyEngine({
-      workspaceRoot: this.workspaceRoot,
-      skillRoots: this.skillRegistry.getSkillRoots(),
-      readOnly: this.readOnly,
-      allowReadOutsideWorkspace: this.allowReadOutsideWorkspace,
-      allowWriteOutsideWorkspace: this.allowWriteOutsideWorkspace,
-    });
-    this.initialized = true;
   }
 
   private async loadConversation(sessionId: string): Promise<RuntimeConversation> {
@@ -249,15 +259,16 @@ export class RuntimeAgent {
         }
 
         if (entry.type === "tool_result") {
+          const result: ToolExecutionResult = {
+            ok: entry.ok,
+            content: entry.content,
+            meta: entry.meta ?? entry.data,
+            error: entry.error,
+          };
           return [
             {
               role: "tool",
-              content: JSON.stringify({
-                ok: entry.ok,
-                content: entry.content,
-                meta: entry.meta ?? entry.data,
-                error: entry.error,
-              }),
+              content: formatToolMessageContent(result),
               messageId: `tool_${entry.toolCallId}`,
               toolCallId: entry.toolCallId,
               toolName: undefined,

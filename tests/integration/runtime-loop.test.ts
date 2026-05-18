@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -117,7 +117,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -182,7 +182,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -228,7 +228,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -251,7 +251,7 @@ describe("RuntimeAgent", () => {
 
   test("persists model errors into the session before surfacing them", async () => {
     const workspaceRoot = await createWorkspace();
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -309,7 +309,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -352,7 +352,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const firstAgent = new RuntimeAgent({
+    const firstAgent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -371,7 +371,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const resumedAgent = new RuntimeAgent({
+    const resumedAgent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -411,7 +411,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const firstAgent = new RuntimeAgent({
+    const firstAgent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -430,7 +430,7 @@ describe("RuntimeAgent", () => {
       },
     ]);
 
-    const resumedAgent = new RuntimeAgent({
+    const resumedAgent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -448,7 +448,7 @@ describe("RuntimeAgent", () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | undefined;
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -474,7 +474,7 @@ describe("RuntimeAgent", () => {
 
   test("propagates resume failures for existing sessions instead of creating a replacement session", async () => {
     const workspaceRoot = await createWorkspace();
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -516,7 +516,7 @@ describe("RuntimeAgent", () => {
       })}\n`,
     );
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
@@ -532,5 +532,51 @@ describe("RuntimeAgent", () => {
     });
 
     await expect(agent.createConversation(session.sessionId)).rejects.toThrow(/corrupted/i);
+  });
+
+  test("caches the base system prompt across two sends in the same conversation", async () => {
+    const workspaceRoot = await createWorkspace();
+    // The unique marker proves the AGENTS.md content was captured once and
+    // reused: if the loop re-read AGENTS.md per send the second system prompt
+    // would observe the post-mutation marker. ESM modules block direct
+    // `vi.spyOn` on `node:fs/promises.readFile`, so we observe the caching
+    // through its externally-visible effect on systemPrompt content instead.
+    const agentsPath = path.join(workspaceRoot, "AGENTS.md");
+    await writeFile(agentsPath, "MARKER_FIRST\n", "utf8");
+
+    const model = new ScriptedModelAdapter([
+      {
+        message: { role: "assistant", content: "first reply" },
+        stopReason: "end_turn",
+      },
+      {
+        message: { role: "assistant", content: "second reply" },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: model,
+    });
+
+    const conversation = await agent.createConversation();
+    await conversation.send("first prompt");
+
+    // Replace AGENTS.md between sends with a different marker. If the base
+    // prompt is cached, the second send still observes MARKER_FIRST.
+    await writeFile(agentsPath, "MARKER_SECOND\n", "utf8");
+
+    await conversation.send("second prompt");
+
+    const firstSystem = model.inputs[0]?.systemPrompt ?? "";
+    const secondSystem = model.inputs[1]?.systemPrompt ?? "";
+    expect(firstSystem).toContain("MARKER_FIRST");
+    expect(secondSystem).toContain("MARKER_FIRST");
+    expect(secondSystem).not.toContain("MARKER_SECOND");
+
+    await rm(agentsPath);
   });
 });

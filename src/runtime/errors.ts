@@ -12,6 +12,7 @@ export type RuntimeErrorCode =
   | "SESSION_NOT_FOUND"
   | "SKILL_NOT_FOUND"
   | "SKILL_INVALID"
+  | "MAX_TURNS_EXCEEDED"
   | "INTERNAL_ERROR";
 
 export interface RuntimeErrorShape {

@@ -2,8 +2,13 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { SessionEntry, SessionHeader } from "./types.js";
+import { RuntimeError } from "./errors.js";
 import { createId } from "../utils/ids.js";
 import { readJsonlFile, writeJsonlLine } from "../utils/jsonl.js";
+
+export function toFileSafeIso(date: Date): string {
+  return date.toISOString().replaceAll(":", "-").replaceAll("+", "-").replaceAll(".", "-");
+}
 
 export interface SessionStoreOptions {
   workspaceRoot: string;
@@ -56,7 +61,7 @@ export class SessionStore {
   async createSession(sessionId = createId("sess")): Promise<CreatedSession> {
     await mkdir(this.sessionDir, { recursive: true });
 
-    const pathSafeTimestamp = new Date().toISOString().replaceAll(":", "-");
+    const pathSafeTimestamp = toFileSafeIso(new Date());
     const sessionPath = path.join(this.sessionDir, `${pathSafeTimestamp}_${sessionId}.jsonl`);
     const header: SessionHeader = {
       type: "session_header",
@@ -203,7 +208,7 @@ export class SessionStore {
 
     const status: SessionHealth = mode === "recover" && header ? "degraded" : "corrupted";
 
-    const recoveredEntries = mode === "recover" ? recoverableEntries : entries;
+    const recoveredEntries = mode === "recover" ? recoverableEntries : [];
 
     return {
       header,
@@ -244,7 +249,10 @@ export class SessionStore {
     const match = sessions.find((session) => session.sessionId === sessionId);
 
     if (!match) {
-      throw new Error(`Unknown session: ${sessionId}`);
+      throw new RuntimeError({
+        code: "SESSION_CORRUPTED",
+        message: `Session not found: ${sessionId}`,
+      });
     }
 
     return match.path;

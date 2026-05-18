@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { collectSessionHealth, formatDoctorReport, resolveDoctorSkillDirs } from "./doctor.js";
 import { formatRunTraceReport, formatSessionTraceReport } from "./run-report.js";
@@ -21,6 +23,43 @@ interface ParsedArgs {
   command?: string[];
   overrides: Partial<RuntimeConfig>;
   help: boolean;
+}
+
+export class CliError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliError";
+  }
+}
+
+function isFlagLike(token: string | undefined): boolean {
+  if (typeof token !== "string") {
+    return false;
+  }
+  return token.startsWith("--");
+}
+
+function requireValue(argv: string[], idx: number, flag: string): string {
+  const value = argv[idx];
+  if (typeof value !== "string" || value.length === 0 || isFlagLike(value)) {
+    throw new CliError(`Missing value for ${flag}`);
+  }
+  return value;
+}
+
+function parseTraceMode(value: string): "compact" | "verbose" | "json" {
+  if (value === "compact" || value === "verbose" || value === "json") {
+    return value;
+  }
+  throw new CliError(`Invalid value for --trace: '${value}'. Expected compact|verbose|json.`);
+}
+
+function parsePositiveInt(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new CliError(`Invalid value for ${flag}: '${value}'. Expected a positive integer.`);
+  }
+  return parsed;
 }
 
 function printHelp(): void {
@@ -49,7 +88,7 @@ Commands:
   mini-agent doctor [--last-run | --run <id>]`);
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[]): ParsedArgs {
   const overrides: Partial<RuntimeConfig> = {
     explicitSkillDirs: [],
   };
@@ -58,40 +97,37 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (!arg) {
+    if (typeof arg !== "string" || arg.length === 0) {
       continue;
     }
 
     switch (arg) {
       case "--cwd":
-        overrides.workspaceRoot = argv[++index];
+        overrides.workspaceRoot = requireValue(argv, ++index, "--cwd");
         break;
       case "--model":
-        overrides.model = argv[++index];
+        overrides.model = requireValue(argv, ++index, "--model");
         break;
       case "--provider":
-        overrides.provider = argv[++index];
+        overrides.provider = requireValue(argv, ++index, "--provider");
         break;
       case "--base-url":
-        overrides.baseURL = argv[++index];
+        overrides.baseURL = requireValue(argv, ++index, "--base-url");
         break;
       case "--api-key":
-        overrides.apiKey = argv[++index];
+        overrides.apiKey = requireValue(argv, ++index, "--api-key");
         break;
       case "--session":
-        overrides.sessionId = argv[++index];
+        overrides.sessionId = requireValue(argv, ++index, "--session");
         break;
-      case "--skill-dir":
-        overrides.explicitSkillDirs = [...(overrides.explicitSkillDirs ?? []), argv[++index] ?? ""].filter(Boolean);
+      case "--skill-dir": {
+        const value = requireValue(argv, ++index, "--skill-dir");
+        overrides.explicitSkillDirs = [...(overrides.explicitSkillDirs ?? []), value];
         break;
+      }
       case "--trace": {
-        const next = argv[index + 1];
-        if (next === "compact" || next === "verbose" || next === "json") {
-          overrides.traceMode = next;
-          index += 1;
-        } else {
-          positionals.push(arg);
-        }
+        const value = requireValue(argv, ++index, "--trace");
+        overrides.traceMode = parseTraceMode(value);
         break;
       }
       case "--show-plan":
@@ -107,9 +143,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       case "--read-only":
         overrides.readOnly = true;
         break;
-      case "--max-turns":
-        overrides.maxTurns = Number(argv[++index]);
+      case "--max-turns": {
+        const value = requireValue(argv, ++index, "--max-turns");
+        overrides.maxTurns = parsePositiveInt(value, "--max-turns");
         break;
+      }
       case "--help":
       case "-h":
         help = true;
@@ -440,7 +478,31 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+const isDirectInvocation = (() => {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    const modulePath = fileURLToPath(import.meta.url);
+    if (modulePath === entry) {
+      return true;
+    }
+    return realpathSync(entry) === modulePath;
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectInvocation) {
+  main().catch((error) => {
+    if (error instanceof CliError) {
+      printHelp();
+      console.error(error.message);
+      process.exitCode = 2;
+      return;
+    }
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

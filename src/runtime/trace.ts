@@ -2,9 +2,7 @@ import type { RuntimeErrorShape } from "./errors.js";
 
 export type RunStatus =
   | "pending"
-  | "started"
-  | "planning"
-  | "executing"
+  | "running"
   | "finalizing"
   | "completed"
   | "failed"
@@ -25,6 +23,13 @@ export type RunErrorLayer =
   | "runtime"
   | "user_abort";
 
+/**
+ * Run trace event emitted by RunManager.
+ *
+ * Note: `type: "tool_progress"` is only produced by the bash tool — other
+ * tools do not emit progress events. Consumers must not assume progress
+ * coverage for every tool invocation.
+ */
 export interface RunEvent {
   schema_version: "v1.2";
   event_id: string;

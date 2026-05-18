@@ -1,13 +1,18 @@
 import { open, stat } from "node:fs/promises";
+import { z } from "zod";
 
 import { toRuntimeErrorShape } from "../runtime/errors.js";
 import type { RuntimeTool } from "./types.js";
 
-interface ReadArgs {
-  path: string;
-  offset?: number;
-  limit?: number;
-}
+const readArgsSchema = z
+  .object({
+    path: z.string(),
+    offset: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+type ReadArgs = z.infer<typeof readArgsSchema>;
 
 interface ReadData {
   path: string;
@@ -65,15 +70,7 @@ function alignUtf8Slice(buffer: Buffer, bytesRead: number): { start: number; end
 export const readTool: RuntimeTool<ReadArgs, ReadData> = {
   name: "read",
   description: "Read a UTF-8 text file within the workspace.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string" },
-      offset: { type: "number" },
-      limit: { type: "number" },
-    },
-    required: ["path"],
-  },
+  inputSchema: readArgsSchema,
   async execute(args, ctx) {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
 

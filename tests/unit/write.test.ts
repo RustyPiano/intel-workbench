@@ -1,10 +1,11 @@
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { ToolRegistry } from "../../src/tools/index.js";
 import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
 import { writeTool } from "../../src/tools/write.js";
 import type { ToolContext } from "../../src/tools/types.js";
@@ -68,6 +69,31 @@ describe("writeTool", () => {
     });
     expect(await readFile(path.join(workspaceRoot, "reports", "output.txt"), "utf8")).toBe("fresh content");
     await expect(access(path.join(workspaceRoot, "reports", "output.txt.tmp"))).rejects.toThrow();
+    // No leftover atomic-write temp files (".output.txt.<hex>.tmp") should remain.
+    const entries = await readdir(path.join(workspaceRoot, "reports"));
+    const leftovers = entries.filter((entry) => entry.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
+
+  test("rejects unknown arguments via the strict tool schema", async () => {
+    const workspaceRoot = await createWorkspace();
+    const registry = new ToolRegistry([writeTool]);
+
+    const result = await registry.execute(
+      {
+        id: "call_write_unknown",
+        name: "write",
+        arguments: {
+          path: "out.txt",
+          content: "x",
+          mode: "0644",
+        },
+      },
+      createContext(workspaceRoot),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
   });
 
   test("returns a structured error when overwrite is disabled", async () => {

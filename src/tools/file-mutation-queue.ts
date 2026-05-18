@@ -7,7 +7,7 @@ export class FileMutationQueue {
     const current = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.inFlight.set(filePath, previous.then(() => current));
+    this.inFlight.set(filePath, current);
 
     await previous;
 

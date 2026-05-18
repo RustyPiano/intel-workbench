@@ -1,15 +1,21 @@
-import { access, mkdir, rename, writeFile } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
+import { atomicWriteFile } from "./utils/atomic-write.js";
 import type { RuntimeTool } from "./types.js";
 
-interface WriteArgs {
-  path: string;
-  content: string;
-  create_dirs?: boolean;
-  overwrite?: boolean;
-}
+const writeArgsSchema = z
+  .object({
+    path: z.string(),
+    content: z.string(),
+    create_dirs: z.boolean().optional(),
+    overwrite: z.boolean().optional(),
+  })
+  .strict();
+
+type WriteArgs = z.infer<typeof writeArgsSchema>;
 
 interface WriteData {
   path: string;
@@ -28,16 +34,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
   name: "write",
   description: "Write the full contents of a file.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string" },
-      content: { type: "string" },
-      create_dirs: { type: "boolean" },
-      overwrite: { type: "boolean" },
-    },
-    required: ["path", "content"],
-  },
+  inputSchema: writeArgsSchema,
   async execute(args, ctx) {
     const queue = ctx.fileMutationQueue;
 
@@ -68,9 +65,7 @@ export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
           });
         }
 
-        const tempPath = path.join(parentDir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
-        await writeFile(tempPath, args.content, "utf8");
-        await rename(tempPath, filePath);
+        await atomicWriteFile(filePath, args.content, "utf8");
 
         return {
           ok: true,

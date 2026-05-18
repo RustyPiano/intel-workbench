@@ -54,6 +54,27 @@ function inferProviderErrorCategory(status: number | undefined, message: string)
   return "provider";
 }
 
+function extractRequestId(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const candidate = (error as { request_id?: unknown }).request_id;
+  if (typeof candidate === "string" && candidate.length > 0) {
+    return candidate;
+  }
+
+  const headers = (error as { headers?: unknown }).headers;
+  if (headers && typeof headers === "object") {
+    const headerValue = (headers as Record<string, unknown>)["x-request-id"];
+    if (typeof headerValue === "string" && headerValue.length > 0) {
+      return headerValue;
+    }
+  }
+
+  return undefined;
+}
+
 function extractProviderError(error: unknown): RuntimeError {
   const status = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : undefined;
   const providerError = (error as { error?: ProviderErrorShape })?.error;
@@ -79,6 +100,7 @@ function extractProviderError(error: unknown): RuntimeError {
     status,
     [providerError?.metadata?.raw, upstreamMessage, providerError?.message, fallbackMessage].filter(Boolean).join(" "),
   );
+  const requestId = extractRequestId(error);
 
   return new RuntimeError({
     code: "MODEL_ERROR",
@@ -91,6 +113,7 @@ function extractProviderError(error: unknown): RuntimeError {
       providerCode: providerError?.code,
       providerStatus: upstreamStatus,
       isByok: providerError?.metadata?.is_byok,
+      requestId,
     },
   });
 }
@@ -103,22 +126,49 @@ function mapToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
     });
   }
 
-  try {
-    return {
-      id: toolCall.id,
-      name: toolCall.function.name,
-      arguments: JSON.parse(toolCall.function.arguments) as Record<string, unknown>,
-    };
-  } catch (error) {
+  const rawArguments: unknown = toolCall.function.arguments;
+
+  if (typeof rawArguments === "string") {
+    try {
+      return {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        arguments: JSON.parse(rawArguments) as Record<string, unknown>,
+      };
+    } catch (error) {
+      throw new RuntimeError({
+        code: "MODEL_ERROR",
+        message: `Provider returned invalid tool arguments for ${toolCall.function.name}`,
+        details: {
+          category: "incompatible_response",
+          name: toolCall.function.name,
+          arguments: rawArguments,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  if (rawArguments !== null && typeof rawArguments === "object") {
     throw new RuntimeError({
       code: "MODEL_ERROR",
-      message: `Provider returned invalid tool arguments for ${toolCall.function.name}`,
+      message: "Provider returned tool call arguments as object instead of string",
       details: {
-        arguments: toolCall.function.arguments,
-        error: error instanceof Error ? error.message : String(error),
+        category: "incompatible_response",
+        name: toolCall.function.name,
       },
     });
   }
+
+  throw new RuntimeError({
+    code: "MODEL_ERROR",
+    message: "Provider returned missing or invalid tool call arguments",
+    details: {
+      category: "incompatible_response",
+      name: toolCall.function.name,
+      argumentsType: typeof rawArguments,
+    },
+  });
 }
 
 function mapMessage(message: RuntimeMessage): ChatCompletionMessageParam {
@@ -275,7 +325,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
       apiKey: options.apiKey,
     };
     this.client = new OpenAI({
-      apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
+      apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
   }

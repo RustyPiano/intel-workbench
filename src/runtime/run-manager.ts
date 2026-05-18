@@ -57,6 +57,7 @@ export class RunManager {
 
   private readonly created: CreatedRun;
   private readonly startedAt: string;
+  private readonly startedAtMs: number;
   private seq = 0;
   private toolCalls = 0;
   private skillActivations = 0;
@@ -72,6 +73,7 @@ export class RunManager {
   ) {
     this.created = created;
     this.startedAt = startedAt;
+    this.startedAtMs = Date.parse(startedAt);
     this.runId = created.runId;
     this.traceId = created.traceId;
     this.tracePath = created.tracePath;
@@ -88,7 +90,6 @@ export class RunManager {
     });
     const manager = new RunManager(options, created, startedAt);
 
-    await manager.options.runStore.updateMeta(manager.runId, { status: "started" });
     await manager.emit({
       type: "run_started",
       phase: "system",
@@ -113,13 +114,21 @@ export class RunManager {
       });
     }
 
+    // Transition pending → running once the run has emitted its opening
+    // event(s). Subsequent phase transitions (planning / tool execution) are
+    // surfaced through events only; meta.status stays at "running" until the
+    // finalize phase begins.
+    manager.status = "running";
+    await manager.options.runStore.updateMeta(manager.runId, { status: "running" });
+
     await manager.emitPlanningSummary("plan", "Plan the next step and decide whether tools are needed.");
     return manager;
   }
 
   async emitPlanningSummary(kind: "plan" | "decision" | "progress", text: string, source: "runtime" | "model" = "runtime"): Promise<void> {
-    this.status = kind === "progress" ? "executing" : "planning";
-    await this.options.runStore.updateMeta(this.runId, { status: this.status });
+    // Planning summaries do not change meta.status — the `running` status
+    // covers all in-flight planning and tool work. Phase information lives
+    // on the event itself (phase = "planning").
     await this.emit({
       type: "planning_summary",
       phase: "planning",
@@ -162,8 +171,8 @@ export class RunManager {
   }
 
   async recordToolStarted(toolCall: ToolCall): Promise<void> {
-    this.status = "executing";
-    await this.options.runStore.updateMeta(this.runId, { status: this.status });
+    // meta.status remains "running" while tools execute; only the event
+    // phase ("tool") signals what part of the run is active.
     await this.emit({
       type: "tool_started",
       phase: "tool",
@@ -177,6 +186,11 @@ export class RunManager {
     });
   }
 
+  /**
+   * Emits a `tool_progress` event. Only the bash tool currently routes
+   * through here (via `ToolContext.onUpdate`); other tools do not enter
+   * this path. Status remains unchanged.
+   */
   async recordToolProgress(toolCall: ToolCall, partial: string): Promise<void> {
     await this.emit({
       type: "tool_progress",
@@ -255,8 +269,12 @@ export class RunManager {
   }
 
   async recordAssistantCompleted(message: AssistantMessage): Promise<void> {
-    this.status = "finalizing";
-    await this.options.runStore.updateMeta(this.runId, { status: this.status });
+    // Finalize is the only intermediate status mutation between `running`
+    // and the terminal status set by complete/fail/cancel.
+    if (this.status !== "finalizing") {
+      this.status = "finalizing";
+      await this.options.runStore.updateMeta(this.runId, { status: this.status });
+    }
     await this.emit({
       type: "assistant_completed",
       phase: "finalize",
@@ -276,7 +294,7 @@ export class RunManager {
 
     this.finished = true;
     this.status = "completed";
-    const durationMs = Date.parse(new Date().toISOString()) - Date.parse(this.startedAt);
+    const durationMs = Date.now() - this.startedAtMs;
 
     await this.emit({
       type: "run_completed",
@@ -309,7 +327,7 @@ export class RunManager {
 
     this.finished = true;
     this.status = "cancelled";
-    const durationMs = Date.parse(new Date().toISOString()) - Date.parse(this.startedAt);
+    const durationMs = Date.now() - this.startedAtMs;
     const failure = classifyRunFailure(error);
     this.firstError ??= failure;
 
@@ -345,7 +363,7 @@ export class RunManager {
 
     this.finished = true;
     this.status = "failed";
-    const durationMs = Date.parse(new Date().toISOString()) - Date.parse(this.startedAt);
+    const durationMs = Date.now() - this.startedAtMs;
     const failure = classifyRunFailure(error);
     this.firstError ??= failure;
 

@@ -268,6 +268,13 @@ export function classifyRunFailure(error: RuntimeErrorShape): RunFailure {
         user_message: "A required file could not be found in the workspace.",
         debug_message: error.message,
       };
+    case "MAX_TURNS_EXCEEDED":
+      return {
+        error_code: "max_turns_exceeded",
+        error_layer: "runtime",
+        user_message: "The run stopped after reaching the configured turn limit. Increase --max-turns or restart with a fresh session.",
+        debug_message: error.message,
+      };
     default:
       return {
         error_code: "runtime_error",

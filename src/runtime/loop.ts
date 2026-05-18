@@ -13,7 +13,12 @@ export interface LoopDependencies {
   sessionStore: SessionStore;
   runManager: RunManager;
   signal?: AbortSignal;
-  createSystemPrompt: () => Promise<string>;
+  /** Build the cacheable base system prompt (workspace context + skill catalog). */
+  createBaseSystemPrompt: () => Promise<string>;
+  /** Build the active skills block (changes when activate_skill runs). */
+  createActiveSkillsBlock: () => string;
+  /** Snapshot of currently-active skill names. Used to invalidate the active block cache. */
+  getActiveSkillNames: () => string[];
   createToolContext: (toolCall: ToolCall) => ToolContext;
   maxTurns: number;
 }
@@ -43,8 +48,36 @@ function throwIfAborted(signal?: AbortSignal): void {
   });
 }
 
-function serializeToolResult(result: ToolExecutionResult): string {
-  return JSON.stringify(result);
+/**
+ * Serialize a ToolExecutionResult into a stable string for inclusion in the
+ * `tool` message content. The same function is used both in the live loop and
+ * when replaying session entries, so live and resumed runs produce byte-for-byte
+ * identical tool message content.
+ *
+ * Stable key order: `ok`, `content`, `meta`, `error`, `artifacts`. Optional
+ * fields whose values are `undefined` are omitted, matching `JSON.stringify`
+ * semantics, so legacy sessions (recorded before `artifacts` existed on the
+ * runtime contract) continue to serialize identically.
+ */
+export function formatToolMessageContent(result: ToolExecutionResult): string {
+  const ordered: Record<string, unknown> = {
+    ok: result.ok,
+    content: result.content,
+  };
+  if (result.meta !== undefined) {
+    ordered.meta = result.meta;
+  }
+  if (result.error !== undefined) {
+    ordered.error = result.error;
+  }
+  if (result.artifacts !== undefined) {
+    ordered.artifacts = result.artifacts;
+  }
+  return JSON.stringify(ordered);
+}
+
+function computeSkillSignature(names: string[]): string {
+  return [...names].sort().join(",");
 }
 
 export async function runAgentLoop(
@@ -72,6 +105,25 @@ export async function runAgentLoop(
   let turn = 0;
   let finalMessage: AssistantMessage | null = null;
 
+  // Cache the base prompt (AGENTS.md + workspace context + skill catalog) for
+  // the whole run. The active skills block is recomputed only when the active
+  // skill set changes (e.g. after activate_skill).
+  let cachedBase: string | null = null;
+  let cachedSkillSignature: string | null = null;
+  let cachedActiveBlock: string = "";
+
+  const buildSystemPrompt = async (): Promise<string> => {
+    if (cachedBase === null) {
+      cachedBase = await dependencies.createBaseSystemPrompt();
+    }
+    const signature = computeSkillSignature(dependencies.getActiveSkillNames());
+    if (signature !== cachedSkillSignature) {
+      cachedActiveBlock = dependencies.createActiveSkillsBlock();
+      cachedSkillSignature = signature;
+    }
+    return cachedActiveBlock ? `${cachedBase}\n${cachedActiveBlock}` : cachedBase;
+  };
+
   try {
     while (turn < dependencies.maxTurns) {
       throwIfAborted(dependencies.signal);
@@ -80,7 +132,7 @@ export async function runAgentLoop(
         await dependencies.runManager.emitPlanningSummary("progress", "Review tool results and plan the next step.");
       }
 
-      const systemPrompt = await dependencies.createSystemPrompt();
+      const systemPrompt = await buildSystemPrompt();
       await dependencies.runManager.recordModelRequest(turn);
       const assistant = await dependencies.modelAdapter.generate({
         systemPrompt,
@@ -152,7 +204,7 @@ export async function runAgentLoop(
         await dependencies.sessionStore.appendEntry(sessionId, toolResultEntry);
         messages.push({
           role: "tool",
-          content: serializeToolResult(result),
+          content: formatToolMessageContent(result),
           messageId: createId("msg"),
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -208,20 +260,20 @@ export async function runAgentLoop(
   }
 
   if (!finalMessage) {
-    finalMessage = {
-      role: "assistant",
-      content: "Stopped after reaching the maximum turn limit.",
-      messageId: createId("msg"),
-    };
-    messages.push(finalMessage);
-    await dependencies.sessionStore.appendEntry(sessionId, {
-      type: "message",
-      role: "assistant",
-      messageId: finalMessage.messageId!,
-      timestamp: new Date().toISOString(),
-      content: finalMessage.content,
-      runId: dependencies.runManager.runId,
+    const maxTurnsError = new RuntimeError({
+      code: "MAX_TURNS_EXCEEDED",
+      message: `Stopped after reaching the maximum turn limit (${dependencies.maxTurns}).`,
+      details: { reason: "max_turns_exceeded", max_turns: dependencies.maxTurns },
     });
+    const runtimeErrorShape = maxTurnsError.toJSON();
+    await dependencies.sessionStore.appendEntry(sessionId, {
+      type: "error",
+      timestamp: new Date().toISOString(),
+      runId: dependencies.runManager.runId,
+      error: runtimeErrorShape,
+    });
+    await dependencies.runManager.fail(runtimeErrorShape);
+    throw maxTurnsError;
   }
 
   await dependencies.runManager.recordAssistantCompleted(finalMessage);

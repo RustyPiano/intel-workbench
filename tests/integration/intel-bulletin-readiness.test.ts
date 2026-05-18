@@ -110,7 +110,7 @@ describe("intel-bulletin readiness", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",

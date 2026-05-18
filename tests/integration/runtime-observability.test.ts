@@ -98,7 +98,7 @@ describe("runtime observability", () => {
       },
     ]);
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.2.0",
       modelName: "mock",
@@ -143,7 +143,7 @@ describe("runtime observability", () => {
 
   test("records provider failures as failed runs with mapped error categories", async () => {
     const workspaceRoot = await createWorkspace();
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.2.0",
       modelName: "mock",
@@ -185,7 +185,7 @@ describe("runtime observability", () => {
     const workspaceRoot = await createWorkspace();
     const controller = new AbortController();
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.2.0",
       modelName: "mock",
@@ -247,7 +247,7 @@ describe("runtime observability", () => {
     const workspaceRoot = await createWorkspace();
     const controller = new AbortController();
 
-    const agent = new RuntimeAgent({
+    const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.2.0",
       modelName: "mock",

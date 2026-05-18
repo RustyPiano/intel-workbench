@@ -216,6 +216,13 @@ export function classifyRunFailure(error: RuntimeErrorShape): RunFailure {
         user_message: "The session data is corrupted. Retry with a new session or recover the existing one.",
         debug_message: error.message,
       };
+    case "SESSION_NOT_FOUND":
+      return {
+        error_code: "session_not_found",
+        error_layer: "session",
+        user_message: "The requested session does not exist. Omit --session to start a new one, or pass an existing session id.",
+        debug_message: error.message,
+      };
     case "SKILL_NOT_FOUND":
     case "SKILL_INVALID":
       return {

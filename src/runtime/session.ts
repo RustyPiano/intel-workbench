@@ -84,7 +84,7 @@ export class SessionStore {
 
   async appendEntry(sessionId: string, entry: Exclude<SessionEntry, SessionHeader>): Promise<void> {
     const sessionPath = await this.resolveSessionPath(sessionId);
-    await writeJsonlLine(sessionPath, entry);
+    await writeJsonlLine(sessionPath, entry, false, { skipParentCheck: true });
   }
 
   async loadSession(sessionIdOrPath: string, options: SessionLoadOptions = {}): Promise<LoadedSession> {
@@ -250,7 +250,7 @@ export class SessionStore {
 
     if (!match) {
       throw new RuntimeError({
-        code: "SESSION_CORRUPTED",
+        code: "SESSION_NOT_FOUND",
         message: `Session not found: ${sessionId}`,
       });
     }

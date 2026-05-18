@@ -32,6 +32,8 @@ export class CliError extends Error {
   }
 }
 
+const SUBCOMMANDS = new Set(["skills", "run", "session", "doctor"]);
+
 function isFlagLike(token: string | undefined): boolean {
   if (typeof token !== "string") {
     return false;
@@ -153,13 +155,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
         help = true;
         break;
       default:
+        if (arg.startsWith("--")) {
+          // Unknown top-level flag — but only reject before a subcommand has
+          // been seen. Subcommands (run / session / doctor) carry their own
+          // flag vocabulary that we forward verbatim through positionals.
+          const seenSubcommand = SUBCOMMANDS.has(positionals[0] ?? "");
+          if (!seenSubcommand) {
+            throw new CliError(`Unknown flag: ${arg}`);
+          }
+        }
         positionals.push(arg);
         break;
     }
   }
 
-  const isCommand =
-    positionals[0] === "skills" || positionals[0] === "run" || positionals[0] === "session" || positionals[0] === "doctor";
+  const isCommand = SUBCOMMANDS.has(positionals[0] ?? "");
   return {
     help,
     overrides,

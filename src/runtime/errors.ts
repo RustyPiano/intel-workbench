@@ -9,6 +9,7 @@ export type RuntimeErrorCode =
   | "RUN_ABORTED"
   | "MODEL_ERROR"
   | "SESSION_CORRUPTED"
+  | "SESSION_NOT_FOUND"
   | "SKILL_NOT_FOUND"
   | "SKILL_INVALID"
   | "INTERNAL_ERROR";

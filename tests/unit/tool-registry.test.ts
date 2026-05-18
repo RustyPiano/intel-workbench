@@ -155,6 +155,39 @@ describe("ToolRegistry", () => {
     }
   });
 
+  test("getToolJsonSchema widens optional fields to accept null", () => {
+    const tool: RuntimeTool = {
+      name: "widening_probe",
+      description: "fixture",
+      inputSchema: z
+        .object({
+          mandatory: z.string(),
+          maybe: z.string().optional(),
+          flag: z.boolean().optional(),
+        })
+        .strict(),
+      async execute() {
+        return { ok: true, content: "" };
+      },
+    };
+
+    const schema = getToolJsonSchema(tool);
+    const properties = schema.properties as Record<string, { type: unknown }>;
+
+    // Mandatory field keeps a single type — no null widening.
+    expect(properties.mandatory.type).toBe("string");
+
+    // Optional fields must accept `null` so OpenAI strict mode treats them as
+    // explicitly-absent rather than missing.
+    const widened = (value: unknown): boolean =>
+      Array.isArray(value) && (value as string[]).includes("null");
+    expect(widened(properties.maybe.type)).toBe(true);
+    expect(widened(properties.flag.type)).toBe(true);
+
+    // Every declared property is still in `required`.
+    expect([...(schema.required as string[])].sort()).toEqual(["flag", "mandatory", "maybe"]);
+  });
+
   test("does not execute tools when the runtime signal is already aborted", async () => {
     let executed = false;
     const registry = new ToolRegistry([

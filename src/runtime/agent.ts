@@ -5,6 +5,7 @@ import { SkillRegistry } from "../skills/registry.js";
 import { createDefaultToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
+import { RuntimeError } from "./errors.js";
 import { EventBus } from "./events.js";
 import { runAgentLoop } from "./loop.js";
 import type { RuntimeConfig } from "./config.js";
@@ -170,12 +171,11 @@ export class RuntimeAgent {
   async createConversation(sessionId?: string): Promise<RuntimeConversation> {
     await this.initialize();
 
-    const existing = sessionId ? await this.tryLoadConversation(sessionId) : null;
-    if (existing) {
-      return existing;
+    if (sessionId) {
+      return this.loadConversation(sessionId);
     }
 
-    const session = await this.sessionStore.createSession(sessionId);
+    const session = await this.sessionStore.createSession();
     return new RuntimeConversation(this, session.sessionId, session.path, []);
   }
 
@@ -199,15 +199,21 @@ export class RuntimeAgent {
     this.initialized = true;
   }
 
-  private async tryLoadConversation(sessionId: string): Promise<RuntimeConversation | null> {
+  private async loadConversation(sessionId: string): Promise<RuntimeConversation> {
     const knownSessionIds = new Set((await this.sessionStore.listSessions()).map((session) => session.sessionId));
     if (!knownSessionIds.has(sessionId)) {
-      return null;
+      throw new RuntimeError({
+        code: "SESSION_NOT_FOUND",
+        message: `Session not found: ${sessionId}`,
+      });
     }
 
     const loaded = await this.sessionStore.loadSession(sessionId, { mode: "strict" });
     if (loaded.status === "corrupted") {
-      throw new Error(`Session ${sessionId} is corrupted and cannot be resumed in strict mode`);
+      throw new RuntimeError({
+        code: "SESSION_CORRUPTED",
+        message: `Session ${sessionId} is corrupted and cannot be resumed in strict mode`,
+      });
     }
     await this.restoreActivatedSkills(loaded.entries);
     const messages = this.replayMessages(loaded.entries);

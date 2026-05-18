@@ -1,58 +1,26 @@
+import type { ZodError } from "zod";
+
 import { toRuntimeErrorShape } from "../runtime/errors.js";
 import type { ToolCall } from "../runtime/types.js";
 import { activateSkillTool } from "./activate-skill.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
 import { readTool } from "./read.js";
-import type { JsonSchema, RuntimeTool, ToolContext, ToolExecutionResult } from "./types.js";
+import type { RuntimeTool, ToolContext, ToolExecutionResult } from "./types.js";
 import { writeTool } from "./write.js";
 
-function validateSchema(schema: JsonSchema, args: unknown): string | null {
-  if (schema.type !== "object") {
-    return null;
+function formatZodError(error: ZodError): string {
+  const issues = error.issues ?? [];
+  if (issues.length === 0) {
+    return "Invalid tool arguments";
   }
 
-  if (typeof args !== "object" || args === null || Array.isArray(args)) {
-    return "Tool arguments must be an object";
-  }
-
-  const objectArgs = args as Record<string, unknown>;
-
-  const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
-  for (const field of required) {
-    if (!(field in objectArgs)) {
-      return `Missing required field: ${field}`;
-    }
-  }
-
-  const properties =
-    typeof schema.properties === "object" && schema.properties !== null
-      ? (schema.properties as Record<string, JsonSchema>)
-      : {};
-
-  for (const [field, definition] of Object.entries(properties)) {
-    if (!(field in objectArgs) || definition.type === undefined) {
-      continue;
-    }
-
-    const value = objectArgs[field];
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    if (definition.type === "array") {
-      if (!Array.isArray(value)) {
-        return `Field ${field} must be an array`;
-      }
-      continue;
-    }
-
-    if (typeof value !== definition.type) {
-      return `Field ${field} must be a ${definition.type}`;
-    }
-  }
-
-  return null;
+  return issues
+    .map((issue) => {
+      const fieldPath = issue.path?.length ? issue.path.join(".") : "<root>";
+      return `${fieldPath}: ${issue.message}`;
+    })
+    .join("; ");
 }
 
 export class ToolRegistry {
@@ -81,14 +49,15 @@ export class ToolRegistry {
       } satisfies ToolExecutionResult;
     }
 
-    const validationError = validateSchema(tool.inputSchema, toolCall.arguments);
-    if (validationError) {
+    const parsed = tool.inputSchema.safeParse(toolCall.arguments);
+    if (!parsed.success) {
+      const message = formatZodError(parsed.error);
       return {
         ok: false,
-        content: validationError,
+        content: message,
         error: {
           code: "INVALID_ARGS",
-          message: validationError,
+          message,
         },
       } satisfies ToolExecutionResult;
     }
@@ -126,7 +95,7 @@ export class ToolRegistry {
     });
 
     const executionPromise: Promise<ToolExecutionResult> = tool
-      .execute(toolCall.arguments, {
+      .execute(parsed.data, {
         ...ctx,
         signal: controller.signal,
       })

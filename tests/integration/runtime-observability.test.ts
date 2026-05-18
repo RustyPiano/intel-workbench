@@ -82,6 +82,7 @@ describe("runtime observability", () => {
               name: "bash",
               arguments: {
                 command: "python3 .agents/skills/intel-bulletin/scripts/render_report.py source.txt report.txt",
+                track_artifacts: true,
               },
             },
           ],

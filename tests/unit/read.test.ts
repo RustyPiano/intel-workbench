@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { ToolRegistry } from "../../src/tools/index.js";
+import { readTool } from "../../src/tools/read.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 const tempRoots: string[] = [];
@@ -112,5 +114,23 @@ describe("readTool", () => {
     expect(result.ok).toBe(true);
     expect(result.content).toBe("a");
     expect(result.content).not.toContain("\uFFFD");
+  });
+
+  test("rejects unknown arguments via the strict tool schema", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "notes.txt"), "hello", "utf8");
+    const registry = new ToolRegistry([readTool]);
+
+    const result = await registry.execute(
+      {
+        id: "call_read_unknown",
+        name: "read",
+        arguments: { path: "notes.txt", encoding: "utf8" },
+      },
+      createContext(workspaceRoot),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
   });
 });

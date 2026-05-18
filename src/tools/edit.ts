@@ -1,15 +1,21 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { z } from "zod";
 
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
+import { atomicWriteFile } from "./utils/atomic-write.js";
 import { normalizeForMatching, normalizeNeedle, normalizeTextForEditing } from "./utils/text-normalize.js";
 import type { RuntimeTool } from "./types.js";
 
-interface EditArgs {
-  path: string;
-  old_text: string;
-  new_text: string;
-  replace_all?: boolean;
-}
+const editArgsSchema = z
+  .object({
+    path: z.string(),
+    old_text: z.string(),
+    new_text: z.string(),
+    replace_all: z.boolean().optional(),
+  })
+  .strict();
+
+type EditArgs = z.infer<typeof editArgsSchema>;
 
 interface EditData {
   path: string;
@@ -40,16 +46,7 @@ function findOccurrences(haystack: string, needle: string): number[] {
 export const editTool: RuntimeTool<EditArgs, EditData> = {
   name: "edit",
   description: "Replace a section of a text file using old_text/new_text matching.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      path: { type: "string" },
-      old_text: { type: "string" },
-      new_text: { type: "string" },
-      replace_all: { type: "boolean" },
-    },
-    required: ["path", "old_text", "new_text"],
-  },
+  inputSchema: editArgsSchema,
   async execute(args, ctx) {
     const queue = ctx.fileMutationQueue;
 
@@ -94,7 +91,7 @@ export const editTool: RuntimeTool<EditArgs, EditData> = {
         }
 
         output = normalizeTextForEditing(output);
-        await writeFile(filePath, output, "utf8");
+        await atomicWriteFile(filePath, output, "utf8");
 
         return {
           ok: true,

@@ -82,6 +82,10 @@ export class RunStore {
     const artifactsDir = path.join(runDir, "artifacts");
     const startedAt = options.startedAt ?? new Date().toISOString();
 
+    // Create both the run dir (parent of trace.jsonl/meta.json) and the
+    // nested artifacts dir up front so subsequent jsonl writes can skip the
+    // per-line `mkdir -p` syscall.
+    await mkdir(runDir, { recursive: true });
     await mkdir(artifactsDir, { recursive: true });
     const meta: RunMeta = {
       run_id: runId,
@@ -111,7 +115,11 @@ export class RunStore {
 
   async appendEvent(event: RunEvent): Promise<void> {
     const created = await this.resolveRunPaths(event.run_id);
-    await writeJsonlLine(created.tracePath, event);
+    // createRun already ensures the runDir + artifactsDir exist; runs that
+    // resolve via resolveRunPaths after a process restart will still hit a
+    // pre-existing directory because trace.jsonl + meta.json could not have
+    // been written otherwise.
+    await writeJsonlLine(created.tracePath, event, false, { skipParentCheck: true });
   }
 
   async loadMeta(runId: string): Promise<RunMeta> {

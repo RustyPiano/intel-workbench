@@ -5,8 +5,24 @@ export async function ensureParentDir(filePath: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
 }
 
-export async function writeJsonlLine(filePath: string, value: unknown, overwrite = false): Promise<void> {
-  await ensureParentDir(filePath);
+export interface WriteJsonlLineOptions {
+  /**
+   * Skip the per-write `mkdir -p` on the parent directory. Callers that
+   * created the directory up-front (e.g. RunStore / SessionStore at session
+   * bootstrap) can pass `true` to avoid the syscall on every event.
+   */
+  skipParentCheck?: boolean;
+}
+
+export async function writeJsonlLine(
+  filePath: string,
+  value: unknown,
+  overwrite: boolean = false,
+  options: WriteJsonlLineOptions = {},
+): Promise<void> {
+  if (!options.skipParentCheck) {
+    await ensureParentDir(filePath);
+  }
   const serialized = `${JSON.stringify(value)}\n`;
 
   if (overwrite) {

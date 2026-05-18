@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { RuntimeError } from "./errors.js";
+
 export interface PolicyOptions {
   workspaceRoot: string;
   skillRoots?: string[];
@@ -20,6 +22,11 @@ export interface PolicyEngine {
 const SENSITIVE_PATH_PREFIXES = [
   path.resolve("/etc"),
   path.resolve(os.homedir(), ".ssh"),
+  path.resolve(os.homedir(), ".aws"),
+  path.resolve(os.homedir(), ".gnupg"),
+  path.resolve(os.homedir(), ".config"),
+  path.resolve("/root"),
+  path.resolve("/var/run/docker.sock"),
 ];
 
 export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
@@ -40,7 +47,10 @@ export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
 
   function assertNotSensitive(candidate: string) {
     if (SENSITIVE_PATH_PREFIXES.some((root) => isInsideRoot(candidate, root))) {
-      throw new Error(`Path is outside the allowed roots: ${candidate}`);
+      throw new RuntimeError({
+        code: "PATH_NOT_ALLOWED",
+        message: `Path is sensitive and not allowed: ${candidate}`,
+      });
     }
   }
 
@@ -56,7 +66,10 @@ export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
       return resolvedPath;
     }
 
-    throw new Error(`Path is outside the allowed ${mode} roots: ${inputPath}`);
+    throw new RuntimeError({
+      code: "PATH_NOT_ALLOWED",
+      message: `Path is outside the allowed ${mode} roots: ${inputPath}`,
+    });
   }
 
   return {
@@ -67,7 +80,10 @@ export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
     },
     resolveWritePath(inputPath: string) {
       if (options.readOnly) {
-        throw new Error(`Path is outside the allowed write roots: ${inputPath}`);
+        throw new RuntimeError({
+          code: "PATH_NOT_ALLOWED",
+          message: `Path is not writable in read-only mode: ${inputPath}`,
+        });
       }
 
       return resolveAllowedPath(inputPath, writableRoots, "write");

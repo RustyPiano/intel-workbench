@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { RuntimeError } from "../../src/runtime/errors.js";
 
 const tempRoots: string[] = [];
 
@@ -40,9 +41,15 @@ describe("policy engine", () => {
     const workspaceRoot = await createWorkspace();
     const policy = createPolicyEngine({ workspaceRoot });
 
-    expect(() => policy.resolveReadPath("../outside.txt")).toThrowErrorMatchingInlineSnapshot(
-      `[Error: Path is outside the allowed read roots: ../outside.txt]`,
-    );
+    let captured: unknown;
+    try {
+      policy.resolveReadPath("../outside.txt");
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+    expect((captured as RuntimeError).message).toContain("../outside.txt");
   });
 
   test("rejects writes outside the workspace even when skill roots are readable", async () => {
@@ -55,9 +62,14 @@ describe("policy engine", () => {
       skillRoots: [outsideSkillRoot],
     });
 
-    expect(() => policy.resolveWritePath(path.join(outsideSkillRoot, "tamper.md"))).toThrowErrorMatchingInlineSnapshot(
-      `[Error: Path is outside the allowed write roots: ${path.join(outsideSkillRoot, "tamper.md")}]`,
-    );
+    let captured: unknown;
+    try {
+      policy.resolveWritePath(path.join(outsideSkillRoot, "tamper.md"));
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
   });
 
   test("pins bash execution to the workspace", async () => {
@@ -65,8 +77,65 @@ describe("policy engine", () => {
     const policy = createPolicyEngine({ workspaceRoot });
 
     expect(policy.resolveExecCwd("scripts")).toBe(path.join(workspaceRoot, "scripts"));
-    expect(() => policy.resolveExecCwd("../..")).toThrowErrorMatchingInlineSnapshot(
-      `[Error: Path is outside the allowed exec roots: ../..]`,
-    );
+    let captured: unknown;
+    try {
+      policy.resolveExecCwd("../..");
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+  });
+
+  test("rejects writes inside ~/.aws", async () => {
+    const workspaceRoot = await createWorkspace();
+    const policy = createPolicyEngine({
+      workspaceRoot,
+      allowWriteOutsideWorkspace: true,
+    });
+
+    let captured: unknown;
+    try {
+      policy.resolveWritePath(path.join(os.homedir(), ".aws", "credentials"));
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+  });
+
+  test("rejects reads inside /root", async () => {
+    const workspaceRoot = await createWorkspace();
+    const policy = createPolicyEngine({
+      workspaceRoot,
+      allowReadOutsideWorkspace: true,
+    });
+
+    let captured: unknown;
+    try {
+      policy.resolveReadPath("/root/.bashrc");
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+  });
+
+  test("rejects writes when readOnly mode is on", async () => {
+    const workspaceRoot = await createWorkspace();
+    const policy = createPolicyEngine({
+      workspaceRoot,
+      readOnly: true,
+    });
+
+    let captured: unknown;
+    try {
+      policy.resolveWritePath("notes/todo.md");
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+    expect((captured as RuntimeError).message).toContain("read-only");
   });
 });

@@ -8,6 +8,7 @@ import { ScriptedModelAdapter } from "../../src/model/mock.js";
 import { RuntimeAgent } from "../../src/runtime/agent.js";
 
 const tempRoots: string[] = [];
+const SCRIPTS = ".agents/skills/intel-bulletin/scripts";
 
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
@@ -28,54 +29,72 @@ async function installBundledIntelBulletinSkill(workspaceRoot: string) {
 }
 
 describe("intel-bulletin readiness", () => {
-  test("renders the bundled intel-bulletin fixture path into the expected report", async () => {
+  test("compiles a multi-source task into the expected 公文 report end-to-end", async () => {
     const workspaceRoot = await createWorkspace();
     await installBundledIntelBulletinSkill(workspaceRoot);
 
-    const sourceFixture = await readFile(path.join(process.cwd(), "fixtures", "intel-bulletin", "source-note.md"), "utf8");
-    const expectedReport = await readFile(path.join(process.cwd(), "fixtures", "intel-bulletin", "expected-report.md"), "utf8");
-    const sourcePath = path.join(workspaceRoot, "fixtures", "intel-bulletin", "source-note.md");
+    const fixtureRoot = path.join(process.cwd(), "fixtures", "intel-bulletin");
+    const brief = await readFile(path.join(fixtureRoot, "sources", "brief.md"), "utf8");
+    const memo = await readFile(path.join(fixtureRoot, "sources", "memo.txt"), "utf8");
+    const specJson = await readFile(path.join(fixtureRoot, "bulletin.spec.json"), "utf8");
+    const expectedReport = await readFile(path.join(fixtureRoot, "expected-report.md"), "utf8");
 
-    await mkdir(path.dirname(sourcePath), { recursive: true });
-    await writeFile(sourcePath, sourceFixture, "utf8");
+    // Stage the raw source files in the workspace; the agent copies them into
+    // the task via manage_task add-source.
+    await mkdir(path.join(workspaceRoot, "staging"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, "staging", "brief.md"), brief, "utf8");
+    await writeFile(path.join(workspaceRoot, "staging", "memo.txt"), memo, "utf8");
 
     const model = new ScriptedModelAdapter([
       {
         message: {
           role: "assistant",
           content: "I need the intel-bulletin skill first.",
-          toolCalls: [{ id: "call_activate_fixture", name: "activate_skill", arguments: { name: "intel-bulletin" } }],
+          toolCalls: [{ id: "call_activate", name: "activate_skill", arguments: { name: "intel-bulletin" } }],
         },
         stopReason: "tool_use",
       },
       {
         message: {
           role: "assistant",
-          content: "I will inspect the source notes.",
-          toolCalls: [{ id: "call_read_fixture", name: "read", arguments: { path: "fixtures/intel-bulletin/source-note.md" } }],
-        },
-        stopReason: "tool_use",
-      },
-      {
-        message: {
-          role: "assistant",
-          content: "I will draft the bulletin body.",
+          content: "Create the task and add both sources.",
           toolCalls: [
             {
-              id: "call_write_fixture",
+              id: "call_create",
+              name: "bash",
+              arguments: {
+                command: [
+                  `python3 ${SCRIPTS}/manage_task.py create demo --title "发射计划进展"`,
+                  `python3 ${SCRIPTS}/manage_task.py add-source demo staging/brief.md`,
+                  `python3 ${SCRIPTS}/manage_task.py add-source demo staging/memo.txt`,
+                ].join(" && "),
+              },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Ingest the sources.",
+          toolCalls: [
+            { id: "call_ingest", name: "bash", arguments: { command: `python3 ${SCRIPTS}/ingest.py tasks/demo/sources` } },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Draft the bulletin spec.",
+          toolCalls: [
+            {
+              id: "call_write_spec",
               name: "write",
               arguments: {
-                path: "fixtures/intel-bulletin/bulletin.md",
-                content: [
-                  "## Decision",
-                  "Team approved the launch plan on April 13, 2026.",
-                  "",
-                  "## Risk",
-                  "Vendor turnaround is still unknown.",
-                  "",
-                  "## Next Step",
-                  "Next checkpoint is April 20, 2026.",
-                ].join("\n"),
+                path: "tasks/demo/report/bulletin.spec.json",
+                content: specJson,
                 create_dirs: true,
                 overwrite: true,
               },
@@ -87,14 +106,13 @@ describe("intel-bulletin readiness", () => {
       {
         message: {
           role: "assistant",
-          content: "I will render the final report.",
+          content: "Render the report.",
           toolCalls: [
             {
-              id: "call_bash_fixture",
+              id: "call_render",
               name: "bash",
               arguments: {
-                command:
-                  "python3 .agents/skills/intel-bulletin/scripts/render_report.py fixtures/intel-bulletin/bulletin.md fixtures/intel-bulletin/report.md",
+                command: `python3 ${SCRIPTS}/render_report.py tasks/demo/report/bulletin.spec.json tasks/demo/report/bulletin`,
               },
             },
           ],
@@ -104,8 +122,19 @@ describe("intel-bulletin readiness", () => {
       {
         message: {
           role: "assistant",
-          content: "Intel bulletin ready.",
+          content: "Register the produced report.",
+          toolCalls: [
+            {
+              id: "call_set_report",
+              name: "bash",
+              arguments: { command: `python3 ${SCRIPTS}/manage_task.py set-report demo report/bulletin.md` },
+            },
+          ],
         },
+        stopReason: "tool_use",
+      },
+      {
+        message: { role: "assistant", content: "Intel bulletin ready." },
         stopReason: "end_turn",
       },
     ]);
@@ -117,15 +146,22 @@ describe("intel-bulletin readiness", () => {
       modelAdapter: model,
     });
 
-    const result = await agent.run("Build the bundled intel bulletin readiness report.");
-    const renderedReport = await readFile(path.join(workspaceRoot, "fixtures", "intel-bulletin", "report.md"), "utf8");
-    const loadedSession = await agent.sessionStore.loadSession(result.sessionId);
+    const result = await agent.run("Compile the demo launch task into an intelligence bulletin.");
 
-    expect(result.finalMessage.content).toBe("Intel bulletin ready.");
+    const renderedReport = await readFile(path.join(workspaceRoot, "tasks", "demo", "report", "bulletin.md"), "utf8");
     expect(renderedReport).toBe(expectedReport);
-    expect(loadedSession.entries.some((entry) => entry.type === "skill_activation" && entry.skill === "intel-bulletin")).toBe(true);
-    expect(loadedSession.entries.some((entry) => entry.type === "tool_call" && entry.toolName === "read")).toBe(true);
-    expect(loadedSession.entries.some((entry) => entry.type === "tool_call" && entry.toolName === "write")).toBe(true);
-    expect(loadedSession.entries.some((entry) => entry.type === "tool_call" && entry.toolName === "bash")).toBe(true);
+
+    const manifest = JSON.parse(
+      await readFile(path.join(workspaceRoot, "tasks", "demo", "manifest.json"), "utf8"),
+    ) as { status: string; sources: unknown[]; report: string };
+    expect(manifest.status).toBe("rendered");
+    expect(manifest.sources).toHaveLength(2);
+    expect(manifest.report).toBe("report/bulletin.md");
+
+    const loadedSession = await agent.sessionStore.loadSession(result.sessionId);
+    expect(result.finalMessage.content).toBe("Intel bulletin ready.");
+    expect(loadedSession.entries.some((e) => e.type === "skill_activation" && e.skill === "intel-bulletin")).toBe(true);
+    expect(loadedSession.entries.some((e) => e.type === "tool_call" && e.toolName === "write")).toBe(true);
+    expect(loadedSession.entries.some((e) => e.type === "tool_call" && e.toolName === "bash")).toBe(true);
   });
 });

@@ -1,0 +1,20 @@
+{
+  "media": "meeting-clip.mp4",
+  "summary": "今天我们评审一下预算然后大家看看有没有问题我觉得这个分配不太合理",
+  "method": "classic-pipeline",
+  "degraded": true,
+  "degraded_note": "经典管线（ffmpeg+Whisper+pyannote）：无多模态情感/触发点分析",
+  "events": [
+    { "time": "00:03", "title": "发言", "detail": "今天我们评审一下预算。" },
+    { "time": "00:22", "title": "发言", "detail": "大家看看有没有问题。" },
+    { "time": "00:55", "title": "发言", "detail": "我觉得这个分配不太合理。" },
+    { "time": "01:20", "title": "发言", "detail": "那我们下周再议。" },
+    { "time": "02:05", "title": "发言", "detail": "散会。" }
+  ],
+  "speakers": [
+    { "id": "SPEAKER_00", "label": "SPEAKER_00", "profile": "（经典管线仅提供说话人分离，无画像）" },
+    { "id": "SPEAKER_01", "label": "SPEAKER_01", "profile": "（经典管线仅提供说话人分离，无画像）" }
+  ],
+  "emotion_timeline": [],
+  "key_triggers": []
+}

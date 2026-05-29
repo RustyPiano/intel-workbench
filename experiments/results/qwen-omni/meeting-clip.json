@@ -1,0 +1,24 @@
+{
+  "media": "meeting-clip.mp4",
+  "duration_seconds": 95.0,
+  "summary": "预算评审例会：主持人开场后参会者A提出异议，预算被否决时情绪明显波动，最终决定下周复议。",
+  "method": "qwen-omni",
+  "events": [
+    { "time": "00:06", "title": "会议开始", "detail": "主持人开场。" },
+    { "time": "00:48", "title": "提出异议", "detail": "参会者A表达不同意见。" },
+    { "time": "01:13", "title": "预算被否决", "detail": "方案被否决。" },
+    { "time": "01:30", "title": "达成共识", "detail": "决定复议。" }
+  ],
+  "speakers": [
+    { "id": "S1", "label": "主持人", "talk_ratio": 0.52, "profile": "主导议程。" },
+    { "id": "S2", "label": "参会者A", "talk_ratio": 0.33, "profile": "对预算敏感。" }
+  ],
+  "emotion_timeline": [
+    { "time": "00:05", "speaker": "S1", "emotion": "neutral", "valence": 0.0, "note": "平稳。" },
+    { "time": "01:12", "speaker": "S2", "emotion": "anger", "valence": -0.5, "note": "语气升高、皱眉。" },
+    { "time": "01:30", "speaker": "S2", "emotion": "calm", "valence": 0.0, "note": "情绪回落。" }
+  ],
+  "key_triggers": [
+    { "time": "01:12", "description": "预算被否决引发不满。", "evidence": "语气突变。" }
+  ]
+}

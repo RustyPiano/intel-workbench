@@ -180,6 +180,29 @@ Example `mini-agent.config.json`:
 }
 ```
 
+## Multimodal Connection (media tools)
+
+The `probe_media` and `analyze_media` tools let the agent inspect and understand
+video/audio/image files. `analyze_media` calls a separate **multimodal** model so
+a text model can still drive the agent loop. It speaks the OpenAI-compatible
+`/v1/chat/completions` shape, so any omni endpoint works (e.g.
+`qwen3.5-omni-plus` on Alibaba Cloud DashScope).
+
+Configure it independently of the primary connection; `baseURL`/`apiKey` fall
+back to the primary connection when omitted:
+
+```bash
+export MINI_AGENT_MM_MODEL=qwen3.5-omni-plus
+export MINI_AGENT_MM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export MINI_AGENT_MM_API_KEY=your-dashscope-key
+```
+
+Or in `mini-agent.config.json`: `mmProvider`, `mmModel`, `mmBaseURL`, `mmApiKey`.
+
+`analyze_media` stays inactive until `mmModel` is set; verify your setup with
+`npm run dev -- doctor` (see the `[multimodal_path]` section). `probe_media`
+requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
+
 ## CLI Surface
 
 ```bash
@@ -216,4 +239,8 @@ Commands:
 - Reference: [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
 - Reference: [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)
 - Explanation: [docs/explanation/runtime-architecture.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/explanation/runtime-architecture.md)
-- Example skill: [.agents/skills/intel-bulletin](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/intel-bulletin)
+- Example skill (text): [.agents/skills/intel-bulletin](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/intel-bulletin)
+- Example skill (multimodal): [.agents/skills/av-dialogue-insight](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/av-dialogue-insight)
+- App specs: [docs/specs/](/Users/wangsiyuan/编程/小项目/mini-agent/docs/specs)
+- Practice report: [docs/report/practice-report.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/report/practice-report.md)
+- Comparison experiments: [experiments/](/Users/wangsiyuan/编程/小项目/mini-agent/experiments)

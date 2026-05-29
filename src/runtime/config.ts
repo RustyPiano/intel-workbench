@@ -9,6 +9,15 @@ export interface RuntimeConfig {
   smokeProvider?: string;
   smokeModel?: string;
   smokeBaseURL?: string;
+  // Multimodal connection used by media tools (probe_media / analyze_media).
+  // Kept separate from the primary text connection so a text model (e.g.
+  // gpt-4.1) can drive the agent loop while an omni model (e.g.
+  // qwen3.5-omni-plus on DashScope) handles audio/video understanding.
+  // baseURL/apiKey fall back to the primary connection when omitted.
+  mmProvider?: string;
+  mmModel?: string;
+  mmBaseURL?: string;
+  mmApiKey?: string;
   workspaceRoot: string;
   sessionDir: string;
   maxTurns: number;
@@ -118,6 +127,10 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     smokeProvider: process.env.MINI_AGENT_SMOKE_PROVIDER,
     smokeModel: process.env.MINI_AGENT_SMOKE_MODEL,
     smokeBaseURL: process.env.MINI_AGENT_SMOKE_BASE_URL,
+    mmProvider: process.env.MINI_AGENT_MM_PROVIDER,
+    mmModel: process.env.MINI_AGENT_MM_MODEL,
+    mmBaseURL: process.env.MINI_AGENT_MM_BASE_URL,
+    mmApiKey: process.env.MINI_AGENT_MM_API_KEY,
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),

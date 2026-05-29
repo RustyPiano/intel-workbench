@@ -95,6 +95,13 @@ describe("doctor helpers", () => {
         model: "gpt-4.1",
         baseURL: "https://example.com/v1",
       },
+      multimodalPath: {
+        configured: true,
+        provider: "openai-compatible",
+        model: "qwen3.5-omni-plus",
+        baseURL: "https://dashscope.example.com/v1",
+        apiKeyConfigured: true,
+      },
       lastRun: {
         run_id: "run_123",
         status: "failed",
@@ -118,8 +125,10 @@ describe("doctor helpers", () => {
     expect(report).toContain("[skill_discovery]");
     expect(report).toContain("[session_health]");
     expect(report).toContain("[smoke_path]");
+    expect(report).toContain("[multimodal_path]");
     expect(report).toContain("[last_run]");
     expect(report).toContain("smoke_configured\tyes");
+    expect(report).toContain("mm_model\tqwen3.5-omni-plus");
     expect(report).toContain("corrupted_sessions\t1");
     expect(report).toContain("run_id\trun_123");
     expect(report).toContain("first_error_code\tprovider_quota_error");

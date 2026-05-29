@@ -22,11 +22,21 @@ export interface ToolExecutionResult<T = unknown> {
   artifacts?: ToolArtifact[];
 }
 
+export interface MultimodalToolConfig {
+  provider: string;
+  model: string;
+  baseURL?: string;
+  apiKey?: string;
+}
+
 export interface ToolRuntimeConfig {
   toolTimeoutMs: number;
   bashTimeoutMs: number;
   maxBashOutputBytes: number;
   readMaxBytes: number;
+  // Present only when a multimodal model is configured (mm* settings). Media
+  // tools error with a clear message when this is absent.
+  multimodal?: MultimodalToolConfig;
 }
 
 export interface ToolContext {

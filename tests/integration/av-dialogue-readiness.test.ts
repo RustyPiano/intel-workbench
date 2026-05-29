@@ -1,0 +1,108 @@
+import { cp, mkdtemp, mkdir, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, test } from "vitest";
+
+import { ScriptedModelAdapter } from "../../src/model/mock.js";
+import { RuntimeAgent } from "../../src/runtime/agent.js";
+
+const tempRoots: string[] = [];
+const SCRIPTS = ".agents/skills/av-dialogue-insight/scripts";
+
+afterEach(async () => {
+  const { rm } = await import("node:fs/promises");
+  await Promise.allSettled(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function createWorkspace() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "mini-agent-av-readiness-"));
+  tempRoots.push(root);
+  return root;
+}
+
+async function installSkill(workspaceRoot: string) {
+  const bundled = path.join(process.cwd(), ".agents", "skills", "av-dialogue-insight");
+  const target = path.join(workspaceRoot, ".agents", "skills", "av-dialogue-insight");
+  await mkdir(path.dirname(target), { recursive: true });
+  await cp(bundled, target, { recursive: true });
+}
+
+describe("av-dialogue-insight readiness", () => {
+  test("activates the skill and renders a consolidated analysis into the expected report", async () => {
+    const workspaceRoot = await createWorkspace();
+    await installSkill(workspaceRoot);
+
+    const fixtureRoot = path.join(process.cwd(), "fixtures", "av-dialogue-insight");
+    const analysisJson = await readFile(path.join(fixtureRoot, "analysis.json"), "utf8");
+    const expectedReport = await readFile(path.join(fixtureRoot, "expected-report.md"), "utf8");
+
+    const model = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Activate the analysis skill.",
+          toolCalls: [{ id: "call_activate", name: "activate_skill", arguments: { name: "av-dialogue-insight" } }],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Persist the consolidated multimodal analysis.",
+          toolCalls: [
+            {
+              id: "call_write_analysis",
+              name: "write",
+              arguments: {
+                path: "av-tasks/demo/analysis/merged.json",
+                content: analysisJson,
+                create_dirs: true,
+                overwrite: true,
+              },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Render the report.",
+          toolCalls: [
+            {
+              id: "call_render",
+              name: "bash",
+              arguments: {
+                command: `python3 ${SCRIPTS}/render_report.py av-tasks/demo/analysis/merged.json av-tasks/demo/report/report`,
+              },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: { role: "assistant", content: "Analysis report ready." },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: model,
+    });
+
+    const result = await agent.run("Analyze the demo recording and produce a report.");
+
+    const rendered = await readFile(path.join(workspaceRoot, "av-tasks", "demo", "report", "report.md"), "utf8");
+    expect(rendered).toBe(expectedReport);
+
+    const loadedSession = await agent.sessionStore.loadSession(result.sessionId);
+    expect(result.finalMessage.content).toBe("Analysis report ready.");
+    expect(loadedSession.entries.some((e) => e.type === "skill_activation" && e.skill === "av-dialogue-insight")).toBe(true);
+    expect(loadedSession.entries.some((e) => e.type === "tool_call" && e.toolName === "write")).toBe(true);
+    expect(loadedSession.entries.some((e) => e.type === "tool_call" && e.toolName === "bash")).toBe(true);
+  });
+});

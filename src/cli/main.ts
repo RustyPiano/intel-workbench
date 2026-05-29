@@ -375,6 +375,13 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         model: config.smokeModel,
         baseURL: config.smokeBaseURL,
       },
+      multimodalPath: {
+        configured: Boolean(config.mmModel),
+        provider: config.mmProvider ?? (config.mmModel ? "openai-compatible" : undefined),
+        model: config.mmModel,
+        baseURL: config.mmBaseURL ?? (config.mmModel ? config.baseURL : undefined),
+        apiKeyConfigured: Boolean(config.mmApiKey ?? (config.mmModel ? config.apiKey : undefined)),
+      },
       lastRun,
     }),
   );
@@ -406,6 +413,17 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
       bashTimeoutMs: config.bashTimeoutMs,
       maxBashOutputBytes: config.maxBashOutputBytes,
       readMaxBytes: config.readMaxBytes,
+      // Media tools only activate when an explicit multimodal model is set.
+      // baseURL/apiKey fall back to the primary connection (handy when the
+      // primary endpoint already points at DashScope or another omni host).
+      multimodal: config.mmModel
+        ? {
+            provider: config.mmProvider ?? "openai-compatible",
+            model: config.mmModel,
+            baseURL: config.mmBaseURL ?? config.baseURL,
+            apiKey: config.mmApiKey ?? config.apiKey,
+          }
+        : undefined,
     },
   });
 }

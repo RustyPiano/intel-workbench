@@ -28,6 +28,13 @@ export interface DoctorReportInput {
     model?: string;
     baseURL?: string;
   };
+  multimodalPath: {
+    configured: boolean;
+    provider?: string;
+    model?: string;
+    baseURL?: string;
+    apiKeyConfigured: boolean;
+  };
   lastRun?: Partial<RunMeta> & {
     error_layer?: string;
     user_message?: string;
@@ -103,6 +110,13 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `smoke_provider\t${input.smokePath.provider ?? "(unset)"}`,
     `smoke_model\t${input.smokePath.model ?? "(unset)"}`,
     `smoke_base_url\t${input.smokePath.baseURL ?? "(unset)"}`,
+    "",
+    "[multimodal_path]",
+    `mm_configured\t${input.multimodalPath.configured ? "yes" : "no"}`,
+    `mm_provider\t${input.multimodalPath.provider ?? "(unset)"}`,
+    `mm_model\t${input.multimodalPath.model ?? "(unset)"}`,
+    `mm_base_url\t${input.multimodalPath.baseURL ?? "(unset)"}`,
+    `mm_api_key\t${input.multimodalPath.apiKeyConfigured ? "configured" : "missing"}`,
   ];
 
   if (input.lastRun) {

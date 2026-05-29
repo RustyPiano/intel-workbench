@@ -3,8 +3,10 @@ import type { ZodError } from "zod";
 import { toRuntimeErrorShape } from "../runtime/errors.js";
 import type { ToolCall } from "../runtime/types.js";
 import { activateSkillTool } from "./activate-skill.js";
+import { analyzeMediaTool } from "./analyze-media.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
+import { probeMediaTool } from "./probe-media.js";
 import { readTool } from "./read.js";
 import type { RuntimeTool, ToolContext, ToolExecutionResult } from "./types.js";
 import { writeTool } from "./write.js";
@@ -142,5 +144,5 @@ export class ToolRegistry {
 }
 
 export function createDefaultToolRegistry(): ToolRegistry {
-  return new ToolRegistry([readTool, writeTool, editTool, bashTool, activateSkillTool]);
+  return new ToolRegistry([readTool, writeTool, editTool, bashTool, activateSkillTool, probeMediaTool, analyzeMediaTool]);
 }

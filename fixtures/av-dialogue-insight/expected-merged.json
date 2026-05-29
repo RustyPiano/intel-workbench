@@ -1,0 +1,56 @@
+{
+  "media": "long.mp4",
+  "duration_seconds": 420.0,
+  "summary": "前半段：项目进度同步。\n后半段：风险讨论。",
+  "degraded": false,
+  "degraded_note": "",
+  "events": [
+    {
+      "time": "00:10",
+      "title": "进度同步",
+      "detail": "汇报上周进展。"
+    },
+    {
+      "time": "05:20",
+      "title": "风险讨论",
+      "detail": "讨论供应商风险。"
+    }
+  ],
+  "speakers": [
+    {
+      "id": "S1",
+      "label": "主持人",
+      "talk_ratio": 0.6,
+      "profile": "主导汇报。"
+    },
+    {
+      "id": "S2",
+      "label": "参会者A",
+      "talk_ratio": 0.4,
+      "profile": "提出风险点。"
+    }
+  ],
+  "emotion_timeline": [
+    {
+      "time": "00:10",
+      "speaker": "S1",
+      "emotion": "neutral",
+      "valence": 0.0,
+      "note": "平稳。"
+    },
+    {
+      "time": "05:20",
+      "speaker": "S2",
+      "emotion": "concern",
+      "valence": -0.3,
+      "note": "担忧语气。"
+    }
+  ],
+  "key_triggers": [
+    {
+      "time": "05:20",
+      "description": "供应商风险引发担忧。",
+      "evidence": "语气低沉。"
+    }
+  ]
+}

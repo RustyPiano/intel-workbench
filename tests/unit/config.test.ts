@@ -14,6 +14,13 @@ const ENV_KEYS = [
   "MINI_AGENT_API_KEY",
   "MINI_AGENT_SESSION_DIR",
   "MINI_AGENT_MM_TIMEOUT_MS",
+  "MINI_AGENT_ASR_APP_ID",
+  "MINI_AGENT_ASR_API_KEY",
+  "MINI_AGENT_ASR_ACCESS_KEY",
+  "MINI_AGENT_ASR_APP_KEY",
+  "MINI_AGENT_ASR_RESOURCE_ID",
+  "MINI_AGENT_ASR_BASE_URL",
+  "MINI_AGENT_ASR_TIMEOUT_MS",
 ];
 
 afterEach(async () => {
@@ -93,5 +100,70 @@ describe("resolveRuntimeConfig", () => {
     const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
 
     expect(config.mmTimeoutMs).toBeUndefined();
+  });
+
+  test("resolves ASR connection settings from env", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_ASR_APP_ID = "app-id";
+    process.env.MINI_AGENT_ASR_API_KEY = "api-key";
+    process.env.MINI_AGENT_ASR_ACCESS_KEY = "access-key";
+    process.env.MINI_AGENT_ASR_APP_KEY = "app-key";
+    process.env.MINI_AGENT_ASR_RESOURCE_ID = "custom.resource";
+    process.env.MINI_AGENT_ASR_BASE_URL = "https://asr.example.com";
+    process.env.MINI_AGENT_ASR_TIMEOUT_MS = "240000";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.asrAppId).toBe("app-id");
+    expect(config.asrApiKey).toBe("api-key");
+    expect(config.asrAccessKey).toBe("access-key");
+    expect(config.asrAppKey).toBe("app-key");
+    expect(config.asrResourceId).toBe("custom.resource");
+    expect(config.asrBaseURL).toBe("https://asr.example.com");
+    expect(config.asrTimeoutMs).toBe(240_000);
+  });
+
+  test("defaults ASR resource and base URL when ASR auth is configured", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_ASR_API_KEY = "api-key";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.asrResourceId).toBe("volc.seedasr.auc");
+    expect(config.asrBaseURL).toBe("https://openspeech.bytedance.com");
+  });
+
+  test("defaults ASR resource and base URL for app-key/access-key auth", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_ASR_APP_KEY = "app-key";
+    process.env.MINI_AGENT_ASR_ACCESS_KEY = "access-key";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.asrResourceId).toBe("volc.seedasr.auc");
+    expect(config.asrBaseURL).toBe("https://openspeech.bytedance.com");
+  });
+
+  test("defaults ASR resource and base URL when ASR auth comes from config file", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(
+      path.join(workspaceRoot, "mini-agent.config.json"),
+      JSON.stringify({ asrApiKey: "file-api-key" }, null, 2),
+      "utf8",
+    );
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.asrResourceId).toBe("volc.seedasr.auc");
+    expect(config.asrBaseURL).toBe("https://openspeech.bytedance.com");
+  });
+
+  test.each(["0", "-1", "1.5", "abc"])("ignores invalid ASR timeout env value %s", async (value) => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_ASR_TIMEOUT_MS = value;
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.asrTimeoutMs).toBeUndefined();
   });
 });

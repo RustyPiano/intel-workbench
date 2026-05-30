@@ -191,6 +191,16 @@ function timelineMode(config: RuntimeConfig, command: string[] = []): "compact" 
   return config.traceMode === "verbose" ? "verbose" : "compact";
 }
 
+function getAsrAuth(config: RuntimeConfig): "api-key" | "app-key+access-key" | "missing" {
+  if (config.asrApiKey) {
+    return "api-key";
+  }
+  if (config.asrAppKey && config.asrAccessKey) {
+    return "app-key+access-key";
+  }
+  return "missing";
+}
+
 async function handleSkillsCommand(config: RuntimeConfig): Promise<void> {
   const registry = await SkillRegistry.discover({
     workspaceRoot: config.workspaceRoot,
@@ -383,6 +393,13 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         apiKeyConfigured: Boolean(config.mmApiKey ?? (config.mmModel ? config.apiKey : undefined)),
         timeoutMs: config.mmTimeoutMs,
       },
+      asrPath: {
+        configured: getAsrAuth(config) !== "missing",
+        resourceId: config.asrResourceId,
+        baseURL: config.asrBaseURL,
+        auth: getAsrAuth(config),
+        timeoutMs: config.asrTimeoutMs,
+      },
       lastRun,
     }),
   );
@@ -412,6 +429,7 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
     toolConfig: {
       toolTimeoutMs: config.toolTimeoutMs,
       mmTimeoutMs: config.mmTimeoutMs,
+      asrTimeoutMs: config.asrTimeoutMs,
       bashTimeoutMs: config.bashTimeoutMs,
       maxBashOutputBytes: config.maxBashOutputBytes,
       readMaxBytes: config.readMaxBytes,
@@ -426,6 +444,18 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
             apiKey: config.mmApiKey ?? config.apiKey,
           }
         : undefined,
+      asr:
+        getAsrAuth(config) !== "missing" && config.asrBaseURL && config.asrResourceId
+          ? {
+              baseURL: config.asrBaseURL,
+              resourceId: config.asrResourceId,
+              appId: config.asrAppId,
+              apiKey: config.asrApiKey,
+              accessKey: config.asrAccessKey,
+              appKey: config.asrAppKey,
+              timeoutMs: config.asrTimeoutMs,
+            }
+          : undefined,
     },
   });
 }

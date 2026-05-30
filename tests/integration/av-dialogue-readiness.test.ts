@@ -32,11 +32,18 @@ describe("av-dialogue-insight readiness", () => {
   test("skill text describes the supported deterministic media workflow", async () => {
     const skill = await readFile(path.join(process.cwd(), ".agents", "skills", "av-dialogue-insight", "SKILL.md"), "utf8");
 
+    expect(skill).toContain("analyze_audio");
+    expect(skill).toMatch(/Public audio URL:[\s\S]*analyze_audio/u);
+    expect(skill).toMatch(/Video or image:[\s\S]*probe_media[\s\S]*analyze_media/u);
+    expect(skill).toMatch(/out_path[\s\S]*Read the written file/u);
+    expect(skill).toContain("audio_stats.py");
+    expect(skill).toMatch(/talk ratio|emotion counts/u);
+    expect(skill).toMatch(/Transcript errors are expected|correct likely transcript recognition errors/u);
+    expect(skill).toMatch(/Local audio[\s\S]*TODO|TODO[\s\S]*local audio/u);
+    expect(skill).toMatch(/URL-only/u);
     expect(skill).toContain("split_media.py");
     expect(skill).toContain("validate_analysis.py");
-    expect(skill).toContain("inlineBase64Allowed");
-    expect(skill).toContain("recommendedTransport");
-    expect(skill).toContain("recommendedChunkSeconds");
+    expect(skill).toContain("MINI_AGENT_ASR_*");
     expect(skill).not.toMatch(/≤\s*~?360s|360s/u);
     expect(skill).not.toMatch(/URL\/OSS|OSS upload/u);
     expect(skill).toMatch(/kind/u);

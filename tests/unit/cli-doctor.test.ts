@@ -103,6 +103,13 @@ describe("doctor helpers", () => {
         apiKeyConfigured: true,
         timeoutMs: 180_000,
       },
+      asrPath: {
+        configured: true,
+        resourceId: "volc.seedasr.auc",
+        baseURL: "https://openspeech.bytedance.com",
+        auth: "api-key",
+        timeoutMs: 240_000,
+      },
       lastRun: {
         run_id: "run_123",
         status: "failed",
@@ -127,10 +134,16 @@ describe("doctor helpers", () => {
     expect(report).toContain("[session_health]");
     expect(report).toContain("[smoke_path]");
     expect(report).toContain("[multimodal_path]");
+    expect(report).toContain("[asr_path]");
     expect(report).toContain("[last_run]");
     expect(report).toContain("smoke_configured\tyes");
     expect(report).toContain("mm_model\tqwen3.5-omni-plus");
     expect(report).toContain("mm_timeout_ms\t180000");
+    expect(report).toContain("asr_configured\tyes");
+    expect(report).toContain("asr_resource_id\tvolc.seedasr.auc");
+    expect(report).toContain("asr_base_url\thttps://openspeech.bytedance.com");
+    expect(report).toContain("asr_auth\tapi-key");
+    expect(report).toContain("asr_timeout_ms\t240000");
     expect(report).toContain("corrupted_sessions\t1");
     expect(report).toContain("run_id\trun_123");
     expect(report).toContain("first_error_code\tprovider_quota_error");

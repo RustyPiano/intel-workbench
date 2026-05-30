@@ -36,6 +36,13 @@ export interface DoctorReportInput {
     apiKeyConfigured: boolean;
     timeoutMs?: number;
   };
+  asrPath: {
+    configured: boolean;
+    resourceId?: string;
+    baseURL?: string;
+    auth: "api-key" | "app-key+access-key" | "missing";
+    timeoutMs?: number;
+  };
   lastRun?: Partial<RunMeta> & {
     error_layer?: string;
     user_message?: string;
@@ -119,6 +126,13 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `mm_base_url\t${input.multimodalPath.baseURL ?? "(unset)"}`,
     `mm_api_key\t${input.multimodalPath.apiKeyConfigured ? "configured" : "missing"}`,
     `mm_timeout_ms\t${input.multimodalPath.timeoutMs ?? "(unset)"}`,
+    "",
+    "[asr_path]",
+    `asr_configured\t${input.asrPath.configured ? "yes" : "no"}`,
+    `asr_resource_id\t${input.asrPath.resourceId ?? "(unset)"}`,
+    `asr_base_url\t${input.asrPath.baseURL ?? "(unset)"}`,
+    `asr_auth\t${input.asrPath.auth}`,
+    `asr_timeout_ms\t${input.asrPath.timeoutMs ?? "(unset)"}`,
   ];
 
   if (input.lastRun) {

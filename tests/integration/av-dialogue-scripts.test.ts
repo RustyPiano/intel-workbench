@@ -173,6 +173,64 @@ describe("av-dialogue-insight scripts", () => {
     expect(merged.events[0].detail).toBe("longer duplicate detail");
   });
 
+  test("audio_stats.py summarizes normalized ASR envelopes deterministically", async () => {
+    const workspace = await tmp();
+    const asr = {
+      provider: "doubao",
+      resourceId: "volc.seedasr.auc",
+      language: "zh",
+      text: "大家好。预算要调整。可以。",
+      durationMs: 4000,
+      utterances: [
+        { startMs: 0, endMs: 1000, speaker: "S2", text: "大家好。", emotion: "neutral" },
+        { startMs: 1000, endMs: 2500, speaker: "S1", text: "预算要调整。", emotion: "angry" },
+        { startMs: 3000, endMs: 4000, speaker: "S1", text: "可以。", emotion: "happy" },
+      ],
+      raw: {},
+    };
+    await writeFile(path.join(workspace, "asr.json"), JSON.stringify(asr), "utf8");
+
+    const { stdout } = await py("audio_stats.py", ["asr.json", "--offset-seconds", "30"], workspace);
+    expect(JSON.parse(stdout)).toEqual({
+      total_speech_seconds: 3.5,
+      speakers: [
+        { speaker: "S1", talk_seconds: 2.5, talk_ratio: 0.714286 },
+        { speaker: "S2", talk_seconds: 1, talk_ratio: 0.285714 },
+      ],
+      emotion_histogram: { angry: 1, happy: 1, neutral: 1 },
+      offset_seconds: 30,
+      utterances_abs: [
+        {
+          speaker: "S2",
+          start_seconds: 30,
+          end_seconds: 31,
+          start_time: "00:30",
+          end_time: "00:31",
+          text: "大家好。",
+          emotion: "neutral",
+        },
+        {
+          speaker: "S1",
+          start_seconds: 31,
+          end_seconds: 32.5,
+          start_time: "00:31",
+          end_time: "00:32.500",
+          text: "预算要调整。",
+          emotion: "angry",
+        },
+        {
+          speaker: "S1",
+          start_seconds: 33,
+          end_seconds: 34,
+          start_time: "00:33",
+          end_time: "00:34",
+          text: "可以。",
+          emotion: "happy",
+        },
+      ],
+    });
+  });
+
   test.skipIf(!(hasFfmpeg && hasFfprobe))("split_media.py writes portable chunks and a manifest", async () => {
     const workspace = await tmp();
     const input = path.join(workspace, "input.mp4");

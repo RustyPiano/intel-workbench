@@ -5,6 +5,7 @@ import { callOmni } from "../model/multimodal.js";
 import { isSupportedAudioUrlFormat, MEDIA_KINDS, type MediaSource } from "../model/media-source.js";
 import type { RuntimeTool } from "./types.js";
 import { persistToolResult } from "./utils/persist-result.js";
+import { truncatePreview } from "./utils/truncate-preview.js";
 
 const analyzeMediaArgsSchema = z
   .object({
@@ -154,14 +155,6 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
     }
   },
 };
-
-function truncatePreview(text: string): string {
-  const normalized = text.replace(/\s+/gu, " ").trim();
-  if (normalized.length <= 500) {
-    return normalized;
-  }
-  return `${normalized.slice(0, 497)}...`;
-}
 
 function toMediaSource(args: AnalyzeMediaArgs, resolveReadPath: (path: string) => string): MediaSource {
   if (args.path !== undefined) {

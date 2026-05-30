@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { RuntimeError, isRuntimeError, type RuntimeErrorCode } from "../../runtime/errors.js";
+import { RuntimeError, isRuntimeError } from "../../runtime/errors.js";
 import type { ToolContext } from "../types.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
@@ -25,11 +25,11 @@ export async function persistToolResult({
   try {
     absPath = ctx.policy.resolveWritePath(outPath);
   } catch (error) {
-    if (hasRuntimeCode(error, "PATH_NOT_ALLOWED")) {
+    if (isRuntimeError(error) && error.code === "PATH_NOT_ALLOWED") {
       throw new RuntimeError({
         code: "PATH_NOT_ALLOWED",
         message: `Result path is not writable: ${outPath}. Choose a workspace-writable out_path.`,
-        details: isRuntimeError(error) ? error.details : undefined,
+        details: error.details,
       });
     }
     throw error;
@@ -51,11 +51,4 @@ export async function persistToolResult({
     absPath,
     bytesWritten: Buffer.byteLength(payload, "utf8"),
   };
-}
-
-function hasRuntimeCode(error: unknown, code: RuntimeErrorCode): boolean {
-  return (
-    isRuntimeError(error) ||
-    (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string")
-  ) && (error as { code: string }).code === code;
 }

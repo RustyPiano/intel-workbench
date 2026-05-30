@@ -34,6 +34,7 @@
 - `method` 必须是 `"doubao-asr"`、`"omni"` 或 `"classic-pipeline"`。
 - `transcript` 是给报告使用的校正后转写；ASR 结果可能有错，需结合上下文修正明显误识别。
 - `utterances` 是面向报告的说话轮次，可由 `analyze_audio` 的 `utterances` 归一化而来。
+- `speaker: "unknown"` 表示 ASR 未返回或无法可靠分离说话人，不代表确认存在一个名为 unknown 的人物。
 - `time`/`start`/`end` 用 `MM:SS`，超过 1 小时用 `HH:MM:SS`；分片合并时由脚本转成绝对时间。
 - `talk_ratio` 为该说话人话语时长占比，0~1；如有 `talk_seconds`，合并脚本优先用它重算占比。
 - 只报告媒体中可听到或可观察到的信息。不要臆测真实身份、动机、不可见事实或未出现的因果。

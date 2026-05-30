@@ -75,7 +75,7 @@ describe("callAsr", () => {
       enableSpeakerInfo: true,
       enableEmotionDetection: false,
       audio: { codec: "pcm" },
-      advanced: { extra_flag: true },
+      advanced: { extra_flag: true, show_utterances: false },
       fetch,
       pollDelaysMs: [1],
     });
@@ -232,7 +232,7 @@ describe("callAsr", () => {
         pollDelaysMs: [10_000],
       }),
     ).rejects.toMatchObject({
-      code: "MODEL_ERROR",
+      code: "RUN_ABORTED",
       retriable: true,
       details: { category: "asr" },
     });

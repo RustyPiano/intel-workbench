@@ -1,0 +1,56 @@
+{
+  "skill_name": "intel-bulletin",
+  "evals": [
+    {
+      "id": "intel-positive-sources-to-bulletin",
+      "kind": "positive",
+      "category": "sources-to-bulletin",
+      "should_activate": true,
+      "requires_files": true,
+      "prompt": "把提供的 brief.md 和 memo.txt 整理成一份情报通报，并渲染为公文格式报告。",
+      "expected_output": "Creates or identifies the task, ingests sources, drafts a source-supported bulletin spec, renders, and registers the report.",
+      "required_markers": ["ingest.py", "bulletin.spec.json", "render_report.py"],
+      "forbidden_markers": ["invented classification", "invented doc number"],
+      "files": [
+        "fixtures/intel-bulletin/sources/brief.md",
+        "fixtures/intel-bulletin/sources/memo.txt"
+      ]
+    },
+    {
+      "id": "intel-positive-task-crud",
+      "kind": "positive",
+      "category": "task-crud",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "新建一个情报通报任务，添加两份来源文件，列出任务状态，然后删除一份来源。",
+      "expected_output": "Uses manage_task.py for task CRUD and source-file management without rendering unless requested.",
+      "required_markers": ["manage_task.py", "add-source", "remove-source"],
+      "forbidden_markers": ["generic extraction only"],
+      "files": []
+    },
+    {
+      "id": "intel-positive-uncertain-facts",
+      "kind": "positive",
+      "category": "uncertain-facts",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "来源材料里没有写主送机关、落款和编号，帮我起草情况通报，不要编造这些信息。",
+      "expected_output": "Omits or marks unsupported recipient, classification, document number, issuer, and date as unknown/pending verification.",
+      "required_markers": ["unknown/pending verification", "recipient", "issuer"],
+      "forbidden_markers": ["各相关部门", "情报〔2026〕第000号"],
+      "files": []
+    },
+    {
+      "id": "intel-negative-plain-extraction",
+      "kind": "negative",
+      "category": "negative-plain-extraction",
+      "should_activate": false,
+      "requires_files": false,
+      "prompt": "只把文档里的邮箱地址提取出来，不需要写报告。",
+      "expected_output": "Does not force the intel-bulletin skill because the user asked for plain extraction, not a bulletin or report.",
+      "required_markers": [],
+      "forbidden_markers": ["情报通报", "render_report.py"],
+      "files": []
+    }
+  ]
+}

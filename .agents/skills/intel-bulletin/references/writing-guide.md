@@ -19,6 +19,9 @@
 - 段落短小，一段一意；多用陈述句，少用修饰。
 - 用语客观、严谨、规范，避免主观情绪化表述。
 - 对不确定信息明确标注"待核实""暂不明确"，不臆测。
+- Do not invent classification, document number, recipient, issuer, or date.
+  Use only user-provided or source-supported metadata; otherwise omit the field
+  or mark it as unknown/pending verification when a placeholder is required.
 
 ## 与 spec 字段的对应
 

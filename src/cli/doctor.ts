@@ -34,6 +34,7 @@ export interface DoctorReportInput {
     model?: string;
     baseURL?: string;
     apiKeyConfigured: boolean;
+    timeoutMs?: number;
   };
   lastRun?: Partial<RunMeta> & {
     error_layer?: string;
@@ -117,6 +118,7 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `mm_model\t${input.multimodalPath.model ?? "(unset)"}`,
     `mm_base_url\t${input.multimodalPath.baseURL ?? "(unset)"}`,
     `mm_api_key\t${input.multimodalPath.apiKeyConfigured ? "configured" : "missing"}`,
+    `mm_timeout_ms\t${input.multimodalPath.timeoutMs ?? "(unset)"}`,
   ];
 
   if (input.lastRun) {

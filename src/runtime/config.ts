@@ -22,6 +22,7 @@ export interface RuntimeConfig {
   sessionDir: string;
   maxTurns: number;
   toolTimeoutMs: number;
+  mmTimeoutMs?: number;
   bashTimeoutMs: number;
   maxBashOutputBytes: number;
   readMaxBytes: number;
@@ -97,6 +98,15 @@ function parseNumber(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function parseList(value: string | undefined): string[] | undefined {
   if (!value) {
     return undefined;
@@ -134,6 +144,7 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),
+    mmTimeoutMs: parsePositiveInteger(process.env.MINI_AGENT_MM_TIMEOUT_MS),
     bashTimeoutMs: parseNumber(process.env.MINI_AGENT_BASH_TIMEOUT_MS),
     maxBashOutputBytes: parseNumber(process.env.MINI_AGENT_MAX_BASH_OUTPUT_BYTES),
     readMaxBytes: parseNumber(process.env.MINI_AGENT_READ_MAX_BYTES),

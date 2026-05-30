@@ -13,6 +13,7 @@ const ENV_KEYS = [
   "MINI_AGENT_BASE_URL",
   "MINI_AGENT_API_KEY",
   "MINI_AGENT_SESSION_DIR",
+  "MINI_AGENT_MM_TIMEOUT_MS",
 ];
 
 afterEach(async () => {
@@ -74,5 +75,23 @@ describe("resolveRuntimeConfig", () => {
 
     expect(config.baseURL).toBe("https://cli.example.com/v1");
     expect(config.apiKey).toBe("cli-key");
+  });
+
+  test("parses multimodal timeout from a positive integer env value", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_MM_TIMEOUT_MS = "180000";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.mmTimeoutMs).toBe(180_000);
+  });
+
+  test.each(["0", "-1", "1.5", "abc"])("ignores invalid multimodal timeout env value %s", async (value) => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_MM_TIMEOUT_MS = value;
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.mmTimeoutMs).toBeUndefined();
   });
 });

@@ -185,8 +185,9 @@ Example `mini-agent.config.json`:
 The `probe_media` and `analyze_media` tools let the agent inspect and understand
 video/audio/image files. `analyze_media` calls a separate **multimodal** model so
 a text model can still drive the agent loop. It speaks the OpenAI-compatible
-`/v1/chat/completions` shape, so any omni endpoint works (e.g.
-`qwen3.5-omni-plus` on Alibaba Cloud DashScope).
+`/v1/chat/completions` shape with streaming multimodal content parts. The
+current tested target is `qwen3.5-omni-plus` on Alibaba Cloud DashScope; other
+omni endpoints must support the same request shape.
 
 Configure it independently of the primary connection; `baseURL`/`apiKey` fall
 back to the primary connection when omitted:
@@ -195,13 +196,28 @@ back to the primary connection when omitted:
 export MINI_AGENT_MM_MODEL=qwen3.5-omni-plus
 export MINI_AGENT_MM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 export MINI_AGENT_MM_API_KEY=your-dashscope-key
+# Optional: give long media analysis a larger budget than normal tools.
+export MINI_AGENT_MM_TIMEOUT_MS=180000
 ```
 
-Or in `mini-agent.config.json`: `mmProvider`, `mmModel`, `mmBaseURL`, `mmApiKey`.
+Or in `mini-agent.config.json`: `mmProvider`, `mmModel`, `mmBaseURL`,
+`mmApiKey`, `mmTimeoutMs`.
 
 `analyze_media` stays inactive until `mmModel` is set; verify your setup with
 `npm run dev -- doctor` (see the `[multimodal_path]` section). `probe_media`
 requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
+
+For DashScope Qwen-Omni local files, `analyze_media` sends inline Base64 content
+and enforces DashScope's requirement that the encoded payload is under 10MB.
+For larger local audio/video files, run the A/V skill's `split_media.py` or
+compress the file before analysis. If the user already has a public media URL,
+`analyze_media` can send that URL directly; URL calls require `kind`, and audio
+URLs also require `format`. The repo does not upload files to OSS automatically.
+
+`qwen3.5-omni-plus` does not provide native structured output on this path, so
+`want_json` uses prompt-plus-parse. A/V report workflows should run
+`validate_analysis.py` before merge/render; unparseable model output is rejected
+so the agent can retry once or produce degraded output.
 
 ## CLI Surface
 

@@ -101,6 +101,7 @@ describe("doctor helpers", () => {
         model: "qwen3.5-omni-plus",
         baseURL: "https://dashscope.example.com/v1",
         apiKeyConfigured: true,
+        timeoutMs: 180_000,
       },
       lastRun: {
         run_id: "run_123",
@@ -129,6 +130,7 @@ describe("doctor helpers", () => {
     expect(report).toContain("[last_run]");
     expect(report).toContain("smoke_configured\tyes");
     expect(report).toContain("mm_model\tqwen3.5-omni-plus");
+    expect(report).toContain("mm_timeout_ms\t180000");
     expect(report).toContain("corrupted_sessions\t1");
     expect(report).toContain("run_id\trun_123");
     expect(report).toContain("first_error_code\tprovider_quota_error");

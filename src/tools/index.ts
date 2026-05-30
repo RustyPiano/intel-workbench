@@ -105,20 +105,22 @@ export class ToolRegistry {
     const handleAbort = () => controller.abort();
     ctx.signal.addEventListener("abort", handleAbort, { once: true });
 
+    const timeoutMs =
+      tool.name === "analyze_media" && ctx.config.mmTimeoutMs ? ctx.config.mmTimeoutMs : ctx.config.toolTimeoutMs;
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
       timeoutHandle = setTimeout(() => {
         controller.abort();
         resolve({
           ok: false,
-          content: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+          content: `Tool ${tool.name} timed out after ${timeoutMs}ms`,
           error: {
             code: "TOOL_TIMEOUT",
-            message: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+            message: `Tool ${tool.name} timed out after ${timeoutMs}ms`,
             retriable: true,
           },
         });
-      }, ctx.config.toolTimeoutMs);
+      }, timeoutMs);
     });
 
     const executionPromise: Promise<ToolExecutionResult> = tool

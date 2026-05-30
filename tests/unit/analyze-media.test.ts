@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
 import { ToolRegistry } from "../../src/tools/index.js";
 import type { MultimodalToolConfig, ToolContext } from "../../src/tools/types.js";
 
@@ -24,7 +25,11 @@ async function createWorkspaceWithMedia(): Promise<{ root: string; mediaPath: st
   return { root, mediaPath };
 }
 
-function createContext(workspaceRoot: string, multimodal?: MultimodalToolConfig): ToolContext {
+function createContext(
+  workspaceRoot: string,
+  multimodal?: MultimodalToolConfig,
+  fileMutationQueue?: FileMutationQueue,
+): ToolContext {
   return {
     workspaceRoot,
     sessionId: "sess_test",
@@ -41,6 +46,7 @@ function createContext(workspaceRoot: string, multimodal?: MultimodalToolConfig)
       readMaxBytes: 256 * 1024,
       multimodal,
     },
+    fileMutationQueue,
   };
 }
 
@@ -49,14 +55,17 @@ describe("analyzeMediaTool", () => {
     const { root } = await createWorkspaceWithMedia();
     const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
 
-    const result = await analyzeMediaTool.execute({ path: "clip.mp4", instruction: "x" }, createContext(root));
+    const result = await analyzeMediaTool.execute(
+      { path: "clip.mp4", instruction: "x", out_path: "analysis/clip.json" },
+      createContext(root),
+    );
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({ code: "MODEL_ERROR" });
     expect(result.content).toMatch(/not configured/u);
   });
 
-  test("delegates to callOmni and surfaces text + parsed json", async () => {
+  test("delegates to callOmni and writes text + parsed json to out_path", async () => {
     const { root, mediaPath } = await createWorkspaceWithMedia();
     const calls: unknown[] = [];
     vi.doMock("../../src/model/multimodal.js", () => ({
@@ -80,18 +89,37 @@ describe("analyzeMediaTool", () => {
       apiKey: "k",
     };
     const result = await analyzeMediaTool.execute(
-      { path: "clip.mp4", instruction: "List events", want_json: true },
-      createContext(root, multimodal),
+      { path: "clip.mp4", instruction: "List events", out_path: "analysis/clip.json", want_json: true },
+      createContext(root, multimodal, new FileMutationQueue()),
     );
 
     expect(result.ok).toBe(true);
-    expect(result.content).toBe("{\"events\":[]}");
+    expect(result.content).toMatch(/wrote result to .*clip\.json/u);
+    expect(result.content).not.toContain("{\"events\":[]}");
+    const written = JSON.parse(await readFile(path.join(root, "analysis/clip.json"), "utf8")) as unknown;
+    expect(written).toEqual({
+      source: { type: "file", path: mediaPath },
+      kind: "video",
+      model: "qwen3.5-omni-plus",
+      text: "{\"events\":[]}",
+      json: { events: [] },
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
     expect(result.meta).toMatchObject({
       source: { type: "file", path: mediaPath },
       kind: "video",
       model: "qwen3.5-omni-plus",
-      json: { events: [] },
+      outPath: path.join(root, "analysis/clip.json"),
+      usage: { inputTokens: 10, outputTokens: 5 },
     });
+    expect(result.meta).not.toHaveProperty("json");
+    expect(result.artifacts).toEqual([
+      {
+        type: "file",
+        path: "analysis/clip.json",
+        description: "analyze_media result",
+      },
+    ]);
     expect(calls[0]).toMatchObject({
       config: multimodal,
       source: { type: "file", path: mediaPath },
@@ -127,6 +155,7 @@ describe("analyzeMediaTool", () => {
         kind: "audio",
         format: "wav",
         instruction: "Transcribe",
+        out_path: "analysis/audio.json",
       },
       createContext(root, multimodal),
     );
@@ -135,6 +164,7 @@ describe("analyzeMediaTool", () => {
     expect(result.meta).toMatchObject({
       source: { type: "url", url: "https://example.com/talk.wav", kind: "audio", format: "wav" },
       kind: "audio",
+      outPath: path.join(root, "analysis/audio.json"),
     });
     expect(calls[0]).toMatchObject({
       source: { type: "url", url: "https://example.com/talk.wav", kind: "audio", format: "wav" },
@@ -163,6 +193,7 @@ describe("analyzeMediaTool", () => {
         kind: "audio",
         format: "3gpp",
         instruction: "Transcribe",
+        out_path: "analysis/audio-3gpp.json",
       },
       createContext(root, {
         provider: "openai-compatible",
@@ -211,6 +242,7 @@ describe("analyzeMediaTool", () => {
           kind: null,
           format: null,
           instruction: "Summarize",
+          out_path: "analysis/path.json",
           want_json: null,
         },
       },
@@ -226,6 +258,7 @@ describe("analyzeMediaTool", () => {
           kind: "video",
           format: null,
           instruction: "Summarize",
+          out_path: "analysis/url.json",
           want_json: null,
         },
       },
@@ -241,6 +274,7 @@ describe("analyzeMediaTool", () => {
           kind: null,
           format: "exe",
           instruction: "Summarize",
+          out_path: "analysis/path-format.json",
           want_json: null,
         },
       },
@@ -257,12 +291,36 @@ describe("analyzeMediaTool", () => {
   });
 
   test.each([
-    ["both path and url", { path: "clip.mp4", url: "https://example.com/clip.mp4", kind: "video", instruction: "x" }],
-    ["neither path nor url", { instruction: "x" }],
-    ["URL without kind", { url: "https://example.com/clip.mp4", instruction: "x" }],
-    ["audio URL without format", { url: "https://example.com/talk.wav", kind: "audio", instruction: "x" }],
-    ["unsupported kind", { url: "https://example.com/clip.mp4", kind: "document", instruction: "x" }],
-    ["unsupported audio format", { url: "https://example.com/talk.exe", kind: "audio", format: "exe", instruction: "x" }],
+    [
+      "both path and url",
+      {
+        path: "clip.mp4",
+        url: "https://example.com/clip.mp4",
+        kind: "video",
+        instruction: "x",
+        out_path: "analysis/invalid.json",
+      },
+    ],
+    ["neither path nor url", { instruction: "x", out_path: "analysis/invalid.json" }],
+    ["URL without kind", { url: "https://example.com/clip.mp4", instruction: "x", out_path: "analysis/invalid.json" }],
+    [
+      "audio URL without format",
+      { url: "https://example.com/talk.wav", kind: "audio", instruction: "x", out_path: "analysis/invalid.json" },
+    ],
+    [
+      "unsupported kind",
+      { url: "https://example.com/clip.mp4", kind: "document", instruction: "x", out_path: "analysis/invalid.json" },
+    ],
+    [
+      "unsupported audio format",
+      {
+        url: "https://example.com/talk.exe",
+        kind: "audio",
+        format: "exe",
+        instruction: "x",
+        out_path: "analysis/invalid.json",
+      },
+    ],
   ])("rejects invalid source arguments: %s", async (_name, args) => {
     const { root } = await createWorkspaceWithMedia();
     let called = false;

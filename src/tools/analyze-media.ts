@@ -4,6 +4,7 @@ import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
 import { callOmni } from "../model/multimodal.js";
 import { isSupportedAudioUrlFormat, MEDIA_KINDS, type MediaSource } from "../model/media-source.js";
 import type { RuntimeTool } from "./types.js";
+import { persistToolResult } from "./utils/persist-result.js";
 
 const analyzeMediaArgsSchema = z
   .object({
@@ -20,10 +21,18 @@ const analyzeMediaArgsSchema = z
       .describe(
         "What to analyze, e.g. 'List key events with MM:SS timestamps' or 'Identify speakers and their emotion at each turn'.",
       ),
+    out_path: z
+      .string()
+      .min(1)
+      .describe(
+        "Workspace-relative path where the full result JSON is written. You choose it (e.g. `av-tasks/<id>/analysis/clip.json`).",
+      ),
     want_json: z
       .boolean()
       .optional()
-      .describe("Ask the model to return strict JSON. Describe the desired fields in `instruction`."),
+      .describe(
+        "Ask the model to return strict JSON. Describe the desired fields in `instruction`; parsed JSON is written into the result file, not returned inline.",
+      ),
   })
   .superRefine((value, ctx) => {
     const hasPath = value.path !== undefined;
@@ -65,14 +74,14 @@ interface AnalyzeMediaData {
   source: MediaSource;
   kind: string;
   model: string;
-  json?: unknown;
+  outPath: string;
   usage?: { inputTokens?: number; outputTokens?: number };
 }
 
 export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> = {
   name: "analyze_media",
   description:
-    "Analyze a video/audio/image file or public URL with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Returns the model's text (or JSON when want_json is set).",
+    "Analyze a video/audio/image file or public URL with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Writes the full result (model text + parsed JSON) to `out_path` and returns a short summary; read `out_path` for the complete output.",
   inputSchema: analyzeMediaArgsSchema,
   async execute(args, ctx) {
     try {
@@ -93,17 +102,48 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
         jsonMode: args.want_json === true,
         signal: ctx.signal,
       });
+      const envelope = {
+        source,
+        kind: result.kind,
+        model: result.model,
+        text: result.text,
+        json: result.json,
+        usage: result.usage,
+      };
+
+      let persisted: Awaited<ReturnType<typeof persistToolResult>>;
+      try {
+        persisted = await persistToolResult({
+          ctx,
+          outPath: args.out_path,
+          data: envelope,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to persist analyze_media result";
+        return {
+          ok: false,
+          content: `${message}. Model output preview: ${truncatePreview(result.text)}`,
+          error: toRuntimeErrorShape(error, "INTERNAL_ERROR"),
+        };
+      }
 
       return {
         ok: true,
-        content: result.text,
+        content: `Analyzed ${result.kind} with ${result.model}; wrote result to ${persisted.absPath} (${persisted.bytesWritten} bytes).\nRead ${args.out_path} for the complete output.`,
         meta: {
           source,
           kind: result.kind,
           model: result.model,
-          json: result.json,
+          outPath: persisted.absPath,
           usage: result.usage,
         },
+        artifacts: [
+          {
+            type: "file",
+            path: args.out_path,
+            description: "analyze_media result",
+          },
+        ],
       };
     } catch (error) {
       return {
@@ -114,6 +154,14 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
     }
   },
 };
+
+function truncatePreview(text: string): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= 500) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 497)}...`;
+}
 
 function toMediaSource(args: AnalyzeMediaArgs, resolveReadPath: (path: string) => string): MediaSource {
   if (args.path !== undefined) {

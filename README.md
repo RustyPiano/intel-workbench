@@ -180,14 +180,19 @@ Example `mini-agent.config.json`:
 }
 ```
 
-## Multimodal Connection (media tools)
+## Media Tool Connections
 
-The `probe_media` and `analyze_media` tools let the agent inspect and understand
-video/audio/image files. `analyze_media` calls a separate **multimodal** model so
-a text model can still drive the agent loop. It speaks the OpenAI-compatible
-`/v1/chat/completions` shape with streaming multimodal content parts. The
-current tested target is `qwen3.5-omni-plus` on Alibaba Cloud DashScope; other
-omni endpoints must support the same request shape.
+The `probe_media`, `analyze_media`, and `analyze_audio` tools let the agent
+inspect and understand media while the runtime itself remains text-only.
+`analyze_media` is for video/image multimodal analysis. `analyze_audio` is the
+dedicated pure-audio path and uses Doubao recording ASR (`volc.seedasr.auc`).
+
+Both media analysis tools use a write-to-file contract: the agent must provide
+`out_path`, the full result JSON is written there, and the tool returns only a
+short summary plus the path. The agent reads the file when it needs the full
+transcript, utterances, model text, or parsed JSON.
+
+### Multimodal video/image
 
 Configure it independently of the primary connection; `baseURL`/`apiKey` fall
 back to the primary connection when omitted:
@@ -210,14 +215,42 @@ requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
 For DashScope Qwen-Omni local files, `analyze_media` sends inline Base64 content
 and enforces DashScope's requirement that the encoded payload is under 10MB.
 For larger local audio/video files, run the A/V skill's `split_media.py` or
-compress the file before analysis. If the user already has a public media URL,
-`analyze_media` can send that URL directly; URL calls require `kind`, and audio
-URLs also require `format`. The repo does not upload files to OSS automatically.
+compress the file before analysis. If the user already has a public video/image
+URL, `analyze_media` can send that URL directly; URL calls require `kind`.
 
 `qwen3.5-omni-plus` does not provide native structured output on this path, so
 `want_json` uses prompt-plus-parse. A/V report workflows should run
 `validate_analysis.py` before merge/render; unparseable model output is rejected
 so the agent can retry once or produce degraded output.
+
+### Doubao audio ASR
+
+Pure audio uses `analyze_audio` with a public audio URL plus explicit `format`
+such as `mp3`, `wav`, `ogg`, or `pcm`. Local audio upload/publishing is a TODO;
+the repo does not upload local audio automatically.
+
+Doubao ASR auth is separate from the primary text connection and the multimodal
+connection. Configure either API-key auth or app-key/access-key auth:
+
+```bash
+export MINI_AGENT_ASR_API_KEY=your-doubao-api-key
+# or:
+export MINI_AGENT_ASR_APP_KEY=your-doubao-app-key
+export MINI_AGENT_ASR_ACCESS_KEY=your-doubao-access-key
+
+# Optional:
+export MINI_AGENT_ASR_APP_ID=your-app-id
+export MINI_AGENT_ASR_RESOURCE_ID=volc.seedasr.auc
+export MINI_AGENT_ASR_BASE_URL=https://openspeech.bytedance.com
+export MINI_AGENT_ASR_TIMEOUT_MS=180000
+```
+
+Or in `mini-agent.config.json`: `asrAppId`, `asrApiKey`, `asrAccessKey`,
+`asrAppKey`, `asrResourceId`, `asrBaseURL`, `asrTimeoutMs`.
+
+The ASR client submits a recording task, then polls until completion; tune
+`asrTimeoutMs` for long recordings. Verify setup with `npm run dev -- doctor`
+and the `[asr_path]` section.
 
 ## CLI Surface
 

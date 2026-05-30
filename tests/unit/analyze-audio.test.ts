@@ -23,7 +23,12 @@ async function createWorkspace(): Promise<string> {
   return root;
 }
 
-function createContext(workspaceRoot: string, asr?: AsrToolConfig, fileMutationQueue?: FileMutationQueue): ToolContext {
+function createContext(
+  workspaceRoot: string,
+  asr?: AsrToolConfig,
+  fileMutationQueue?: FileMutationQueue,
+  readOnly = false,
+): ToolContext {
   return {
     workspaceRoot,
     sessionId: "sess_test",
@@ -32,7 +37,7 @@ function createContext(workspaceRoot: string, asr?: AsrToolConfig, fileMutationQ
     signal: new AbortController().signal,
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     skillRegistry: undefined,
-    policy: createPolicyEngine({ workspaceRoot }),
+    policy: createPolicyEngine({ workspaceRoot, readOnly }),
     config: {
       toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,
@@ -155,6 +160,7 @@ describe("analyzeAudioTool", () => {
     expect(result.content).toMatch(/2 utterances/u);
     expect(result.content).toMatch(/2400ms/u);
     expect(result.content).toMatch(/2 speakers/u);
+    expect(result.content).toMatch(/best effort/u);
     expect(result.content).toMatch(/analysis\/audio\.json/u);
     const written = JSON.parse(await readFile(path.join(root, "analysis/audio.json"), "utf8")) as unknown;
     expect(written).toEqual({
@@ -194,6 +200,45 @@ describe("analyzeAudioTool", () => {
       advanced: { enable_itn: false },
     });
     expect(calls[0]).toHaveProperty("signal");
+  });
+
+  test("reports persistence failures without losing the ASR preview", async () => {
+    const root = await createWorkspace();
+    vi.doMock("../../src/model/asr.js", () => ({
+      callAsr: async () => ({
+        text: "The transcript was produced before the write failed.",
+        durationMs: 1000,
+        utterances: [{ startMs: 0, endMs: 1000, text: "The transcript was produced before the write failed." }],
+        raw: { ok: true },
+      }),
+    }));
+    const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+
+    const result = await analyzeAudioTool.execute(
+      {
+        url: "https://example.com/talk.wav",
+        format: "wav",
+        out_path: "analysis/audio.json",
+        speaker: true,
+        emotion: true,
+      },
+      createContext(
+        root,
+        {
+          baseURL: "https://openspeech.bytedance.com",
+          resourceId: "volc.seedasr.auc",
+          apiKey: "k",
+        },
+        undefined,
+        true,
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "PATH_NOT_ALLOWED" });
+    expect(result.content).toMatch(/not writable/u);
+    expect(result.content).toMatch(/ASR output preview/u);
+    expect(result.content).toMatch(/transcript was produced/u);
   });
 
   test("defaults speaker and emotion to true through ToolRegistry", async () => {

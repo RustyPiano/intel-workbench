@@ -107,6 +107,14 @@ export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
       throw asrStatusError(statusCode, response);
     }
   } catch (error) {
+    if (isAbortError(error, params.signal)) {
+      throw new RuntimeError({
+        code: "RUN_ABORTED",
+        message: "Doubao ASR request was aborted.",
+        retriable: true,
+        details: { category: "asr" },
+      });
+    }
     if (error instanceof RuntimeError) {
       throw error;
     }
@@ -155,6 +163,7 @@ function buildSubmitBody(params: CallAsrParams): JsonObject {
     request.context = { hotwords: params.hotwords };
   }
   Object.assign(request, params.advanced ?? {});
+  request.show_utterances = true;
 
   return {
     user: params.user ?? params.config.appId ?? "mini-agent",
@@ -363,4 +372,8 @@ function toAsrNetworkError(error: unknown): RuntimeError {
     retriable: true,
     details: { category: "asr" },
   });
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
 }

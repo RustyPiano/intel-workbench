@@ -80,18 +80,30 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
         ...(result.degradedNote ? { degradedNote: result.degradedNote } : {}),
       };
 
-      const persisted = await persistToolResult({
-        ctx,
-        outPath: args.out_path,
-        data: envelope,
-      });
+      let persisted: Awaited<ReturnType<typeof persistToolResult>>;
+      try {
+        persisted = await persistToolResult({
+          ctx,
+          outPath: args.out_path,
+          data: envelope,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to persist analyze_audio result";
+        return {
+          ok: false,
+          content: `${message}. ASR output preview: ${truncatePreview(result.text)}`,
+          error: toRuntimeErrorShape(error, "INTERNAL_ERROR"),
+        };
+      }
+
       const utteranceCount = result.utterances.length;
       const speakerCount = countSpeakers(result.utterances);
       const durationSummary = result.durationMs === undefined ? "unknown duration" : `${result.durationMs}ms`;
+      const degradedSummary = result.degradedNote ? ` Degraded note: ${result.degradedNote}` : "";
 
       return {
         ok: true,
-        content: `Analyzed audio with Doubao ASR: ${utteranceCount} utterances, ${durationSummary}, ${speakerCount} speakers. Wrote result to ${persisted.absPath}; read ${args.out_path} for transcript and utterances.`,
+        content: `Analyzed audio with Doubao ASR: ${utteranceCount} utterances, ${durationSummary}, ${speakerCount} speakers.${degradedSummary} Wrote result to ${persisted.absPath}; read ${args.out_path} for transcript and utterances.`,
         meta: {
           outPath: persisted.absPath,
           durationMs: result.durationMs,
@@ -143,4 +155,12 @@ function parseAdvanced(value: string | undefined): Record<string, unknown> | und
 
 function countSpeakers(utterances: Array<{ speaker?: string }>): number {
   return new Set(utterances.map((utterance) => utterance.speaker).filter((speaker): speaker is string => Boolean(speaker))).size;
+}
+
+function truncatePreview(text: string): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= 500) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 497)}...`;
 }

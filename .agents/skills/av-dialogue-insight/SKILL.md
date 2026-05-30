@@ -1,7 +1,7 @@
 ---
 name: av-dialogue-insight
 description: Analyze dialogue-heavy video/audio such as meeting recordings, interviews, calls, surveillance or captured conversation video, 会议录音, 访谈, 电话录音, 监控对话视频, 情绪时间线, and 关键触发点. Use when the user wants timestamped events, speaker profiles, multimodal emotion, trigger-point explanation, and a structured report. Do not use for generic image/video captioning without dialogue or conversation analysis.
-compatibility: Audio URLs require analyze_audio with Doubao ASR configuration; video/image uses analyze_media with MINI_AGENT_MM_MODEL. Local audio upload is TODO/URL-only for now. probe_media requires ffprobe; scripts require Python 3.11+.
+compatibility: analyze_audio needs Doubao ASR config (MINI_AGENT_ASR_*) and a public audio URL; analyze_media needs MINI_AGENT_MM_MODEL. probe_media needs ffprobe; scripts need Python 3.11+.
 allowed-tools: read write edit bash activate_skill probe_media analyze_audio analyze_media
 metadata:
   author: mini-agent
@@ -28,21 +28,22 @@ av-tasks/<task-id>/
 
 ## Routing
 
-1. **Public audio URL:** call
-   `analyze_audio({ url, format, out_path: "av-tasks/<id>/raw/asr.json" })`.
-   Audio is URL-only for now; local audio publishing/upload is an explicit TODO.
+1. **Public audio URL:** call `analyze_audio({ url, format })` (audio is URL-only;
+   see "Long Or Local Media" for local files).
 2. **Video or image:** call `probe_media` for local media, then
-   `analyze_media({ path or url, kind, instruction, want_json: true, out_path: "av-tasks/<id>/raw/media.json" })`.
-   For public video URLs, provide `kind: "video"` and still name `out_path`.
-3. Both media tools write the full result to the `out_path` you name and return
-   only a short summary. Read the written file before analysis; do not expect
-   large transcripts, utterances, model text, or parsed JSON inline.
+   `analyze_media({ path or url, kind, instruction, want_json: true })`. For
+   public video URLs, provide `kind: "video"`.
+3. Both media tools return their result inline by default. For long transcripts,
+   pass `out_path: "av-tasks/<id>/raw/asr.json"` to persist the full result and
+   read that file before analysis instead of carrying it in the conversation.
 
 ## Analysis Workflow
 
-1. Read the media result file. For audio ASR, use `transcript`/`text` and
-   `utterances`; for video, use the model text/JSON from `analyze_media`.
-2. For reproducible speaker timing and emotion counts, run:
+1. Take the media result from the tool output (or read `out_path` if you
+   persisted it). For audio ASR, use `text` and `utterances`; for video, use the
+   model text/JSON from `analyze_media`.
+2. For reproducible speaker timing and emotion counts, persist the ASR result to
+   `av-tasks/<id>/raw/asr.json` and run:
    `python3 .agents/skills/av-dialogue-insight/scripts/audio_stats.py av-tasks/<id>/raw/asr.json`
    Add `--offset-seconds <n>` when converting a chunk's relative utterance times
    to absolute media times.
@@ -60,8 +61,14 @@ av-tasks/<task-id>/
 ## Long Or Local Media
 
 - For large local video, use `probe_media`; if it recommends splitting, run
-  `split_media.py`, analyze each chunk to its own `out_path`, then use
-  `merge_chunks.py` after validating per-chunk analysis JSON.
+  `split_media.py` (writes `chunks.json` + `chunk0.<ext>`, `chunk1.<ext>`, …),
+  analyze each chunk with `out_path`, then merge. Two merge modes:
+  - `merge_chunks.py --manifest chunks.json --analysis-dir <dir> <out.json>` —
+    requires each chunk's analysis JSON to be named after the chunk file:
+    `chunk0.<ext>` → `chunk0.json` in `<dir>`.
+  - `merge_chunks.py <out.json> <offset_seconds>:<chunk0.json> …` — explicit
+    offsets, any filenames.
+  Validate each chunk analysis with `validate_analysis.py` before merging.
 - Local audio is not uploaded automatically. Ask for a public URL or note the
   TODO for a future publish-media helper.
 - If `analyze_media` repeatedly fails for local video/audio, the classic
@@ -83,7 +90,7 @@ av-tasks/<task-id>/
 
 ## Resources
 
-- `references/analysis-schema.md` — final analysis JSON schema and prompts.
+- `references/analysis-schema.md` — final analysis JSON schema + emotion→valence table.
 - `scripts/audio_stats.py` — deterministic talk ratio, emotion counts, absolute utterance times.
 - `scripts/render_report.py` — analysis JSON to report.
 - `scripts/merge_chunks.py` — merge per-chunk analysis with timestamp offsets.

@@ -35,7 +35,7 @@
 - `transcript` 是给报告使用的校正后转写；ASR 结果可能有错，需结合上下文修正明显误识别。
 - `utterances` 是面向报告的说话轮次，可由 `analyze_audio` 的 `utterances` 归一化而来。
 - `speaker: "unknown"` 表示 ASR 未返回或无法可靠分离说话人，不代表确认存在一个名为 unknown 的人物。
-- `time`/`start`/`end` 用 `MM:SS`，超过 1 小时用 `HH:MM:SS`；分片合并时由脚本转成绝对时间。
+- `time`/`start`/`end` 用 `MM:SS`，超过 1 小时用 `HH:MM:SS`。分析单个分片时，时间相对该分片起点（0 起算），由 `merge_chunks.py` 按 offset 转成绝对时间。
 - `talk_ratio` 为该说话人话语时长占比，0~1；如有 `talk_seconds`，合并脚本优先用它重算占比。
 - 只报告媒体中可听到或可观察到的信息。不要臆测真实身份、动机、不可见事实或未出现的因果。
 
@@ -50,18 +50,3 @@
 | happy | +0.6 | 正向 |
 
 未知情绪可保留原标签，`valence` 用上下文估计；不确定时设为 `0` 并在 `note` 标明。
-
-## 推荐提示词
-
-**音频 ASR 结果综合分析：**
-
-> 根据已读取的 `analyze_audio` 结果文件和 `audio_stats.py` 统计，输出 JSON：
-> media、method="doubao-asr"、duration_seconds、transcript、utterances(start,end,speaker,text,emotion)、
-> summary、events(time,title,detail)、speakers(id,label,talk_ratio,talk_seconds,profile)、
-> emotion_timeline(time,speaker,emotion,valence,note)、key_triggers(time,description,evidence)。
-> 修正明显 ASR 误识别，但不要编造听不出的内容。
-
-**视频/多模态综合分析：**
-
-> 分析这段视频对话，输出同一 JSON schema，method="omni"。时间用 MM:SS，相对片段起点。
-> 只基于可见/可听证据，不确定的身份、动机或原因写 unknown/pending verification。

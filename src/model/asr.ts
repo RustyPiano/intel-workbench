@@ -150,7 +150,6 @@ function buildHeaders(config: AsrClientConfig, requestId: string): Record<string
 function buildSubmitBody(params: CallAsrParams): JsonObject {
   const request: JsonObject = {
     model_name: "bigmodel",
-    show_utterances: true,
     enable_punc: true,
     enable_itn: true,
     enable_speaker_info: params.enableSpeakerInfo ?? true,
@@ -163,6 +162,8 @@ function buildSubmitBody(params: CallAsrParams): JsonObject {
     request.context = { hotwords: params.hotwords };
   }
   Object.assign(request, params.advanced ?? {});
+  // `show_utterances` is pinned on: normalizeAsrResult depends on the utterance
+  // list, so `advanced` cannot disable it (other request fields stay overridable).
   request.show_utterances = true;
 
   return {

@@ -25,14 +25,15 @@ const analyzeMediaArgsSchema = z
     out_path: z
       .string()
       .min(1)
+      .optional()
       .describe(
-        "Workspace-relative path where the full result JSON is written. You choose it (e.g. `av-tasks/<id>/analysis/clip.json`).",
+        "Optional. Workspace-relative path to persist the full result JSON (e.g. `av-tasks/<id>/analysis/clip.json`); the tool then returns a short summary to read back. Omit to get the analysis inline — prefer that for images and short clips; name a path for long transcripts to keep the conversation small.",
       ),
     want_json: z
       .boolean()
       .optional()
       .describe(
-        "Ask the model to return strict JSON. Describe the desired fields in `instruction`; parsed JSON is written into the result file, not returned inline.",
+        "Ask the model to return strict JSON. Describe the desired fields in `instruction`. The JSON is validated either way: it is returned inline, or written to `out_path` when set.",
       ),
   })
   .superRefine((value, ctx) => {
@@ -75,14 +76,14 @@ interface AnalyzeMediaData {
   source: MediaSource;
   kind: string;
   model: string;
-  outPath: string;
+  outPath?: string;
   usage?: { inputTokens?: number; outputTokens?: number };
 }
 
 export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> = {
   name: "analyze_media",
   description:
-    "Analyze a video/audio/image file or public URL with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Writes the full result (model text + parsed JSON) to `out_path` and returns a short summary; read `out_path` for the complete output.",
+    "Analyze a video/audio/image file or public URL with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Returns the model's analysis inline by default; pass `out_path` to persist the full result (text + parsed JSON) and get a short summary back instead — prefer that for long transcripts.",
   inputSchema: analyzeMediaArgsSchema,
   async execute(args, ctx) {
     try {
@@ -103,6 +104,14 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
         jsonMode: args.want_json === true,
         signal: ctx.signal,
       });
+      if (args.out_path === undefined) {
+        return {
+          ok: true,
+          content: result.text,
+          meta: { source, kind: result.kind, model: result.model, usage: result.usage },
+        };
+      }
+
       const envelope = {
         source,
         kind: result.kind,
@@ -156,24 +165,22 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
   },
 };
 
+// `analyzeMediaArgsSchema.superRefine` already guarantees exactly one of
+// path/url, a kind for URLs, and a format for audio URLs. The branches below
+// only re-narrow those guarantees for the typed `MediaSource`; the trailing
+// throw is an unreachable invariant guard.
 function toMediaSource(args: AnalyzeMediaArgs, resolveReadPath: (path: string) => string): MediaSource {
   if (args.path !== undefined) {
     return { type: "file", path: resolveReadPath(args.path) };
   }
-  if (args.url !== undefined && args.kind !== undefined) {
-    if (args.kind === "audio") {
-      if (args.format === undefined) {
-        throw new RuntimeError({
-          code: "INVALID_ARGS",
-          message: "format is required for audio URL inputs.",
-        });
-      }
-      return { type: "url", url: args.url, kind: "audio", format: args.format.toLowerCase() };
-    }
+  if (args.url !== undefined && args.kind === "audio" && args.format !== undefined) {
+    return { type: "url", url: args.url, kind: "audio", format: args.format.toLowerCase() };
+  }
+  if (args.url !== undefined && (args.kind === "video" || args.kind === "image")) {
     return { type: "url", url: args.url, kind: args.kind };
   }
   throw new RuntimeError({
     code: "INVALID_ARGS",
-    message: "Provide exactly one of path or url.",
+    message: "Provide exactly one of path or url, with a kind for URLs and a format for audio URLs.",
   });
 }

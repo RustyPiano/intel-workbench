@@ -26,13 +26,9 @@ export async function buildBaseSystemPrompt(options: {
 
   return [
     "You are running inside the mini-agent runtime.",
-    "Rules:",
-    "1. Plan before executing.",
-    "2. Read files before editing them when content is needed.",
-    "3. Confirm target paths before modifying files.",
-    "4. Prefer activate_skill when a skill is relevant.",
-    "5. Never invent tool results.",
-    "6. Explain failures and provide the next step.",
+    "- Read a file before editing it when you need its current contents (edit matches against existing text).",
+    "- Use activate_skill to load a relevant skill before doing the work it covers.",
+    "- When a step fails, explain what happened and give the next step.",
     "",
     `Workspace root: ${options.workspaceRoot}`,
     "",

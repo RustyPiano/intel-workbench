@@ -19,10 +19,10 @@
       "category": "oversized-media-planning",
       "should_activate": true,
       "requires_files": false,
-      "prompt": "这个监控对话视频很大，帮我规划如何分片分析并合并成一份情绪和触发点报告。",
-      "expected_output": "Uses probe_media recommendations, split_media.py, per-chunk analysis, validation, merge_chunks.py, and report rendering.",
-      "required_markers": ["recommendedTransport", "split_media.py", "merge_chunks.py"],
-      "forbidden_markers": ["OSS upload required"],
+      "prompt": "这个监控对话视频很大，超出内联上限，帮我规划怎么分析并产出情绪和触发点报告。",
+      "expected_output": "Checks probe_media size, then analyzes a small file inline as Base64 or uploads large media to a public URL (e.g. Volcano Engine TOS) and analyzes that URL with analyze_media.",
+      "required_markers": ["probe_media", "analyze_media"],
+      "forbidden_markers": ["split_media.py", "merge_chunks.py"],
       "files": []
     },
     {
@@ -32,8 +32,8 @@
       "should_activate": true,
       "requires_files": false,
       "prompt": "帮我分析电话录音里的说话人情绪，但现在没有配置多模态模型。",
-      "expected_output": "Explains required MINI_AGENT_MM_* settings or local-file classic fallback with degraded output.",
-      "required_markers": ["MINI_AGENT_MM_MODEL", "fallback_pipeline.py", "degraded"],
+      "expected_output": "Explains the required MINI_AGENT_MM_* (video) or MINI_AGENT_ASR_* (audio) connection settings instead of inventing analysis.",
+      "required_markers": ["MINI_AGENT_MM_MODEL"],
       "forbidden_markers": ["configured by default"],
       "files": []
     },

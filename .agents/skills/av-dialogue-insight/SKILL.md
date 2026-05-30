@@ -29,7 +29,7 @@ av-tasks/<task-id>/
 ## Routing
 
 1. **Public audio URL:** call `analyze_audio({ url, format })` (audio is URL-only;
-   see "Long Or Local Media" for local files).
+   see "Large Or Local Media" for local files).
 2. **Video or image:** call `probe_media` for local media, then
    `analyze_media({ path or url, kind, instruction, want_json: true })`. For
    public video URLs, provide `kind: "video"`.
@@ -58,24 +58,16 @@ av-tasks/<task-id>/
    `python3 .agents/skills/av-dialogue-insight/scripts/render_report.py av-tasks/<id>/analysis/analysis.json av-tasks/<id>/report/report`
    Add `--docx` when the user asks for a Word document.
 
-## Long Or Local Media
+## Large Or Local Media
 
-- For large local video, use `probe_media`; if it recommends splitting, run
-  `split_media.py` (writes `chunks.json` + `chunk0.<ext>`, `chunk1.<ext>`, …),
-  analyze each chunk with `out_path`, then merge. Two merge modes:
-  - `merge_chunks.py --manifest chunks.json --analysis-dir <dir> <out.json>` —
-    requires each chunk's analysis JSON to be named after the chunk file:
-    `chunk0.<ext>` → `chunk0.json` in `<dir>`.
-  - `merge_chunks.py <out.json> <offset_seconds>:<chunk0.json> …` — explicit
-    offsets, any filenames.
-  Validate each chunk analysis with `validate_analysis.py` before merging.
-- Local audio is not uploaded automatically. Ask for a public URL or note the
-  TODO for a future publish-media helper.
-- If `analyze_media` repeatedly fails for local video/audio, the classic
-  fallback is:
-  `python3 .agents/skills/av-dialogue-insight/scripts/fallback_pipeline.py <media> av-tasks/<id>/analysis/analysis.json`
-  The fallback is degraded and requires local ffmpeg plus optional
-  Whisper/pyannote.
+- Run `probe_media` first; its `inline_base64_allowed` tells you whether a local
+  file fits the inline limit.
+- Small local video/image (within the inline limit): pass `path` to
+  `analyze_media` — it is sent inline as Base64.
+- Large media, or any local audio: it must be reachable as a public URL. Upload
+  it to object storage (e.g. Volcano Engine TOS) and pass that URL to
+  `analyze_media` (`kind: "video"`) or `analyze_audio`. Local files are never
+  uploaded automatically — ask the user for a public URL when none exists.
 
 ## Failure Handling
 
@@ -93,6 +85,4 @@ av-tasks/<task-id>/
 - `references/analysis-schema.md` — final analysis JSON schema + emotion→valence table.
 - `scripts/audio_stats.py` — deterministic talk ratio, emotion counts, absolute utterance times.
 - `scripts/render_report.py` — analysis JSON to report.
-- `scripts/merge_chunks.py` — merge per-chunk analysis with timestamp offsets.
-- `scripts/split_media.py` — split local media and write `chunks.json`.
 - `scripts/validate_analysis.py` — validate or normalize analysis JSON.

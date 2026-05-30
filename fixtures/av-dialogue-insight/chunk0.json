@@ -1,9 +1,0 @@
-{
-  "media": "long.mp4",
-  "duration_seconds": 300.0,
-  "summary": "前半段：项目进度同步。",
-  "events": [{ "time": "00:10", "title": "进度同步", "detail": "汇报上周进展。" }],
-  "speakers": [{ "id": "S1", "label": "主持人", "talk_ratio": 0.6, "profile": "主导汇报。" }],
-  "emotion_timeline": [{ "time": "00:10", "speaker": "S1", "emotion": "neutral", "valence": 0.0, "note": "平稳。" }],
-  "key_triggers": []
-}

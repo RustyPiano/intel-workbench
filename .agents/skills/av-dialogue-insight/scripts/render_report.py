@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Render a consolidated audio/video dialogue analysis into a structured report.
 
-Input is a JSON analysis document (produced by the agent from one or more
-`analyze_media` calls, optionally merged with `merge_chunks.py`). Output is
+Input is a JSON analysis document (produced by the agent from `analyze_media`
+or `analyze_audio` output). Output is
 deterministic Markdown with: 概要, 事件时间线, 说话人画像, 情感时间线, 关键触发点,
 总结. A `.docx` is also emitted when `--docx` is passed and python-docx is
 installed.

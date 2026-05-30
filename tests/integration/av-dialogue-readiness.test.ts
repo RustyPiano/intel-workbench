@@ -40,9 +40,9 @@ describe("av-dialogue-insight readiness", () => {
     expect(skill).toContain("audio_stats.py");
     expect(skill).toMatch(/talk ratio|emotion counts/u);
     expect(skill).toMatch(/Transcript errors are expected|correct likely transcript recognition errors/u);
-    expect(skill).toMatch(/Local audio[\s\S]*TODO|TODO[\s\S]*local audio/u);
+    expect(skill).toMatch(/Local files are never[\s\S]*public URL|public URL/u);
     expect(skill).toMatch(/URL-only/u);
-    expect(skill).toContain("split_media.py");
+    expect(skill).toMatch(/Volcano Engine TOS|object storage/u);
     expect(skill).toContain("validate_analysis.py");
     expect(skill).toContain("MINI_AGENT_ASR_*");
     expect(skill).not.toMatch(/≤\s*~?360s|360s/u);

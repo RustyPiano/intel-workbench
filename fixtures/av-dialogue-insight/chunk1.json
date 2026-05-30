@@ -1,9 +1,0 @@
-{
-  "media": "long.mp4",
-  "duration_seconds": 120.0,
-  "summary": "后半段：风险讨论。",
-  "events": [{ "time": "00:20", "title": "风险讨论", "detail": "讨论供应商风险。" }],
-  "speakers": [{ "id": "S2", "label": "参会者A", "talk_ratio": 0.4, "profile": "提出风险点。" }],
-  "emotion_timeline": [{ "time": "00:20", "speaker": "S2", "emotion": "concern", "valence": -0.3, "note": "担忧语气。" }],
-  "key_triggers": [{ "time": "00:20", "description": "供应商风险引发担忧。", "evidence": "语气低沉。" }]
-}

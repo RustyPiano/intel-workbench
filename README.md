@@ -216,8 +216,8 @@ requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
 
 For DashScope Qwen-Omni local files, `analyze_media` sends inline Base64 content
 and enforces DashScope's requirement that the encoded payload is under 10MB.
-For larger local audio/video files, run the A/V skill's `split_media.py` or
-compress the file before analysis. If the user already has a public video/image
+For larger files, upload to public object storage (e.g. Volcano Engine TOS) and
+pass the URL, or compress the file before analysis. If the user already has a public video/image
 URL, `analyze_media` can send that URL directly; URL calls require `kind`.
 
 `qwen3.5-omni-plus` does not provide native structured output on this path, so
@@ -294,4 +294,3 @@ Commands:
 - Example skill (multimodal): [.agents/skills/av-dialogue-insight](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/av-dialogue-insight)
 - App specs: [docs/specs/](/Users/wangsiyuan/编程/小项目/mini-agent/docs/specs)
 - Practice report: [docs/report/practice-report.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/report/practice-report.md)
-- Comparison experiments: [experiments/](/Users/wangsiyuan/编程/小项目/mini-agent/experiments)

@@ -187,10 +187,12 @@ inspect and understand media while the runtime itself remains text-only.
 `analyze_media` is for video/image multimodal analysis. `analyze_audio` is the
 dedicated pure-audio path and uses Doubao recording ASR (`volc.seedasr.auc`).
 
-Both media analysis tools use a write-to-file contract: the agent must provide
-`out_path`, the full result JSON is written there, and the tool returns only a
-short summary plus the path. The agent reads the file when it needs the full
-transcript, utterances, model text, or parsed JSON.
+Both media analysis tools return their result inline by default — good for
+images and short clips. The agent may instead pass an optional `out_path`, in
+which case the full result JSON (including the raw provider payload for
+`analyze_audio`) is written there and the tool returns only a short summary plus
+the path; the agent then reads the file. Prefer `out_path` for long transcripts
+so the conversation stays small.
 
 ### Multimodal video/image
 

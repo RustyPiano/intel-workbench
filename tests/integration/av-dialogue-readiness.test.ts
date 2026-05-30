@@ -35,7 +35,8 @@ describe("av-dialogue-insight readiness", () => {
     expect(skill).toContain("analyze_audio");
     expect(skill).toMatch(/Public audio URL:[\s\S]*analyze_audio/u);
     expect(skill).toMatch(/Video or image:[\s\S]*probe_media[\s\S]*analyze_media/u);
-    expect(skill).toMatch(/out_path[\s\S]*Read the written file/u);
+    expect(skill).toMatch(/inline by default/u);
+    expect(skill).toMatch(/out_path[\s\S]*read that file/u);
     expect(skill).toContain("audio_stats.py");
     expect(skill).toMatch(/talk ratio|emotion counts/u);
     expect(skill).toMatch(/Transcript errors are expected|correct likely transcript recognition errors/u);

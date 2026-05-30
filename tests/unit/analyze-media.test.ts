@@ -128,6 +128,35 @@ describe("analyzeMediaTool", () => {
     });
   });
 
+  test("returns the model analysis inline when out_path is omitted", async () => {
+    const { root } = await createWorkspaceWithMedia();
+    vi.doMock("../../src/model/multimodal.js", () => ({
+      callOmni: async () => ({
+        text: "A short caption.",
+        kind: "image",
+        model: "qwen3.5-omni-plus",
+        usage: { inputTokens: 3, outputTokens: 2 },
+      }),
+    }));
+    const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
+
+    const result = await analyzeMediaTool.execute(
+      { path: "clip.mp4", instruction: "Describe" },
+      createContext(root, {
+        provider: "openai-compatible",
+        model: "qwen3.5-omni-plus",
+        baseURL: "https://example.com/v1",
+        apiKey: "k",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toBe("A short caption.");
+    expect(result.artifacts).toBeUndefined();
+    expect(result.meta).not.toHaveProperty("outPath");
+    expect(result.meta).toMatchObject({ kind: "image", model: "qwen3.5-omni-plus" });
+  });
+
   test("delegates URL media sources to callOmni and records source metadata", async () => {
     const { root } = await createWorkspaceWithMedia();
     const calls: unknown[] = [];

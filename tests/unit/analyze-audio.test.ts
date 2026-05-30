@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { createPolicyEngine, type PolicyEngine } from "../../src/runtime/policy.js";
 import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
 import { ToolRegistry } from "../../src/tools/index.js";
 import type { AsrToolConfig, ToolContext } from "../../src/tools/types.js";
@@ -28,6 +28,7 @@ function createContext(
   asr?: AsrToolConfig,
   fileMutationQueue?: FileMutationQueue,
   readOnly = false,
+  policy?: PolicyEngine,
 ): ToolContext {
   return {
     workspaceRoot,
@@ -37,7 +38,7 @@ function createContext(
     signal: new AbortController().signal,
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     skillRegistry: undefined,
-    policy: createPolicyEngine({ workspaceRoot, readOnly }),
+    policy: policy ?? createPolicyEngine({ workspaceRoot, readOnly }),
     config: {
       toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,
@@ -50,26 +51,50 @@ function createContext(
 }
 
 describe("analyzeAudioTool", () => {
-  test("rejects missing required fields through ToolRegistry", async () => {
+  test("returns transcript and utterances inline when out_path is omitted", async () => {
     const root = await createWorkspace();
+    // This is the first test in the file; the static ToolRegistry import has
+    // already loaded asr.js via the tool barrel, so reset before mocking so the
+    // doMock below actually takes effect on the dynamic import.
+    vi.resetModules();
+    vi.doMock("../../src/model/asr.js", () => ({
+      callAsr: async () => ({
+        text: "Hello there.",
+        durationMs: 1000,
+        utterances: [{ startMs: 0, endMs: 1000, text: "Hello there.", speaker: "S1", emotion: "neutral" }],
+        raw: { huge: "provider payload that should not be inlined" },
+      }),
+    }));
     const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
     const registry = new ToolRegistry([analyzeAudioTool]);
 
     const result = await registry.execute(
       {
-        id: "call_bad_audio",
+        id: "call_inline_audio",
         name: "analyze_audio",
         arguments: {
           url: "https://example.com/talk.wav",
           format: "wav",
         },
       },
-      createContext(root),
+      createContext(root, {
+        baseURL: "https://openspeech.bytedance.com",
+        resourceId: "volc.seedasr.auc",
+        apiKey: "k",
+      }),
     );
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
-    expect(result.content).toMatch(/out_path/u);
+    expect(result.ok).toBe(true);
+    const inline = JSON.parse(result.content) as Record<string, unknown>;
+    expect(inline).toEqual({
+      provider: "doubao-asr",
+      text: "Hello there.",
+      durationMs: 1000,
+      utterances: [{ startMs: 0, endMs: 1000, text: "Hello there.", speaker: "S1", emotion: "neutral" }],
+    });
+    expect(result.content).not.toContain("provider payload");
+    expect(result.meta).toEqual({ durationMs: 1000, utteranceCount: 1, speakerCount: 1 });
+    expect(result.artifacts).toBeUndefined();
   });
 
   test("rejects non-JSON advanced with INVALID_ARGS", async () => {
@@ -213,6 +238,12 @@ describe("analyzeAudioTool", () => {
       }),
     }));
     const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+    // Resolve the policy from the same (reset) module graph as the dynamically
+    // imported tool so the PATH_NOT_ALLOWED RuntimeError crosses the persist
+    // boundary as the same class (instanceof is realm-sensitive under
+    // vi.resetModules + dynamic import).
+    const { createPolicyEngine: freshCreatePolicyEngine } = await import("../../src/runtime/policy.js");
+    const readOnlyPolicy = freshCreatePolicyEngine({ workspaceRoot: root, readOnly: true });
 
     const result = await analyzeAudioTool.execute(
       {
@@ -231,6 +262,7 @@ describe("analyzeAudioTool", () => {
         },
         undefined,
         true,
+        readOnlyPolicy,
       ),
     );
 

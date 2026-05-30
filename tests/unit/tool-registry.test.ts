@@ -283,8 +283,8 @@ describe("ToolRegistry", () => {
     expect(acceptsNull(properties.kind.type)).toBe(true);
     expect(acceptsNull(properties.format.type)).toBe(true);
     expect(acceptsNull(properties.want_json.type)).toBe(true);
+    expect(acceptsNull(properties.out_path.type)).toBe(true);
     expect(properties.instruction.type).toBe("string");
-    expect(properties.out_path.type).toBe("string");
   });
 
   test("getToolJsonSchema exposes analyze_audio required and nullable optional fields for strict mode", () => {
@@ -302,7 +302,7 @@ describe("ToolRegistry", () => {
     const acceptsNull = (value: unknown): boolean => Array.isArray(value) && value.includes("null");
     expect(properties.url.type).toBe("string");
     expect(properties.format.type).toBe("string");
-    expect(properties.out_path.type).toBe("string");
+    expect(acceptsNull(properties.out_path.type)).toBe(true);
     expect(acceptsNull(properties.language.type)).toBe(true);
     expect(acceptsNull(properties.hotwords.type)).toBe(true);
     expect(acceptsNull(properties.advanced.type)).toBe(true);

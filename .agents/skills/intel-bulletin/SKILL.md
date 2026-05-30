@@ -29,11 +29,9 @@ tasks/<task-id>/
 
 ## Workflow
 
-1. **Identify or create the task.** If the user names a new task, create it:
-   `python3 .agents/skills/intel-bulletin/scripts/manage_task.py create <id> --title "<标题>"`.
-   Add each source file:
-   `... manage_task.py add-source <id> <path>`. Use `manage_task.py list` /
-   `show <id>` to inspect existing tasks.
+1. **Identify or create the task.** For a new task, create it and add each
+   source file with `manage_task.py` (commands under "Managing tasks (CRUD)"
+   below); use `list` / `show <id>` to inspect existing tasks.
 2. **Ingest the sources.** Run
    `python3 .agents/skills/intel-bulletin/scripts/ingest.py tasks/<id>/sources`
    and read the normalized text. (Add `--json` if you need per-file metadata.)
@@ -54,11 +52,13 @@ tasks/<task-id>/
 
 ## Managing tasks (CRUD)
 
-- Create: `manage_task.py create <id> --title "..."`
-- Read: `manage_task.py list` / `manage_task.py show <id>`
-- Update: `manage_task.py update <id> --title "..." --status "..."`
-- Delete: `manage_task.py delete <id>`
-- Files: `manage_task.py add-source <id> <file>` / `remove-source <id> <name>`
+All commands run as `python3 .agents/skills/intel-bulletin/scripts/manage_task.py <cmd>`:
+
+- Create: `create <id> --title "..."`
+- Read: `list` / `show <id>`
+- Update: `update <id> --title "..." --status "..."`
+- Delete: `delete <id>`
+- Files: `add-source <id> <file>` / `remove-source <id> <name>`
 
 ## Resources
 

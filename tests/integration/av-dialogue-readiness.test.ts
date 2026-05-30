@@ -29,6 +29,20 @@ async function installSkill(workspaceRoot: string) {
 }
 
 describe("av-dialogue-insight readiness", () => {
+  test("skill text describes the supported deterministic media workflow", async () => {
+    const skill = await readFile(path.join(process.cwd(), ".agents", "skills", "av-dialogue-insight", "SKILL.md"), "utf8");
+
+    expect(skill).toContain("split_media.py");
+    expect(skill).toContain("validate_analysis.py");
+    expect(skill).toContain("inlineBase64Allowed");
+    expect(skill).toContain("recommendedTransport");
+    expect(skill).toContain("recommendedChunkSeconds");
+    expect(skill).not.toMatch(/≤\s*~?360s|360s/u);
+    expect(skill).not.toMatch(/URL\/OSS|OSS upload/u);
+    expect(skill).toMatch(/kind/u);
+    expect(skill).toMatch(/format/u);
+  });
+
   test("activates the skill and renders a consolidated analysis into the expected report", async () => {
     const workspaceRoot = await createWorkspace();
     await installSkill(workspaceRoot);

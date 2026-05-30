@@ -11,8 +11,9 @@ const hasFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0;
 const hasFfprobe = spawnSync("ffprobe", ["-version"]).status === 0;
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
+import { MAX_INLINE_BASE64_BYTES } from "../../src/model/media-limits.js";
 import { ToolRegistry } from "../../src/tools/index.js";
-import { probeMediaTool } from "../../src/tools/probe-media.js";
+import { planMediaTransport, probeMediaTool, resolveProbeSizeBytes } from "../../src/tools/probe-media.js";
 import type { ToolContext } from "../../src/tools/types.js";
 
 const tempRoots: string[] = [];
@@ -47,6 +48,29 @@ function createContext(workspaceRoot: string): ToolContext {
 }
 
 describe("probeMediaTool", () => {
+  test("plans inline transport for small local media", () => {
+    expect(planMediaTransport(3)).toEqual({
+      inlineBase64Bytes: 4,
+      inlineBase64Allowed: true,
+      recommendedTransport: "inline",
+      recommendedChunkSeconds: null,
+    });
+  });
+
+  test("plans split transport for oversized local media", () => {
+    expect(planMediaTransport(Math.ceil(MAX_INLINE_BASE64_BYTES / 4) * 3)).toEqual({
+      inlineBase64Bytes: MAX_INLINE_BASE64_BYTES,
+      inlineBase64Allowed: false,
+      recommendedTransport: "split",
+      recommendedChunkSeconds: 300,
+    });
+  });
+
+  test("uses local stat size when ffprobe omits format size", () => {
+    expect(resolveProbeSizeBytes(null, 1234)).toBe(1234);
+    expect(resolveProbeSizeBytes(5678, 1234)).toBe(5678);
+  });
+
   test("returns ok:false for a missing media file (ffprobe error or ffprobe absent)", async () => {
     const workspaceRoot = await createWorkspace();
     const result = await probeMediaTool.execute({ path: "missing.mp4" }, createContext(workspaceRoot));
@@ -81,5 +105,7 @@ describe("probeMediaTool", () => {
     expect(meta.hasAudio).toBe(true);
     expect(meta.hasVideo).toBe(false);
     expect(meta.durationSeconds).toBeGreaterThan(0.5);
+    expect(result.content).toContain("recommended_transport: inline");
+    expect(result.content).toContain("inline_base64_bytes:");
   });
 });

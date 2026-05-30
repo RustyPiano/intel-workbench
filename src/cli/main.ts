@@ -381,6 +381,7 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         model: config.mmModel,
         baseURL: config.mmBaseURL ?? (config.mmModel ? config.baseURL : undefined),
         apiKeyConfigured: Boolean(config.mmApiKey ?? (config.mmModel ? config.apiKey : undefined)),
+        timeoutMs: config.mmTimeoutMs,
       },
       lastRun,
     }),
@@ -410,6 +411,7 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
     sessionDir: config.sessionDir,
     toolConfig: {
       toolTimeoutMs: config.toolTimeoutMs,
+      mmTimeoutMs: config.mmTimeoutMs,
       bashTimeoutMs: config.bashTimeoutMs,
       maxBashOutputBytes: config.maxBashOutputBytes,
       readMaxBytes: config.readMaxBytes,
@@ -501,4 +503,3 @@ export async function main(): Promise<void> {
     hideDebug: config.hideDebug,
   });
 }
-

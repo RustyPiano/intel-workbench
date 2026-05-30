@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import OpenAI from "openai";
 
 import { RuntimeError } from "../runtime/errors.js";
 import type { MultimodalToolConfig } from "../tools/types.js";
+import { base64EncodedLength, MAX_INLINE_BASE64_BYTES } from "./media-limits.js";
+import { AUDIO_FORMATS, type MediaKind, type MediaSource } from "./media-source.js";
 
 /**
  * Multimodal model access for the media tools.
@@ -18,10 +20,10 @@ import type { MultimodalToolConfig } from "../tools/types.js";
  * message history, session JSONL, or trace.
  */
 
-export type MediaKind = "video" | "audio" | "image";
+export type { MediaKind, MediaSource } from "./media-source.js";
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".flv", ".mpeg", ".mpg"]);
-const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wma", ".amr"]);
+const AUDIO_EXTENSIONS = new Set(AUDIO_FORMATS.map((format) => `.${format}`));
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 
 const MIME_BY_EXTENSION: Record<string, string> = {
@@ -124,7 +126,7 @@ export function createOmniClient(config: MultimodalToolConfig): OmniClient {
 
 export interface CallOmniParams {
   config: MultimodalToolConfig;
-  mediaPath: string;
+  source: MediaSource;
   instruction: string;
   /** When true, ask for JSON output and parse it into `json`. */
   jsonMode?: boolean;
@@ -193,14 +195,7 @@ export async function callOmni(params: CallOmniParams): Promise<OmniResult> {
     });
   }
 
-  const kind = detectMediaKind(params.mediaPath);
-  const bytes = await readFile(params.mediaPath);
-  const base64 = bytes.toString("base64");
-  // Per the DashScope examples, audio data URLs omit the MIME type (the
-  // `format` field carries it); image/video keep their MIME type.
-  const dataUrl = kind === "audio" ? `data:;base64,${base64}` : `data:${mediaMimeType(params.mediaPath)};base64,${base64}`;
-  const format = path.extname(params.mediaPath).slice(1).toLowerCase();
-  const mediaPart = buildMediaContentPart(kind, dataUrl, format);
+  const { kind, mediaPart } = await buildMediaContentForSource(params.source);
 
   // Qwen-Omni does not document `response_format: json_object`, so we steer the
   // model to JSON through the instruction and parse it ourselves instead.
@@ -245,11 +240,59 @@ export async function callOmni(params: CallOmniParams): Promise<OmniResult> {
     throw toMultimodalError(error);
   }
 
+  const parsedJson = params.jsonMode ? parseJsonLoose(text) : undefined;
+  if (params.jsonMode && parsedJson === undefined) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message: "Multimodal model returned invalid JSON for a want_json request.",
+      retriable: true,
+      details: {
+        category: "invalid_model_output",
+        outputPreview: text.slice(0, 1000),
+      },
+    });
+  }
+
   return {
     text,
-    json: params.jsonMode ? parseJsonLoose(text) : undefined,
+    json: parsedJson,
     kind,
     model: params.config.model,
     usage,
   };
+}
+
+async function buildMediaContentForSource(source: MediaSource): Promise<{ kind: MediaKind; mediaPart: Record<string, unknown> }> {
+  if (source.type === "url") {
+    const format = source.kind === "audio" ? source.format.toLowerCase() : "";
+    return {
+      kind: source.kind,
+      mediaPart: buildMediaContentPart(source.kind, source.url, format),
+    };
+  }
+
+  const kind = detectMediaKind(source.path);
+  const fileInfo = await stat(source.path);
+  const encodedLength = base64EncodedLength(fileInfo.size);
+  if (encodedLength >= MAX_INLINE_BASE64_BYTES) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message:
+        `Media file is too large for inline Base64 (${encodedLength} bytes after encoding; limit is under ` +
+        `${MAX_INLINE_BASE64_BYTES} bytes). Use a public URL, split the media, or compress it first.`,
+      details: {
+        category: "multimodal",
+        fileSizeBytes: fileInfo.size,
+        encodedSizeBytes: encodedLength,
+        maxInlineBase64Bytes: MAX_INLINE_BASE64_BYTES,
+      },
+    });
+  }
+  const bytes = await readFile(source.path);
+  const base64 = bytes.toString("base64");
+  // Per DashScope's local-file examples, audio and video data URLs omit the
+  // MIME type; images keep their MIME type.
+  const dataUrl = kind === "image" ? `data:${mediaMimeType(source.path)};base64,${base64}` : `data:;base64,${base64}`;
+  const format = path.extname(source.path).slice(1).toLowerCase();
+  return { kind, mediaPart: buildMediaContentPart(kind, dataUrl, format) };
 }

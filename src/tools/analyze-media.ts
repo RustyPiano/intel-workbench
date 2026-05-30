@@ -2,11 +2,19 @@ import { z } from "zod";
 
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
 import { callOmni } from "../model/multimodal.js";
+import { isSupportedAudioUrlFormat, MEDIA_KINDS, type MediaSource } from "../model/media-source.js";
 import type { RuntimeTool } from "./types.js";
 
 const analyzeMediaArgsSchema = z
   .object({
-    path: z.string().describe("Path to a video, audio, or image file in the workspace."),
+    path: z.string().min(1).optional().describe("Path to a video, audio, or image file in the workspace."),
+    url: z.string().url().optional().describe("Public URL to a video, audio, or image file."),
+    kind: z.enum(MEDIA_KINDS).optional().describe("Required for URL inputs: video, audio, or image."),
+    format: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Required for audio URL inputs, e.g. wav or mp3. Ignored for local file inputs."),
     instruction: z
       .string()
       .describe(
@@ -17,12 +25,44 @@ const analyzeMediaArgsSchema = z
       .optional()
       .describe("Ask the model to return strict JSON. Describe the desired fields in `instruction`."),
   })
+  .superRefine((value, ctx) => {
+    const hasPath = value.path !== undefined;
+    const hasUrl = value.url !== undefined;
+    if (hasPath === hasUrl) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["path"],
+        message: "Provide exactly one of path or url.",
+      });
+    }
+    if (hasUrl && value.kind === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["kind"],
+        message: "kind is required when url is provided.",
+      });
+    }
+    if (hasUrl && value.kind === "audio" && value.format === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["format"],
+        message: "format is required for audio URL inputs.",
+      });
+    }
+    if (hasUrl && value.kind === "audio" && value.format !== undefined && !isSupportedAudioUrlFormat(value.format)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["format"],
+        message: "Unsupported audio URL format.",
+      });
+    }
+  })
   .strict();
 
 type AnalyzeMediaArgs = z.infer<typeof analyzeMediaArgsSchema>;
 
 interface AnalyzeMediaData {
-  path: string;
+  source: MediaSource;
   kind: string;
   model: string;
   json?: unknown;
@@ -32,7 +72,7 @@ interface AnalyzeMediaData {
 export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> = {
   name: "analyze_media",
   description:
-    "Analyze a video/audio/image file with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Returns the model's text (or JSON when want_json is set).",
+    "Analyze a video/audio/image file or public URL with a multimodal model. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Returns the model's text (or JSON when want_json is set).",
   inputSchema: analyzeMediaArgsSchema,
   async execute(args, ctx) {
     try {
@@ -45,10 +85,10 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
         });
       }
 
-      const filePath = ctx.policy.resolveReadPath(args.path);
+      const source = toMediaSource(args, ctx.policy.resolveReadPath.bind(ctx.policy));
       const result = await callOmni({
         config: multimodal,
-        mediaPath: filePath,
+        source,
         instruction: args.instruction,
         jsonMode: args.want_json === true,
         signal: ctx.signal,
@@ -58,7 +98,7 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
         ok: true,
         content: result.text,
         meta: {
-          path: filePath,
+          source,
           kind: result.kind,
           model: result.model,
           json: result.json,
@@ -74,3 +114,25 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
     }
   },
 };
+
+function toMediaSource(args: AnalyzeMediaArgs, resolveReadPath: (path: string) => string): MediaSource {
+  if (args.path !== undefined) {
+    return { type: "file", path: resolveReadPath(args.path) };
+  }
+  if (args.url !== undefined && args.kind !== undefined) {
+    if (args.kind === "audio") {
+      if (args.format === undefined) {
+        throw new RuntimeError({
+          code: "INVALID_ARGS",
+          message: "format is required for audio URL inputs.",
+        });
+      }
+      return { type: "url", url: args.url, kind: "audio", format: args.format.toLowerCase() };
+    }
+    return { type: "url", url: args.url, kind: args.kind };
+  }
+  throw new RuntimeError({
+    code: "INVALID_ARGS",
+    message: "Provide exactly one of path or url.",
+  });
+}

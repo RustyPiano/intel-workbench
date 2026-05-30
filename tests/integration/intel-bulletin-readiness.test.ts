@@ -29,6 +29,26 @@ async function installBundledIntelBulletinSkill(workspaceRoot: string) {
 }
 
 describe("intel-bulletin readiness", () => {
+  test("skill text and guide constrain metadata fabrication", async () => {
+    const skillRoot = path.join(process.cwd(), ".agents", "skills", "intel-bulletin");
+    const skill = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
+    const guide = await readFile(path.join(skillRoot, "references", "writing-guide.md"), "utf8");
+    const template = JSON.parse(await readFile(path.join(skillRoot, "assets", "spec-template.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const combined = `${skill}\n${guide}`;
+
+    expect(skill.split("\n").length).toBeLessThan(100);
+    expect(combined).toContain("Do not invent classification, document number, recipient, issuer, or date.");
+    expect(combined).toContain("unknown/pending verification");
+    expect(template.classification).toBeNull();
+    expect(template.doc_number).toBeNull();
+    expect(template.recipient).toBeNull();
+    expect(template.issuer).toBeNull();
+    expect(template.date).toBeNull();
+  });
+
   test("compiles a multi-source task into the expected 公文 report end-to-end", async () => {
     const workspaceRoot = await createWorkspace();
     await installBundledIntelBulletinSkill(workspaceRoot);

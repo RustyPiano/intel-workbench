@@ -1,0 +1,53 @@
+{
+  "skill_name": "av-dialogue-insight",
+  "evals": [
+    {
+      "id": "av-positive-short-meeting-report",
+      "kind": "positive",
+      "category": "short-meeting-report",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "我准备分析一段会议录音，但还没给文件。请先说明需要我提供本地路径或公网 URL，然后按事件、说话人、情绪时间线和关键触发点产出报告。",
+      "expected_output": "Activates the A/V dialogue workflow and asks for a media path or URL before probing/analyzing.",
+      "required_markers": ["probe_media", "analyze_media", "media path or URL"],
+      "forbidden_markers": ["generic caption only"],
+      "files": []
+    },
+    {
+      "id": "av-positive-oversized-media-planning",
+      "kind": "positive",
+      "category": "oversized-media-planning",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "这个监控对话视频很大，帮我规划如何分片分析并合并成一份情绪和触发点报告。",
+      "expected_output": "Uses probe_media recommendations, split_media.py, per-chunk analysis, validation, merge_chunks.py, and report rendering.",
+      "required_markers": ["recommendedTransport", "split_media.py", "merge_chunks.py"],
+      "forbidden_markers": ["OSS upload required"],
+      "files": []
+    },
+    {
+      "id": "av-positive-missing-mm-config",
+      "kind": "positive",
+      "category": "missing-mm-config",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "帮我分析电话录音里的说话人情绪，但现在没有配置多模态模型。",
+      "expected_output": "Explains required MINI_AGENT_MM_* settings or local-file classic fallback with degraded output.",
+      "required_markers": ["MINI_AGENT_MM_MODEL", "fallback_pipeline.py", "degraded"],
+      "forbidden_markers": ["configured by default"],
+      "files": []
+    },
+    {
+      "id": "av-negative-generic-image-caption",
+      "kind": "negative",
+      "category": "negative-generic-image-caption",
+      "should_activate": false,
+      "requires_files": false,
+      "prompt": "给一张风景照片写一句图片说明，不需要对话分析。",
+      "expected_output": "Does not force the A/V dialogue skill because the task is generic captioning without dialogue or conversation analysis.",
+      "required_markers": [],
+      "forbidden_markers": ["speaker profiles", "emotion timeline", "key trigger points"],
+      "files": []
+    }
+  ]
+}

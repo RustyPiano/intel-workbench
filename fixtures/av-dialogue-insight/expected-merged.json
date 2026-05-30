@@ -1,7 +1,7 @@
 {
   "media": "long.mp4",
   "duration_seconds": 420.0,
-  "summary": "前半段：项目进度同步。\n后半段：风险讨论。",
+  "summary": "Chunk 0 (00:00)\n前半段：项目进度同步。\n\nChunk 1 (05:00)\n后半段：风险讨论。",
   "degraded": false,
   "degraded_note": "",
   "events": [
@@ -20,13 +20,13 @@
     {
       "id": "S1",
       "label": "主持人",
-      "talk_ratio": 0.6,
+      "talk_ratio": 0.4286,
       "profile": "主导汇报。"
     },
     {
       "id": "S2",
       "label": "参会者A",
-      "talk_ratio": 0.4,
+      "talk_ratio": 0.1143,
       "profile": "提出风险点。"
     }
   ],

@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { z } from "zod";
 
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
+import { base64EncodedLength, MAX_INLINE_BASE64_BYTES } from "../model/media-limits.js";
 import type { RuntimeTool } from "./types.js";
 
 const probeMediaArgsSchema = z
@@ -27,6 +29,10 @@ interface ProbeMediaData {
   durationSeconds: number | null;
   formatName?: string;
   sizeBytes: number | null;
+  inlineBase64Bytes: number | null;
+  inlineBase64Allowed: boolean | null;
+  recommendedTransport: "inline" | "split";
+  recommendedChunkSeconds: number | null;
   hasVideo: boolean;
   hasAudio: boolean;
   streams: StreamSummary[];
@@ -94,6 +100,37 @@ function toNumber(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function resolveProbeSizeBytes(ffprobeSize: number | null, statSize: number): number {
+  return ffprobeSize ?? statSize;
+}
+
+export interface MediaTransportPlan {
+  inlineBase64Bytes: number | null;
+  inlineBase64Allowed: boolean | null;
+  recommendedTransport: "inline" | "split";
+  recommendedChunkSeconds: number | null;
+}
+
+export function planMediaTransport(sizeBytes: number | null): MediaTransportPlan {
+  if (sizeBytes === null) {
+    return {
+      inlineBase64Bytes: null,
+      inlineBase64Allowed: null,
+      recommendedTransport: "split",
+      recommendedChunkSeconds: 300,
+    };
+  }
+
+  const inlineBase64Bytes = base64EncodedLength(sizeBytes);
+  const inlineBase64Allowed = inlineBase64Bytes < MAX_INLINE_BASE64_BYTES;
+  return {
+    inlineBase64Bytes,
+    inlineBase64Allowed,
+    recommendedTransport: inlineBase64Allowed ? "inline" : "split",
+    recommendedChunkSeconds: inlineBase64Allowed ? null : 300,
+  };
+}
+
 export const probeMediaTool: RuntimeTool<ProbeMediaArgs, ProbeMediaData> = {
   name: "probe_media",
   description:
@@ -123,21 +160,30 @@ export const probeMediaTool: RuntimeTool<ProbeMediaArgs, ProbeMediaData> = {
         channels: stream.channels,
       }));
 
+      const fileInfo = await stat(filePath);
+      const sizeBytes = resolveProbeSizeBytes(toNumber(parsed.format?.size), fileInfo.size);
+      const transportPlan = planMediaTransport(sizeBytes);
       const data: ProbeMediaData = {
         path: filePath,
         durationSeconds: toNumber(parsed.format?.duration),
         formatName: parsed.format?.format_name,
-        sizeBytes: toNumber(parsed.format?.size),
+        sizeBytes,
+        ...transportPlan,
         hasVideo: streams.some((stream) => stream.type === "video"),
         hasAudio: streams.some((stream) => stream.type === "audio"),
         streams,
       };
 
       const durationText = data.durationSeconds === null ? "unknown" : `${data.durationSeconds.toFixed(1)}s`;
+      const encodedSizeText = data.inlineBase64Bytes === null ? "unknown" : `${data.inlineBase64Bytes} bytes`;
       const summary = [
         `path: ${data.path}`,
         `duration: ${durationText}`,
         `container: ${data.formatName ?? "unknown"}`,
+        `inline_base64_bytes: ${encodedSizeText}`,
+        `inline_base64_allowed: ${data.inlineBase64Allowed === null ? "unknown" : data.inlineBase64Allowed ? "yes" : "no"}`,
+        `recommended_transport: ${data.recommendedTransport}`,
+        `recommended_chunk_seconds: ${data.recommendedChunkSeconds ?? "none"}`,
         `video: ${data.hasVideo ? "yes" : "no"}`,
         `audio: ${data.hasAudio ? "yes" : "no"}`,
         `streams: ${streams

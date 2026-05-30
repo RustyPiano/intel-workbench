@@ -31,6 +31,7 @@ export interface MultimodalToolConfig {
 
 export interface ToolRuntimeConfig {
   toolTimeoutMs: number;
+  mmTimeoutMs?: number;
   bashTimeoutMs: number;
   maxBashOutputBytes: number;
   readMaxBytes: number;

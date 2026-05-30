@@ -1,6 +1,6 @@
 ---
 name: intel-bulletin
-description: Compile source documents (md/txt/docx/pdf) in a task folder into a 公文-format intelligence bulletin, with task and file management.
+description: Draft, generate, organize, render, or manage intelligence bulletins, situation bulletins, public-document-style reports, 情报通报, 情况通报, and 公文式报告 from source documents. Use for bulletin/report tasks that need task CRUD, source ingestion, formal structure, or rendering. Do not use for generic source extraction unless the requested output is a bulletin or report.
 compatibility: Requires Python 3.11+ for the bundled scripts. DOCX/MD/TXT ingestion is stdlib-only; PDF needs pypdf or pdfminer.six; the optional .docx output needs python-docx.
 allowed-tools: read write edit bash activate_skill
 metadata:
@@ -12,8 +12,8 @@ metadata:
 
 ## When to use
 
-Use this skill when the user needs a formal intelligence bulletin (情报报文/通报)
-compiled from one or more source documents, or wants to manage such tasks
+Use this skill when the user needs a formal intelligence bulletin or situation
+report compiled from one or more source documents, or wants to manage such tasks
 (create/list/update/delete tasks, add/remove source files).
 
 ## Layout
@@ -38,11 +38,14 @@ tasks/<task-id>/
    `python3 .agents/skills/intel-bulletin/scripts/ingest.py tasks/<id>/sources`
    and read the normalized text. (Add `--json` if you need per-file metadata.)
 3. **Extract the essentials.** Pull the key facts, explicit dates, and a
-   timeline. Keep source facts separate from your own conclusions.
+   timeline. Keep source facts separate from your own conclusions. Do not invent
+   classification, document number, recipient, issuer, or date.
 4. **Draft the bulletin spec.** Write a JSON spec to
    `tasks/<id>/report/bulletin.spec.json` following `assets/spec-template.json`
    and `references/writing-guide.md` (title, summary/概要, numbered sections,
-   conclusion/结论, issuer, date).
+   conclusion/结论, recipient, issuer, date). Use only user-provided or
+   source-supported metadata; omit unknown fields or mark them as
+   unknown/pending verification when the user requires a placeholder.
 5. **Render the report.** Run
    `python3 .agents/skills/intel-bulletin/scripts/render_report.py tasks/<id>/report/bulletin.spec.json tasks/<id>/report/bulletin`.
    Add `--docx` to also emit a Word document (needs python-docx).

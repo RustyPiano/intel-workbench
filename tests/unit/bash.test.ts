@@ -113,6 +113,41 @@ describe("bashTool", () => {
     expect(result.content).toContain("MODEL=qwen-plus");
   });
 
+  test("still blocks bare environment dumps and piped env", async () => {
+    const workspaceRoot = await createWorkspace();
+    for (const command of ["env", "env | grep KEY", "env > dump.txt", "printenv"]) {
+      const result = await bashTool.execute({ command }, createContext(workspaceRoot, "call_bash_dump"));
+      expect(result.ok, `expected "${command}" to be blocked`).toBe(false);
+      expect(result.error).toMatchObject({ code: "PATH_NOT_ALLOWED" });
+    }
+  });
+
+  test("allows the `env VAR=value command` idiom and non-reading .env operations", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, ".env.example"), "MINI_AGENT_MODEL=qwen-plus\n", "utf8");
+
+    // `env` used to set a variable and exec a command does not dump anything.
+    const envExec = await bashTool.execute(
+      { command: "env GREETING=hi printf 'ran\\n'" },
+      createContext(workspaceRoot, "call_bash_env_exec"),
+    );
+    expect(envExec.ok).toBe(true);
+    expect(envExec.content).toContain("ran");
+
+    // Writing/creating or removing a .env does not expose it to the model.
+    const create = await bashTool.execute(
+      { command: "cp .env.example .env" },
+      createContext(workspaceRoot, "call_bash_create_env"),
+    );
+    expect(create.ok).toBe(true);
+
+    const remove = await bashTool.execute(
+      { command: "rm -f .env.bak" },
+      createContext(workspaceRoot, "call_bash_rm_env"),
+    );
+    expect(remove.ok).toBe(true);
+  });
+
   test("returns TOOL_TIMEOUT when the command exceeds the timeout", async () => {
     const workspaceRoot = await createWorkspace();
     const result = await bashTool.execute(

@@ -220,6 +220,21 @@ describe("callAsr", () => {
     });
   });
 
+  test("surfaces a submit-time error status without polling the query endpoint", async () => {
+    const { fetch, calls } = fakeFetch([jsonResponse({ message: "bad params" }, "45000001")]);
+
+    await expect(
+      callAsr({ config, engine: "standard", url: "https://example.com/a.wav", format: "wav", fetch }),
+    ).rejects.toMatchObject({
+      code: "INVALID_ARGS",
+      details: { category: "asr", statusCode: "45000001" },
+    });
+
+    // The submit failed up front, so we must not have proceeded to /query.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toContain("/submit");
+  });
+
   test("wraps network errors as retriable ASR model errors", async () => {
     const fetch = vi.fn(async () => {
       throw new Error("fetch failed");

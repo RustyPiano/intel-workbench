@@ -26,8 +26,18 @@ interface BashData {
   logPath: string;
 }
 
+// A reference to a secret .env file (.env, .env.local, .env.bak, …) but not the
+// safe-to-read .env.example / .env.sample / .env.template templates.
 const SECRET_ENV_FILE_PATTERN = /(^|[\s"'`|;&()<>/])\.env(?:\.(?!example(?:$|[\s"'`|;&()<>])|sample(?:$|[\s"'`|;&()<>])|template(?:$|[\s"'`|;&()<>]))[\w.-]+)?(?=$|[\s"'`|;&()<>])/u;
-const ENV_DUMP_COMMAND_PATTERN = /(^|[;&|]\s*)(?:env|printenv)(?=$|\s)/u;
+// Commands that print file contents to stdout — the path by which a secret file
+// would reach the model's context. Heuristic by design: copying/moving/deleting
+// a .env (which does not expose it to the model) is intentionally not blocked.
+const SECRET_FILE_READER_PATTERN =
+  /(^|[\s;&|(])(?:cat|tac|nl|less|more|head|tail|grep|egrep|fgrep|rg|ag|strings|od|xxd|hexdump|bat|sed|awk|cut|base64|openssl|source|\.)(?=\s)/u;
+// `printenv` only ever prints, so block it outright. Bare `env` (no command to
+// exec) dumps the whole environment — block `env`, `env | …`, `env > f` — but
+// allow the common `env VAR=value command` idiom, which sets vars and execs.
+const ENV_DUMP_COMMAND_PATTERN = /(^|[;&|]\s*)(?:printenv\b|env(?=\s*($|[|;&><])))/u;
 
 type WorkspaceSnapshot = Map<string, string>;
 
@@ -119,7 +129,9 @@ function terminateProcessTree(pid: number | undefined): void {
 }
 
 function assertCommandDoesNotExposeSecrets(command: string): void {
-  if (SECRET_ENV_FILE_PATTERN.test(command) || ENV_DUMP_COMMAND_PATTERN.test(command)) {
+  const dumpsEnvironment = ENV_DUMP_COMMAND_PATTERN.test(command);
+  const readsSecretFile = SECRET_ENV_FILE_PATTERN.test(command) && SECRET_FILE_READER_PATTERN.test(command);
+  if (dumpsEnvironment || readsSecretFile) {
     throw new RuntimeError({
       code: "PATH_NOT_ALLOWED",
       message:

@@ -242,41 +242,99 @@ export class RuntimeAgent {
   }
 
   private replayMessages(entries: SessionEntry[]): RuntimeMessage[] {
-    return entries
-      .flatMap((entry) => {
-        if (entry.type === "message") {
-          return [
-            {
-              role: entry.role,
-              content: entry.content,
-              messageId: entry.messageId,
-              toolCallId: entry.toolCallId,
-              toolName: entry.toolName,
-              toolCalls: entry.toolCalls,
-            } satisfies RuntimeMessage,
-          ];
-        }
-
-        if (entry.type === "tool_result") {
-          const result: ToolExecutionResult = {
-            ok: entry.ok,
+    const messages = entries.flatMap((entry) => {
+      if (entry.type === "message") {
+        return [
+          {
+            role: entry.role,
             content: entry.content,
-            meta: entry.meta ?? entry.data,
-            error: entry.error,
-          };
-          return [
-            {
-              role: "tool",
-              content: formatToolMessageContent(result),
-              messageId: `tool_${entry.toolCallId}`,
-              toolCallId: entry.toolCallId,
-              toolName: undefined,
-              toolCalls: undefined,
-            } satisfies RuntimeMessage,
-          ];
-        }
+            messageId: entry.messageId,
+            toolCallId: entry.toolCallId,
+            toolName: entry.toolName,
+            toolCalls: entry.toolCalls,
+          } satisfies RuntimeMessage,
+        ];
+      }
 
-        return [];
-      });
+      if (entry.type === "tool_result") {
+        const result: ToolExecutionResult = {
+          ok: entry.ok,
+          content: entry.content,
+          meta: entry.meta ?? entry.data,
+          error: entry.error,
+        };
+        return [
+          {
+            role: "tool",
+            content: formatToolMessageContent(result),
+            messageId: `tool_${entry.toolCallId}`,
+            toolCallId: entry.toolCallId,
+            toolName: undefined,
+            toolCalls: undefined,
+          } satisfies RuntimeMessage,
+        ];
+      }
+
+      return [];
+    });
+
+    return this.repairDanglingToolCalls(messages);
+  }
+
+  /**
+   * Guarantee every assistant `tool_calls` entry is answered by a `tool`
+   * message. A run interrupted between a tool-call request and its result (e.g.
+   * the process was killed, or only some parallel tools finished) leaves the
+   * session with an assistant message whose tool calls have no matching results.
+   * Replaying that as-is makes the next provider request invalid ("an assistant
+   * message with 'tool_calls' must be followed by tool messages for each
+   * tool_call_id"), which would break resume. We synthesize an error result for
+   * each unanswered tool call so the resumed conversation stays well-formed.
+   */
+  private repairDanglingToolCalls(messages: RuntimeMessage[]): RuntimeMessage[] {
+    const repaired: RuntimeMessage[] = [];
+
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index]!;
+      repaired.push(message);
+
+      if (message.role !== "assistant" || !message.toolCalls?.length) {
+        continue;
+      }
+
+      // Consume the run of tool messages that answer this assistant turn.
+      const answered = new Set<string>();
+      let lookahead = index + 1;
+      while (lookahead < messages.length && messages[lookahead]!.role === "tool") {
+        const toolMessage = messages[lookahead]!;
+        if (toolMessage.toolCallId) {
+          answered.add(toolMessage.toolCallId);
+        }
+        repaired.push(toolMessage);
+        lookahead += 1;
+      }
+
+      for (const toolCall of message.toolCalls) {
+        if (answered.has(toolCall.id)) {
+          continue;
+        }
+        repaired.push({
+          role: "tool",
+          content: formatToolMessageContent({
+            ok: false,
+            content: "Tool result was not recorded before the session ended; the previous run was interrupted.",
+            error: { code: "RUN_ABORTED", message: "Tool result missing from an interrupted run." },
+          }),
+          messageId: `tool_${toolCall.id}_synthetic`,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolCalls: undefined,
+        });
+      }
+
+      index = lookahead - 1;
+    }
+
+    return repaired;
   }
 }

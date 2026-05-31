@@ -21,6 +21,13 @@ const ENV_KEYS = [
   "MINI_AGENT_ASR_RESOURCE_ID",
   "MINI_AGENT_ASR_BASE_URL",
   "MINI_AGENT_ASR_TIMEOUT_MS",
+  "MINI_AGENT_TOS_ACCESS_KEY_ID",
+  "MINI_AGENT_TOS_ACCESS_KEY_SECRET",
+  "MINI_AGENT_TOS_BUCKET",
+  "MINI_AGENT_TOS_REGION",
+  "MINI_AGENT_TOS_ENDPOINT",
+  "MINI_AGENT_TOS_PREFIX",
+  "MINI_AGENT_TOS_SIGNED_URL_EXPIRES",
 ];
 
 afterEach(async () => {
@@ -165,5 +172,85 @@ describe("resolveRuntimeConfig", () => {
     const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
 
     expect(config.asrTimeoutMs).toBeUndefined();
+  });
+
+  test("resolves TOS storage settings from env", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_TOS_ACCESS_KEY_ID = "tos-ak";
+    process.env.MINI_AGENT_TOS_ACCESS_KEY_SECRET = "tos-sk";
+    process.env.MINI_AGENT_TOS_BUCKET = "media-bucket";
+    process.env.MINI_AGENT_TOS_REGION = "cn-beijing";
+    process.env.MINI_AGENT_TOS_ENDPOINT = "https://tos.example.com/";
+    process.env.MINI_AGENT_TOS_PREFIX = "custom/uploads";
+    process.env.MINI_AGENT_TOS_SIGNED_URL_EXPIRES = "7200";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.tosAccessKeyId).toBe("tos-ak");
+    expect(config.tosAccessKeySecret).toBe("tos-sk");
+    expect(config.tosBucket).toBe("media-bucket");
+    expect(config.tosRegion).toBe("cn-beijing");
+    expect(config.tosEndpoint).toBe("tos.example.com");
+    expect(config.tosPrefix).toBe("custom/uploads");
+    expect(config.tosSignedUrlExpires).toBe(7200);
+  });
+
+  test("defaults TOS prefix and signed URL expiry when auth comes from config file", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(
+      path.join(workspaceRoot, "mini-agent.config.json"),
+      JSON.stringify(
+        {
+          tosAccessKeyId: "file-ak",
+          tosAccessKeySecret: "file-sk",
+          tosBucket: "file-bucket",
+          tosRegion: "cn-shanghai",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.tosAccessKeyId).toBe("file-ak");
+    expect(config.tosAccessKeySecret).toBe("file-sk");
+    expect(config.tosBucket).toBe("file-bucket");
+    expect(config.tosRegion).toBe("cn-shanghai");
+    expect(config.tosEndpoint).toBe("tos-cn-shanghai.volces.com");
+    expect(config.tosPrefix).toBe("mini-agent/uploads");
+    expect(config.tosSignedUrlExpires).toBe(3600);
+  });
+
+  test("infers TOS endpoint from region when no endpoint override is set", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_TOS_REGION = "cn-beijing";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.tosEndpoint).toBe("tos-cn-beijing.volces.com");
+  });
+
+  test.each(["0", "-1", "1.5", "abc"])("ignores invalid TOS signed URL expiry env value %s", async (value) => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_TOS_SIGNED_URL_EXPIRES = value;
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.tosSignedUrlExpires).toBe(3600);
+  });
+
+  test.each([0, -1, 1.5, "abc"])("ignores invalid TOS signed URL expiry config value %s", async (value) => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(
+      path.join(workspaceRoot, "mini-agent.config.json"),
+      JSON.stringify({ tosSignedUrlExpires: value }, null, 2),
+      "utf8",
+    );
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect(config.tosSignedUrlExpires).toBe(3600);
   });
 });

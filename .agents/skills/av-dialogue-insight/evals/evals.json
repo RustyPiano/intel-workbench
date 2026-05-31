@@ -20,7 +20,7 @@
       "should_activate": true,
       "requires_files": false,
       "prompt": "这个监控对话视频很大，超出内联上限，帮我规划怎么分析并产出情绪和触发点报告。",
-      "expected_output": "Checks probe_media size, then analyzes a small file inline as Base64 or uploads large media to a public URL (e.g. Volcano Engine TOS) and analyzes that URL with analyze_media.",
+      "expected_output": "Checks probe_media size, then analyzes a small file inline as Base64 or uploads large media to a model-reachable pre-signed URL (e.g. Volcano Engine TOS) and analyzes that URL with analyze_media.",
       "required_markers": ["probe_media", "analyze_media"],
       "forbidden_markers": ["split_media.py", "merge_chunks.py"],
       "files": []

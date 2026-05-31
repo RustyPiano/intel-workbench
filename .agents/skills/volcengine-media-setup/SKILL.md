@@ -5,9 +5,9 @@ description: >-
   Volcano Engine: primary or multimodal model config, Doubao recording ASR /
   语音 API Key, and optional TOS object storage for large local media URLs. Use
   this skill whenever the user mentions 火山引擎, TOS, 对象存储, 语音 API key,
-  豆包 ASR, 大文件上传, public media URL, local audio/video setup, or asks how
-  to configure media analysis credentials.
-compatibility: Works with mini-agent's current config surface for model, multimodal, and ASR settings. TOS setup is optional onboarding guidance unless the current branch has automatic TOS upload support.
+  豆包 ASR, 大文件上传, pre-signed media URL, local audio/video setup, or asks
+  how to configure media analysis credentials.
+compatibility: Works with mini-agent's current config surface for model, multimodal, ASR, and optional TOS automatic upload settings.
 allowed-tools: read write edit bash
 metadata:
   author: mini-agent
@@ -121,12 +121,12 @@ npm run dev -- doctor
 Tell the user to check `[asr_path]` for `asr_configured yes`.
 
 If ASR is configured but the user only has a local audio file, explain that the
-current ASR tool needs a public audio URL. Move to Phase 4.
+ASR tool needs a model-reachable audio URL. Move to Phase 4.
 
 ### Phase 4: Optional TOS For Large Local Media
 
-Use this only when local media must become a URL, or when a large video/image is
-over the inline Base64 limit.
+Use this only when local media must become a model-reachable URL, or when a
+large video/image is over the inline Base64 limit.
 
 Guide the user through Volcano Engine:
 
@@ -148,24 +148,32 @@ Useful TOS API/function reference:
 https://www.volcengine.com/docs/6349/74837?lang=zh
 ```
 
-For branches that support automatic TOS upload, prepare these values:
+Automatic upload is supported once these required values are configured:
 
 ```bash
 export MINI_AGENT_TOS_ACCESS_KEY_ID=your-tos-ak
 export MINI_AGENT_TOS_ACCESS_KEY_SECRET=your-tos-sk
 export MINI_AGENT_TOS_BUCKET=your-bucket
 export MINI_AGENT_TOS_REGION=cn-beijing
-# Optional when the endpoint cannot be inferred or a custom domain is used:
-export MINI_AGENT_TOS_ENDPOINT=https://tos-cn-beijing.volces.com
-# Optional defaults:
-export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
-export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
 ```
 
-If the current branch does not yet support automatic TOS upload, do not pretend
-it does. Tell the user to upload the file manually or through their own TOS
-tooling, generate a short-lived GET URL, and pass that URL to `analyze_media`
-or `analyze_audio`.
+Optional settings:
+
+```bash
+export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
+export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
+# Optional only when overriding the region-derived endpoint:
+export MINI_AGENT_TOS_ENDPOINT=tos-cn-beijing.volces.com
+```
+
+`MINI_AGENT_TOS_ENDPOINT` defaults to
+`tos-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. Do not include
+`https://`; mini-agent normalizes accidental `https://` input before calling
+the TOS SDK.
+`MINI_AGENT_TOS_SIGNED_URL_EXPIRES` defaults to `3600` seconds. After TOS is
+configured, mini-agent can upload large local media or local audio to the
+private bucket and pass a short-lived pre-signed URL to `analyze_media` or
+`analyze_audio`.
 
 ## Output Format
 
@@ -191,7 +199,7 @@ When guiding setup, end with this compact status card:
 - `[multimodal_path] mm_configured no`: set `MINI_AGENT_MM_MODEL`.
 - `[asr_path] asr_configured no`: set `MINI_AGENT_ASR_API_KEY`, or
   `MINI_AGENT_ASR_APP_KEY` plus `MINI_AGENT_ASR_ACCESS_KEY`.
-- Local audio cannot be passed to `analyze_audio`: upload it to TOS or another
-  object store and use a public or pre-signed URL.
+- Local audio cannot be passed directly to `analyze_audio`: configure TOS
+  automatic upload, or provide an existing pre-signed URL.
 - Large local video/image exceeds inline limit: compress it, split it, or upload
-  it to TOS and use a short-lived URL.
+  it to TOS and use a short-lived pre-signed URL.

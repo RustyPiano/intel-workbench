@@ -69,6 +69,18 @@ describe("buildBaseSystemPrompt", () => {
     expect(prompt).toContain("alpha");
   });
 
+  test("instructs the model to avoid exposing secrets without prescribing config workflow", async () => {
+    const root = await createWorkspace();
+    const prompt = await buildBaseSystemPrompt({
+      workspaceRoot: root,
+      availableSkills: [],
+    });
+
+    expect(prompt).toContain("Avoid exposing secrets or sensitive configuration values");
+    expect(prompt).toContain("Report only the status or names of required settings");
+    expect(prompt).not.toContain("do not inspect the workspace just to explain documented configuration or usage");
+  });
+
   test("redacts secrets from AGENTS.md before injecting into base prompt", async () => {
     const root = await createWorkspace();
     const secret = "sk-abcd1234efgh5678";

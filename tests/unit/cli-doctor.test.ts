@@ -154,6 +154,7 @@ describe("doctor helpers", () => {
     expect(report).toContain("asr_base_url\thttps://openspeech.bytedance.com");
     expect(report).toContain("asr_auth\tapi-key");
     expect(report).toContain("asr_timeout_ms\t240000");
+    expect(report).not.toContain("asr_engine");
     expect(report).toContain("tos_configured\tyes");
     expect(report).toContain("tos_bucket\tmedia-bucket");
     expect(report).toContain("tos_region\tcn-beijing");

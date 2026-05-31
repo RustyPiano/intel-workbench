@@ -307,6 +307,7 @@ describe("ToolRegistry", () => {
     expect(acceptsNull(properties.language.type)).toBe(true);
     expect(acceptsNull(properties.hotwords.type)).toBe(true);
     expect(acceptsNull(properties.advanced.type)).toBe(true);
+    expect(acceptsNull(properties.engine.type)).toBe(false);
   });
 
   test("normalizes strict-mode null optional fields before executing tools", async () => {

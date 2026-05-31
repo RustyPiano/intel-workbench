@@ -37,6 +37,20 @@ function parseCallBody(call: { init: RequestInit }): Record<string, unknown> {
 }
 
 describe("callAsr", () => {
+  test("rejects a missing engine at runtime", async () => {
+    const fetch = vi.fn(async () => {
+      throw new Error("should not call fetch without an engine");
+    }) as unknown as typeof globalThis.fetch;
+
+    await expect(
+      callAsr({ config, url: "https://example.com/talk.wav", format: "wav", fetch } as unknown as Parameters<typeof callAsr>[0]),
+    ).rejects.toMatchObject({
+      code: "INVALID_ARGS",
+      message: expect.stringMatching(/engine/u),
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   test("submits with new-console auth, polls with the same request id, and normalizes the result", async () => {
     const raw = {
       audio_info: { duration: 3210 },
@@ -67,6 +81,7 @@ describe("callAsr", () => {
 
     const result = await callAsr({
       config,
+      engine: "standard",
       url: "https://example.com/talk.wav",
       format: "wav",
       user: "user-1",
@@ -148,6 +163,7 @@ describe("callAsr", () => {
         appKey: "app-key",
         accessKey: "access-key",
       },
+      engine: "standard",
       url: "https://example.com/talk.mp3",
       format: "mp3",
       fetch,
@@ -166,6 +182,7 @@ describe("callAsr", () => {
     await expect(
       callAsr({
         config,
+        engine: "standard",
         url: "https://example.com/silence.wav",
         format: "wav",
         fetch,
@@ -180,19 +197,23 @@ describe("callAsr", () => {
 
   test("maps documented invalid argument and retriable status codes to RuntimeError", async () => {
     const invalid = fakeFetch([jsonResponse({}, "20000000"), jsonResponse({}, "45000001")]);
-    await expect(callAsr({ config, url: "https://example.com/a.wav", format: "wav", fetch: invalid.fetch })).rejects.toMatchObject({
+    await expect(
+      callAsr({ config, engine: "standard", url: "https://example.com/a.wav", format: "wav", fetch: invalid.fetch }),
+    ).rejects.toMatchObject({
       code: "INVALID_ARGS",
       retriable: false,
       details: { category: "asr", statusCode: "45000001" },
     });
 
     const tooLarge = fakeFetch([jsonResponse({}, "20000000"), jsonResponse({}, "45000132")]);
-    await expect(callAsr({ config, url: "https://example.com/a.wav", format: "wav", fetch: tooLarge.fetch })).rejects.toThrow(
-      /smaller file/u,
-    );
+    await expect(
+      callAsr({ config, engine: "standard", url: "https://example.com/a.wav", format: "wav", fetch: tooLarge.fetch }),
+    ).rejects.toThrow(/smaller file/u);
 
     const retriable = fakeFetch([jsonResponse({}, "20000000"), jsonResponse({}, "55000031")]);
-    await expect(callAsr({ config, url: "https://example.com/a.wav", format: "wav", fetch: retriable.fetch })).rejects.toMatchObject({
+    await expect(
+      callAsr({ config, engine: "standard", url: "https://example.com/a.wav", format: "wav", fetch: retriable.fetch }),
+    ).rejects.toMatchObject({
       code: "MODEL_ERROR",
       retriable: true,
       details: { category: "asr", statusCode: "55000031" },
@@ -204,7 +225,7 @@ describe("callAsr", () => {
       throw new Error("fetch failed");
     }) as unknown as typeof globalThis.fetch;
 
-    await expect(callAsr({ config, url: "https://example.com/a.wav", format: "wav", fetch })).rejects.toMatchObject({
+    await expect(callAsr({ config, engine: "standard", url: "https://example.com/a.wav", format: "wav", fetch })).rejects.toMatchObject({
       code: "MODEL_ERROR",
       message: "fetch failed",
       retriable: true,
@@ -225,6 +246,7 @@ describe("callAsr", () => {
     await expect(
       callAsr({
         config,
+        engine: "standard",
         url: "https://example.com/a.wav",
         format: "wav",
         fetch,

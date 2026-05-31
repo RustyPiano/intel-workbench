@@ -93,6 +93,7 @@ describe("analyzeAudioTool", () => {
         arguments: {
           url: "https://example.com/talk.wav",
           format: "wav",
+          engine: "standard",
         },
       },
       createContext(root, {
@@ -117,7 +118,7 @@ describe("analyzeAudioTool", () => {
       utteranceCount: 1,
       speakerCount: 1,
       engineUsed: "standard",
-      reason: "auto: remote URL handled by the standard engine",
+      reason: "engine explicitly set to standard",
     });
     expect(result.artifacts).toBeUndefined();
   });
@@ -130,6 +131,7 @@ describe("analyzeAudioTool", () => {
       {
         url: "https://example.com/talk.wav",
         format: "wav",
+        engine: "standard",
         out_path: "analysis/audio.json",
         speaker: true,
         emotion: true,
@@ -155,6 +157,7 @@ describe("analyzeAudioTool", () => {
       {
         url: "https://example.com/talk.wav",
         format: "wav",
+        engine: "standard",
         out_path: "analysis/audio.json",
         speaker: true,
         emotion: true,
@@ -192,7 +195,7 @@ describe("analyzeAudioTool", () => {
       code: "MODEL_ERROR",
       details: { missingTosConfig: true },
     });
-    expect(result.content).toMatch(/Local audio/u);
+    expect(result.content).toMatch(/local audio/u);
     expect(result.content).toMatch(/MINI_AGENT_TOS_/u);
     expect(result.content).toMatch(/volcengine-media-setup/u);
   });
@@ -237,6 +240,7 @@ describe("analyzeAudioTool", () => {
       {
         path: "talk.wav",
         out_path: "analysis/local-audio.json",
+        engine: "standard",
         speaker: true,
         emotion: false,
       },
@@ -322,6 +326,7 @@ describe("analyzeAudioTool", () => {
       {
         url: "https://example.com/talk.wav",
         format: "wav",
+        engine: "standard",
         out_path: "analysis/audio.json",
         language: "en-US",
         speaker: false,
@@ -359,7 +364,7 @@ describe("analyzeAudioTool", () => {
       utteranceCount: 2,
       speakerCount: 2,
       engineUsed: "standard",
-      reason: "auto: remote URL handled by the standard engine",
+      reason: "engine explicitly set to standard",
     });
     expect(result.artifacts).toEqual([
       {
@@ -403,6 +408,7 @@ describe("analyzeAudioTool", () => {
       {
         url: "https://example.com/talk.wav",
         format: "wav",
+        engine: "standard",
         out_path: "analysis/audio.json",
         speaker: true,
         emotion: true,
@@ -450,6 +456,7 @@ describe("analyzeAudioTool", () => {
         arguments: {
           url: "https://example.com/talk.wav",
           format: "wav",
+          engine: "standard",
           out_path: "analysis/defaults.json",
         },
       },
@@ -499,32 +506,44 @@ describe("analyzeAudioTool", () => {
     });
   });
 
-  test("default engine auto routes local audio to turbo without TOS and drops nothing when emotion is not requested", async () => {
+  test("requires the caller to choose an ASR engine explicitly", async () => {
     const root = await createWorkspace();
     await createAudioFile(root, "clip.mp3");
-    const calls: Array<Record<string, unknown>> = [];
-    vi.doMock("../../src/model/asr.js", async () => ({
-      ...(await vi.importActual<typeof import("../../src/model/asr.js")>("../../src/model/asr.js")),
-      callAsr: async (params: Record<string, unknown>) => {
-        calls.push(params);
-        return { text: "hi", utterances: [], raw: {} };
-      },
-    }));
     const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+    const registry = new ToolRegistry([analyzeAudioTool]);
 
-    // No engine arg -> default "auto"; no emotion -> nothing should be flagged.
-    const result = await analyzeAudioTool.execute(
-      { path: "clip.mp3" },
+    const result = await registry.execute(
+      {
+        id: "call_missing_engine",
+        name: "analyze_audio",
+        arguments: { path: "clip.mp3" },
+      },
       createContext(root, { baseURL: "https://openspeech.bytedance.com", resourceId: "volc.seedasr.auc", apiKey: "k" }),
     );
 
-    expect(result.ok).toBe(true);
-    expect(calls[0]).toMatchObject({ engine: "turbo", format: "mp3" });
-    expect(calls[0]!.data).toBeDefined();
-    expect(result.meta?.engineUsed).toBe("turbo");
-    expect(result.meta?.capabilitiesDropped).toBeUndefined();
-    const inline = JSON.parse(result.content) as Record<string, unknown>;
-    expect(inline.capabilitiesDropped).toBeUndefined();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
+    expect(result.content).toMatch(/engine/u);
+  });
+
+  test("rejects legacy engine auto", async () => {
+    const root = await createWorkspace();
+    await createAudioFile(root, "clip.mp3");
+    const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+    const registry = new ToolRegistry([analyzeAudioTool]);
+
+    const result = await registry.execute(
+      {
+        id: "call_auto_engine",
+        name: "analyze_audio",
+        arguments: { path: "clip.mp3", engine: "auto" },
+      },
+      createContext(root, { baseURL: "https://openspeech.bytedance.com", resourceId: "volc.seedasr.auc", apiKey: "k" }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
+    expect(result.content).toMatch(/engine/u);
   });
 
   test("engine turbo rejects formats it cannot handle", async () => {
@@ -540,5 +559,6 @@ describe("analyzeAudioTool", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({ code: "INVALID_ARGS" });
     expect(result.content).toMatch(/wav\/mp3\/ogg\/opus/u);
+    expect(result.content).toMatch(/ffmpeg|convert/u);
   });
 });

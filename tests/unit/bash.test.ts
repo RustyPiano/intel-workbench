@@ -75,6 +75,44 @@ describe("bashTool", () => {
     expect(await readFile(logPath, "utf8")).toContain("stderr line");
   });
 
+  test("blocks commands that would print env files or shell environment", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, ".env"), "MINI_AGENT_API_KEY=secret\n", "utf8");
+
+    const catResult = await bashTool.execute(
+      {
+        command: "cat .env 2>/dev/null || true",
+      },
+      createContext(workspaceRoot, "call_bash_block_env_file"),
+    );
+    const printenvResult = await bashTool.execute(
+      {
+        command: "printenv MINI_AGENT_API_KEY",
+      },
+      createContext(workspaceRoot, "call_bash_block_printenv"),
+    );
+
+    expect(catResult.ok).toBe(false);
+    expect(catResult.error).toMatchObject({ code: "PATH_NOT_ALLOWED" });
+    expect(printenvResult.ok).toBe(false);
+    expect(printenvResult.error).toMatchObject({ code: "PATH_NOT_ALLOWED" });
+  });
+
+  test("allows reading non-secret env example files", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, ".env.example"), "MINI_AGENT_MODEL=qwen-plus\n", "utf8");
+
+    const result = await bashTool.execute(
+      {
+        command: "cat .env.example",
+      },
+      createContext(workspaceRoot, "call_bash_env_example"),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("MODEL=qwen-plus");
+  });
+
   test("returns TOOL_TIMEOUT when the command exceeds the timeout", async () => {
     const workspaceRoot = await createWorkspace();
     const result = await bashTool.execute(

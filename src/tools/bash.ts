@@ -26,6 +26,9 @@ interface BashData {
   logPath: string;
 }
 
+const SECRET_ENV_FILE_PATTERN = /(^|[\s"'`|;&()<>/])\.env(?:\.(?!example(?:$|[\s"'`|;&()<>])|sample(?:$|[\s"'`|;&()<>])|template(?:$|[\s"'`|;&()<>]))[\w.-]+)?(?=$|[\s"'`|;&()<>])/u;
+const ENV_DUMP_COMMAND_PATTERN = /(^|[;&|]\s*)(?:env|printenv)(?=$|\s)/u;
+
 type WorkspaceSnapshot = Map<string, string>;
 
 const SNAPSHOT_IGNORE = [
@@ -115,11 +118,32 @@ function terminateProcessTree(pid: number | undefined): void {
   }
 }
 
+function assertCommandDoesNotExposeSecrets(command: string): void {
+  if (SECRET_ENV_FILE_PATTERN.test(command) || ENV_DUMP_COMMAND_PATTERN.test(command)) {
+    throw new RuntimeError({
+      code: "PATH_NOT_ALLOWED",
+      message:
+        "Command appears to read or print secret configuration. Use redacted diagnostics such as `npm run dev -- doctor`, and describe variable names without exposing values.",
+    });
+  }
+}
+
 export const bashTool: RuntimeTool<BashArgs, BashData> = {
   name: "bash",
-  description: "Execute a shell command inside the workspace.",
+  description:
+    "Execute a shell command inside the workspace. Do not use this to print environment variables or read secret files such as .env, API keys, tokens, or credentials; use redacted diagnostics such as `npm run dev -- doctor` for configuration status.",
   inputSchema: bashArgsSchema,
   async execute(args, ctx) {
+    try {
+      assertCommandDoesNotExposeSecrets(args.command);
+    } catch (error) {
+      return {
+        ok: false,
+        content: error instanceof Error ? error.message : "Command blocked",
+        error: toRuntimeErrorShape(error, "PATH_NOT_ALLOWED"),
+      };
+    }
+
     const cwd = ctx.policy.resolveExecCwd(args.cwd ?? ".");
     const timeoutMs = Math.max(1, Math.min(args.timeout_ms ?? ctx.config.bashTimeoutMs, ctx.config.bashTimeoutMs));
     const artifactDir = path.join(ctx.workspaceRoot, ".mini-agent", "runs", ctx.runId, "artifacts", "bash");

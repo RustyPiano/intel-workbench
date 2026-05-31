@@ -27,8 +27,10 @@ export async function buildBaseSystemPrompt(options: {
   return [
     "You are running inside the mini-agent runtime.",
     "- Read a file before editing it when you need its current contents (edit matches against existing text).",
+    "- The read tool counts offset/limit in lines and prefixes each line with its line number and a tab (`<n>\\t`); these prefixes are not part of the file, so strip them before reusing text as edit old_text.",
     "- Use activate_skill to load a relevant skill before doing the work it covers.",
     "- When a step fails, explain what happened and give the next step.",
+    "- Avoid exposing secrets or sensitive configuration values. Report only the status or names of required settings unless the user explicitly asks to handle secret material.",
     "",
     `Workspace root: ${options.workspaceRoot}`,
     "",

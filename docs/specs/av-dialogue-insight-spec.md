@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | `probe_media` | `{path}` | ffprobe 取时长/流/分辨率与本地 inline 规划（`inlineBase64Allowed` 等），判断单次 inline 是否可行 |
 | `analyze_media` | `{path?, url?, kind?, format?, instruction, want_json?, out_path?}` | 调多模态模型分析视频/图像/音频；默认内联返回分析，给 `out_path` 时改为写文件 + 短摘要。必须且只能提供 `path` 或 `url`；URL 需要 `kind` |
-| `analyze_audio` | `{url, format, out_path?, language?, speaker?, emotion?, hotwords?, advanced?}` | 调 Doubao ASR 分析公网音频 URL；默认内联返回 transcript/utterances，给 `out_path` 时写完整结果（含 raw 提供方载荷）+ 短摘要 |
+| `analyze_audio` | `{path?, url?, format?, engine, out_path?, language?, speaker?, emotion?, hotwords?, advanced?}` | 调 Doubao ASR 分析音频；`engine` 必须显式为 `standard` 或 `turbo`。turbo 可内联支持格式的本地音频；standard 使用公网 URL/TOS 并返回更完整元数据。默认内联返回 transcript/utterances，给 `out_path` 时写完整结果（含 raw 提供方载荷）+ 短摘要 |
 
 连接配置：`mmProvider/mmModel/mmBaseURL/mmApiKey`（`MINI_AGENT_MM_*`）。运行时没有默认
 多模态模型；推荐示例是 Qwen3.5-Omni（DashScope，OpenAI 兼容）。`baseURL/apiKey`
@@ -31,8 +31,10 @@ ASR 配置独立于文本与多模态连接，不回退主连接：`MINI_AGENT_A
 `MINI_AGENT_ASR_APP_KEY` + `MINI_AGENT_ASR_ACCESS_KEY`。可选
 `MINI_AGENT_ASR_APP_ID`、`MINI_AGENT_ASR_RESOURCE_ID`（默认 `volc.seedasr.auc`）、
 `MINI_AGENT_ASR_BASE_URL`（默认 `https://openspeech.bytedance.com`）、
-`MINI_AGENT_ASR_TIMEOUT_MS`。ASR 仅支持公网音频 URL + `format`；本地音频需先上传公网
-存储（如火山 TOS）取 URL。
+`MINI_AGENT_ASR_TIMEOUT_MS`。本地音频不一定需要上传：Agent 可为快速转写选择
+turbo，并在格式不兼容且不需要丰富元数据时先用 `ffmpeg` 转为 wav/mp3/ogg/opus。
+standard 引擎用于丰富元数据、长/大音频或保留原格式，需公网 URL 或上传到私有 TOS 后
+使用短时预签名 URL。
 
 `analyze_media` 与 `analyze_audio` 默认把结果内联返回（适合图片/短片段）；当 Agent 给出
 `out_path` 时改为把完整结果（`analyze_audio` 含 raw 提供方载荷）写入文件、tool message 只
@@ -46,12 +48,15 @@ ASR 配置独立于文本与多模态连接，不回退主连接：`MINI_AGENT_A
 
 ## 4. Pipeline（planning + tool routing + 完整流程）
 
-1. 纯音频公网 URL → `analyze_audio(url, format)` → 用返回的 `text`/`utterances`（或给
-   `out_path` 落盘后读取）。可把 ASR 结果存盘后运行 `audio_stats.py` 得到可复现的说话人
-   占比与情绪计数。ASR 可能有识别错误，Agent 结合上下文修正明显误识别后再产出报告。
+1. 纯音频 → `analyze_audio({ path|url, format?, engine })` → 用返回的
+   `text`/`utterances`（或给 `out_path` 落盘后读取）。Agent 根据目标显式选择引擎：
+   `turbo` 用于快速转写/说话人分离和支持格式的本地 inline；`standard` 用于丰富元数据、
+   长/大音频或保留原格式，并需要公网 URL 或已配置 TOS。可把 ASR 结果存盘后运行
+   `audio_stats.py` 得到可复现的说话人占比与情绪计数。ASR 可能有识别错误，Agent 结合
+   上下文修正明显误识别后再产出报告。
 2. 视频/图像 → `probe_media` → 取时长/大小 → 据 `inlineBase64Allowed` 规划：本地文件
-   Base64 编码后小于 10MB 时可单次 inline（传 `path`）；超限本地文件或任何本地音频先上传
-   公网存储（如火山 TOS）取 URL 再分析，或先压缩。仓库不自动上传。
+   Base64 编码后小于 10MB 时可单次 inline（传 `path`）；超限本地文件可根据配置和意图
+   选择 TOS/已有可达 URL、压缩或切片。
 3. `analyze_media`（按需 `want_json`、`out_path`），按目的路由：事件 / 说话人 / 情感+触发点。
    结构化输出采用 prompt-plus-parse，不依赖 `response_format`。
 4. 需要落盘报告时：按 schema 写 `analysis.json` → `validate_analysis.py` 校验/可选

@@ -2,6 +2,9 @@
 
 Use this guide when you want to point `mini-agent` at OpenAI or any endpoint that speaks the OpenAI Chat Completions shape used by the runtime adapter.
 
+For Alibaba Cloud Model Studio / Bailian / DashScope, use the guided setup in
+[Configure Alibaba Cloud Bailian / DashScope](./configure-alibaba-bailian.md).
+
 ## Use environment variables
 
 This is the safest default because it keeps the API key out of shell history.

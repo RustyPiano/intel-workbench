@@ -22,9 +22,7 @@ export interface AsrResult {
   degradedNote?: string;
 }
 
-// "auto" is resolved to a concrete engine by the tool layer; `callAsr` only ever
-// receives "standard" or "turbo".
-export type AsrEngine = "auto" | "standard" | "turbo";
+export type AsrEngine = "standard" | "turbo";
 
 export interface AsrClientConfig {
   baseURL: string;
@@ -46,8 +44,7 @@ export interface CallAsrParams {
   url?: string;
   data?: string;
   format: string;
-  // Defaults to "standard" so existing callers keep the submit/query flow.
-  engine?: "standard" | "turbo";
+  engine: AsrEngine;
   user?: string;
   language?: string;
   hotwords?: string[];
@@ -87,7 +84,15 @@ const RETRIABLE_STATUS = new Set(["45000131", "55000031"]);
 type JsonObject = Record<string, unknown>;
 
 export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
-  const engine = params.engine ?? "standard";
+  if (params.engine !== "standard" && params.engine !== "turbo") {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: 'Doubao ASR engine is required. Pass engine "standard" or "turbo".',
+      retriable: false,
+      details: { category: "asr" },
+    });
+  }
+
   const requestId = randomUUID();
   const startedAt = Date.now();
   const timeoutMs = params.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -102,7 +107,7 @@ export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
   }
 
   try {
-    return engine === "turbo"
+    return params.engine === "turbo"
       ? await runTurbo(params, fetchFn, requestId)
       : await runStandard(params, fetchFn, requestId, startedAt, timeoutMs);
   } catch (error) {

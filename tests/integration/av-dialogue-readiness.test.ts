@@ -33,7 +33,8 @@ describe("av-dialogue-insight readiness", () => {
     const skill = await readFile(path.join(process.cwd(), ".agents", "skills", "av-dialogue-insight", "SKILL.md"), "utf8");
 
     expect(skill).toContain("analyze_audio");
-    expect(skill).toMatch(/Reachable audio URL:[\s\S]*analyze_audio/u);
+    expect(skill).toMatch(/Audio path or URL:[\s\S]*analyze_audio/u);
+    expect(skill).toMatch(/engine:[\s\S]*standard[\s\S]*turbo/u);
     expect(skill).toMatch(/Video or image:[\s\S]*probe_media[\s\S]*analyze_media/u);
     expect(skill).toMatch(/inline by default/u);
     expect(skill).toMatch(/out_path[\s\S]*read that file/u);
@@ -43,6 +44,7 @@ describe("av-dialogue-insight readiness", () => {
     expect(skill).toMatch(/automatic upload[\s\S]*pre-signed URL/u);
     expect(skill).toMatch(/model-reachable/u);
     expect(skill).toMatch(/Volcano Engine TOS|object storage/u);
+    expect(skill).not.toMatch(/URL-only|any local audio/u);
     expect(skill).toContain("validate_analysis.py");
     expect(skill).toContain("MINI_AGENT_ASR_*");
     expect(skill).not.toMatch(/≤\s*~?360s|360s/u);

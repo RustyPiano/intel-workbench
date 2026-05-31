@@ -183,19 +183,23 @@ function mapMessage(message: RuntimeMessage): ChatCompletionMessageParam {
         role: "user",
         content: message.content,
       };
-    case "assistant":
+    case "assistant": {
+      const toolCalls = message.toolCalls?.map((toolCall) => ({
+        id: toolCall.id,
+        type: "function" as const,
+        function: {
+          name: toolCall.name,
+          arguments: JSON.stringify(toolCall.arguments),
+        },
+      }));
+      // Only include `tool_calls` when there is at least one. An empty array is
+      // rejected by the provider ("Expected an array with minimum length 1").
       return {
         role: "assistant",
         content: message.content || null,
-        tool_calls: message.toolCalls?.map((toolCall) => ({
-          id: toolCall.id,
-          type: "function",
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
+        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
+    }
     case "tool":
       if (!message.toolCallId) {
         throw new RuntimeError({

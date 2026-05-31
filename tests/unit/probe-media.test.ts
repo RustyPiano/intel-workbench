@@ -57,11 +57,11 @@ describe("probeMediaTool", () => {
     });
   });
 
-  test("plans split transport for oversized local media", () => {
+  test("plans flexible external transport for oversized local media", () => {
     expect(planMediaTransport(Math.ceil(MAX_INLINE_BASE64_BYTES / 4) * 3)).toEqual({
       inlineBase64Bytes: MAX_INLINE_BASE64_BYTES,
       inlineBase64Allowed: false,
-      recommendedTransport: "split",
+      recommendedTransport: "model_reachable_url_or_preprocess",
       recommendedChunkSeconds: 300,
     });
   });

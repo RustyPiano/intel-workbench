@@ -48,13 +48,16 @@ Optional environment variables:
 export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
 export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
 # Optional only when overriding the region-derived endpoint:
-export MINI_AGENT_TOS_ENDPOINT=tos-cn-beijing.volces.com
+export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
 ```
 
-`MINI_AGENT_TOS_ENDPOINT` defaults to
-`tos-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. Do not include
-`https://`; mini-agent normalizes accidental `https://` input before calling
-the TOS SDK.
+mini-agent talks to TOS over its S3-compatible protocol, so the endpoint must be
+the S3-protocol host (`tos-s3-<region>...`), not the native TOS host
+(`tos-<region>...`). `MINI_AGENT_TOS_ENDPOINT` defaults to
+`tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A native
+`tos-<region>.volces.com` value is upgraded to the S3 host automatically, and a
+leading `https://` is optional. For VPC access, set the internal S3 host
+(`tos-s3-<region>.ivolces.com`).
 `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` defaults to `3600` seconds.
 
 ## Verify

@@ -75,7 +75,7 @@ mini-agent [prompt]
 | `MINI_AGENT_TOS_ACCESS_KEY_SECRET` | Volcano Engine TOS access key secret for optional local media upload. |
 | `MINI_AGENT_TOS_BUCKET` | TOS bucket used for optional local media upload. Keep it private. |
 | `MINI_AGENT_TOS_REGION` | TOS bucket region, for example `cn-beijing`. |
-| `MINI_AGENT_TOS_ENDPOINT` | Optional TOS endpoint override. Defaults to `tos-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. Do not include `https://`. |
+| `MINI_AGENT_TOS_ENDPOINT` | Optional S3-protocol endpoint override. Defaults to `tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A native `tos-<region>...` host is upgraded to the `tos-s3-<region>...` host automatically; a leading `https://` is optional. |
 | `MINI_AGENT_TOS_PREFIX` | Optional object key prefix for uploaded local media. |
 | `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` | Optional pre-signed URL lifetime in seconds. Defaults to `3600`. |
 
@@ -103,7 +103,7 @@ mini-agent [prompt]
   "tosAccessKeySecret": "your-tos-sk",
   "tosBucket": "your-bucket",
   "tosRegion": "cn-beijing",
-  "tosEndpoint": "tos-cn-beijing.volces.com",
+  "tosEndpoint": "tos-s3-cn-beijing.volces.com",
   "tosPrefix": "mini-agent/uploads",
   "tosSignedUrlExpires": 3600,
   "globalSkillDirs": ["~/.agents/skills"],
@@ -165,8 +165,8 @@ Optional settings:
 ```bash
 export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
 export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
-# Optional only when overriding the region-derived endpoint:
-export MINI_AGENT_TOS_ENDPOINT=tos-cn-beijing.volces.com
+# Optional only when overriding the region-derived endpoint (S3-protocol host):
+export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
 ```
 
 Use the Volcano Engine TOS service and API references when creating the bucket,

@@ -162,14 +162,15 @@ Optional settings:
 ```bash
 export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
 export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
-# Optional only when overriding the region-derived endpoint:
-export MINI_AGENT_TOS_ENDPOINT=tos-cn-beijing.volces.com
+# Optional only when overriding the region-derived endpoint (S3-protocol host):
+export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
 ```
 
-`MINI_AGENT_TOS_ENDPOINT` defaults to
-`tos-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. Do not include
-`https://`; mini-agent normalizes accidental `https://` input before calling
-the TOS SDK.
+mini-agent uploads through the TOS S3-compatible protocol, so the endpoint must
+be the S3-protocol host (`tos-s3-<region>...`). `MINI_AGENT_TOS_ENDPOINT`
+defaults to `tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A
+native `tos-<region>.volces.com` value is upgraded to the S3 host automatically,
+and a leading `https://` is optional.
 `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` defaults to `3600` seconds. After TOS is
 configured, mini-agent can upload large local media or local audio to the
 private bucket and pass a short-lived pre-signed URL to `analyze_media` or

@@ -191,6 +191,20 @@ function timelineMode(config: RuntimeConfig, command: string[] = []): "compact" 
   return config.traceMode === "verbose" ? "verbose" : "compact";
 }
 
+function getAsrAuth(config: RuntimeConfig): "api-key" | "app-key+access-key" | "missing" {
+  if (config.asrApiKey) {
+    return "api-key";
+  }
+  if (config.asrAppKey && config.asrAccessKey) {
+    return "app-key+access-key";
+  }
+  return "missing";
+}
+
+function isTosConfigured(config: RuntimeConfig): boolean {
+  return Boolean(config.tosAccessKeyId && config.tosAccessKeySecret && config.tosBucket && config.tosRegion);
+}
+
 async function handleSkillsCommand(config: RuntimeConfig): Promise<void> {
   const registry = await SkillRegistry.discover({
     workspaceRoot: config.workspaceRoot,
@@ -375,6 +389,30 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         model: config.smokeModel,
         baseURL: config.smokeBaseURL,
       },
+      multimodalPath: {
+        configured: Boolean(config.mmModel),
+        provider: config.mmProvider ?? (config.mmModel ? "openai-compatible" : undefined),
+        model: config.mmModel,
+        baseURL: config.mmBaseURL ?? (config.mmModel ? config.baseURL : undefined),
+        apiKeyConfigured: Boolean(config.mmApiKey ?? (config.mmModel ? config.apiKey : undefined)),
+        timeoutMs: config.mmTimeoutMs,
+      },
+      asrPath: {
+        configured: getAsrAuth(config) !== "missing",
+        resourceId: config.asrResourceId,
+        baseURL: config.asrBaseURL,
+        auth: getAsrAuth(config),
+        timeoutMs: config.asrTimeoutMs,
+      },
+      tosStorage: {
+        configured: isTosConfigured(config),
+        bucket: config.tosBucket,
+        region: config.tosRegion,
+        endpoint: config.tosEndpoint,
+        prefix: config.tosPrefix,
+        signedUrlExpires: config.tosSignedUrlExpires,
+        accessKeyConfigured: Boolean(config.tosAccessKeyId && config.tosAccessKeySecret),
+      },
       lastRun,
     }),
   );
@@ -403,9 +441,45 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
     sessionDir: config.sessionDir,
     toolConfig: {
       toolTimeoutMs: config.toolTimeoutMs,
+      mmTimeoutMs: config.mmTimeoutMs,
+      asrTimeoutMs: config.asrTimeoutMs,
       bashTimeoutMs: config.bashTimeoutMs,
       maxBashOutputBytes: config.maxBashOutputBytes,
       readMaxBytes: config.readMaxBytes,
+      // Media tools only activate when an explicit multimodal model is set.
+      // baseURL/apiKey fall back to the primary connection (handy when the
+      // primary endpoint already points at DashScope or another omni host).
+      multimodal: config.mmModel
+        ? {
+            provider: config.mmProvider ?? "openai-compatible",
+            model: config.mmModel,
+            baseURL: config.mmBaseURL ?? config.baseURL,
+            apiKey: config.mmApiKey ?? config.apiKey,
+          }
+        : undefined,
+      asr:
+        getAsrAuth(config) !== "missing" && config.asrBaseURL && config.asrResourceId
+          ? {
+              baseURL: config.asrBaseURL,
+              resourceId: config.asrResourceId,
+              appId: config.asrAppId,
+              apiKey: config.asrApiKey,
+              accessKey: config.asrAccessKey,
+              appKey: config.asrAppKey,
+              timeoutMs: config.asrTimeoutMs,
+            }
+          : undefined,
+      tos: isTosConfigured(config)
+        ? {
+            accessKeyId: config.tosAccessKeyId!,
+            accessKeySecret: config.tosAccessKeySecret!,
+            bucket: config.tosBucket!,
+            region: config.tosRegion!,
+            endpoint: config.tosEndpoint,
+            prefix: config.tosPrefix ?? "mini-agent/uploads",
+            signedUrlExpires: config.tosSignedUrlExpires ?? 3600,
+          }
+        : undefined,
     },
   });
 }
@@ -483,4 +557,3 @@ export async function main(): Promise<void> {
     hideDebug: config.hideDebug,
   });
 }
-

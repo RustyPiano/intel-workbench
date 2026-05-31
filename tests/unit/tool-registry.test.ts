@@ -3,9 +3,9 @@ import { z } from "zod";
 
 import { createPolicyEngine } from "../../src/runtime/policy.js";
 import { createDefaultToolRegistry, ToolRegistry } from "../../src/tools/index.js";
-import { getToolJsonSchema, type RuntimeTool, type ToolContext } from "../../src/tools/types.js";
+import { getToolJsonSchema, type RuntimeTool, type ToolContext, type ToolRuntimeConfig } from "../../src/tools/types.js";
 
-function createContext(): ToolContext {
+function createContext(config?: Partial<ToolRuntimeConfig>): ToolContext {
   return {
     workspaceRoot: process.cwd(),
     sessionId: "sess_test",
@@ -24,6 +24,7 @@ function createContext(): ToolContext {
       bashTimeoutMs: 120_000,
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,
+      ...config,
     },
   };
 }
@@ -137,6 +138,82 @@ describe("ToolRegistry", () => {
     expect(aborted).toBe(true);
   });
 
+  test("uses the multimodal timeout budget for analyze_media", async () => {
+    let aborted = false;
+    const registry = new ToolRegistry([
+      {
+        name: "analyze_media",
+        description: "slow multimodal fixture",
+        inputSchema: z.object({}).strict(),
+        async execute(_args, ctx) {
+          return new Promise((resolve) => {
+            ctx.signal.addEventListener("abort", () => {
+              aborted = true;
+              resolve({
+                ok: false,
+                content: "aborted",
+              });
+            });
+          });
+        },
+      } satisfies RuntimeTool,
+    ]);
+
+    const result = await registry.execute(
+      {
+        id: "call_slow_mm",
+        name: "analyze_media",
+        arguments: {},
+      },
+      createContext({ toolTimeoutMs: 25, mmTimeoutMs: 75 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "TOOL_TIMEOUT",
+      message: "Tool analyze_media timed out after 75ms",
+    });
+    expect(aborted).toBe(true);
+  });
+
+  test("uses the ASR timeout budget for analyze_audio", async () => {
+    let aborted = false;
+    const registry = new ToolRegistry([
+      {
+        name: "analyze_audio",
+        description: "slow ASR fixture",
+        inputSchema: z.object({}).strict(),
+        async execute(_args, ctx) {
+          return new Promise((resolve) => {
+            ctx.signal.addEventListener("abort", () => {
+              aborted = true;
+              resolve({
+                ok: false,
+                content: "aborted",
+              });
+            });
+          });
+        },
+      } satisfies RuntimeTool,
+    ]);
+
+    const result = await registry.execute(
+      {
+        id: "call_slow_asr",
+        name: "analyze_audio",
+        arguments: {},
+      },
+      createContext({ toolTimeoutMs: 25, asrTimeoutMs: 75 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "TOOL_TIMEOUT",
+      message: "Tool analyze_audio timed out after 75ms",
+    });
+    expect(aborted).toBe(true);
+  });
+
   test("getToolJsonSchema derives OpenAI strict-compatible JSON schemas for every default tool", () => {
     const registry = createDefaultToolRegistry();
     const tools = registry.list();
@@ -186,6 +263,50 @@ describe("ToolRegistry", () => {
 
     // Every declared property is still in `required`.
     expect([...(schema.required as string[])].sort()).toEqual(["flag", "mandatory", "maybe"]);
+  });
+
+  test("getToolJsonSchema exposes analyze_media nullable source fields for strict mode", () => {
+    const registry = createDefaultToolRegistry();
+    const analyzeMedia = registry.list().find((tool) => tool.name === "analyze_media");
+    expect(analyzeMedia).toBeDefined();
+
+    const schema = getToolJsonSchema(analyzeMedia!);
+    const properties = schema.properties as Record<string, { type: unknown }>;
+    const required = schema.required as string[];
+    expect([...required].sort()).toEqual(
+      ["format", "instruction", "kind", "out_path", "path", "url", "want_json"].sort(),
+    );
+
+    const acceptsNull = (value: unknown): boolean => Array.isArray(value) && value.includes("null");
+    expect(acceptsNull(properties.path.type)).toBe(true);
+    expect(acceptsNull(properties.url.type)).toBe(true);
+    expect(acceptsNull(properties.kind.type)).toBe(true);
+    expect(acceptsNull(properties.format.type)).toBe(true);
+    expect(acceptsNull(properties.want_json.type)).toBe(true);
+    expect(acceptsNull(properties.out_path.type)).toBe(true);
+    expect(properties.instruction.type).toBe("string");
+  });
+
+  test("getToolJsonSchema exposes analyze_audio required and nullable optional fields for strict mode", () => {
+    const registry = createDefaultToolRegistry();
+    const analyzeAudio = registry.list().find((tool) => tool.name === "analyze_audio");
+    expect(analyzeAudio).toBeDefined();
+
+    const schema = getToolJsonSchema(analyzeAudio!);
+    const properties = schema.properties as Record<string, { type: unknown }>;
+    const required = schema.required as string[];
+    expect([...required].sort()).toEqual(
+      ["advanced", "emotion", "format", "hotwords", "language", "out_path", "path", "speaker", "url"].sort(),
+    );
+
+    const acceptsNull = (value: unknown): boolean => Array.isArray(value) && value.includes("null");
+    expect(acceptsNull(properties.url.type)).toBe(true);
+    expect(acceptsNull(properties.path.type)).toBe(true);
+    expect(acceptsNull(properties.format.type)).toBe(true);
+    expect(acceptsNull(properties.out_path.type)).toBe(true);
+    expect(acceptsNull(properties.language.type)).toBe(true);
+    expect(acceptsNull(properties.hotwords.type)).toBe(true);
+    expect(acceptsNull(properties.advanced.type)).toBe(true);
   });
 
   test("normalizes strict-mode null optional fields before executing tools", async () => {

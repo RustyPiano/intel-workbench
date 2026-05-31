@@ -4,12 +4,11 @@ import type { ModelAdapter } from "../model/types.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { createDefaultToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
-import type { ToolExecutionResult } from "../tools/types.js";
+import type { ToolExecutionResult, ToolRuntimeConfig } from "../tools/types.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
 import { RuntimeError } from "./errors.js";
 import { EventBus } from "./events.js";
 import { formatToolMessageContent, runAgentLoop } from "./loop.js";
-import type { RuntimeConfig } from "./config.js";
 import { createPolicyEngine, type PolicyEngine } from "./policy.js";
 import { buildActiveSkillsBlock, buildBaseSystemPrompt } from "./prompt.js";
 import { RunManager } from "./run-manager.js";
@@ -30,7 +29,7 @@ export interface RuntimeAgentOptions {
   allowReadOutsideWorkspace?: boolean;
   allowWriteOutsideWorkspace?: boolean;
   sessionDir?: string;
-  toolConfig?: Pick<RuntimeConfig, "toolTimeoutMs" | "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
+  toolConfig?: ToolRuntimeConfig;
   logger?: Logger;
 }
 
@@ -141,7 +140,7 @@ export class RuntimeAgent {
   readonly sessionStore: SessionStore;
   readonly runStore: RunStore;
   readonly maxTurns: number;
-  readonly toolConfig: Pick<RuntimeConfig, "toolTimeoutMs" | "bashTimeoutMs" | "maxBashOutputBytes" | "readMaxBytes">;
+  readonly toolConfig: ToolRuntimeConfig;
   readonly toolRegistry = createDefaultToolRegistry();
   readonly fileMutationQueue = new FileMutationQueue();
   readonly skillRegistry: SkillRegistry;

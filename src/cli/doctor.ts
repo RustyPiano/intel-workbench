@@ -28,6 +28,30 @@ export interface DoctorReportInput {
     model?: string;
     baseURL?: string;
   };
+  multimodalPath: {
+    configured: boolean;
+    provider?: string;
+    model?: string;
+    baseURL?: string;
+    apiKeyConfigured: boolean;
+    timeoutMs?: number;
+  };
+  asrPath: {
+    configured: boolean;
+    resourceId?: string;
+    baseURL?: string;
+    auth: "api-key" | "app-key+access-key" | "missing";
+    timeoutMs?: number;
+  };
+  tosStorage: {
+    configured: boolean;
+    bucket?: string;
+    region?: string;
+    endpoint?: string;
+    prefix?: string;
+    signedUrlExpires?: number;
+    accessKeyConfigured: boolean;
+  };
   lastRun?: Partial<RunMeta> & {
     error_layer?: string;
     user_message?: string;
@@ -103,6 +127,30 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `smoke_provider\t${input.smokePath.provider ?? "(unset)"}`,
     `smoke_model\t${input.smokePath.model ?? "(unset)"}`,
     `smoke_base_url\t${input.smokePath.baseURL ?? "(unset)"}`,
+    "",
+    "[multimodal_path]",
+    `mm_configured\t${input.multimodalPath.configured ? "yes" : "no"}`,
+    `mm_provider\t${input.multimodalPath.provider ?? "(unset)"}`,
+    `mm_model\t${input.multimodalPath.model ?? "(unset)"}`,
+    `mm_base_url\t${input.multimodalPath.baseURL ?? "(unset)"}`,
+    `mm_api_key\t${input.multimodalPath.apiKeyConfigured ? "configured" : "missing"}`,
+    `mm_timeout_ms\t${input.multimodalPath.timeoutMs ?? "(unset)"}`,
+    "",
+    "[asr_path]",
+    `asr_configured\t${input.asrPath.configured ? "yes" : "no"}`,
+    `asr_resource_id\t${input.asrPath.resourceId ?? "(unset)"}`,
+    `asr_base_url\t${input.asrPath.baseURL ?? "(unset)"}`,
+    `asr_auth\t${input.asrPath.auth}`,
+    `asr_timeout_ms\t${input.asrPath.timeoutMs ?? "(unset)"}`,
+    "",
+    "[tos_storage]",
+    `tos_configured\t${input.tosStorage.configured ? "yes" : "no"}`,
+    `tos_bucket\t${input.tosStorage.bucket ?? "(unset)"}`,
+    `tos_region\t${input.tosStorage.region ?? "(unset)"}`,
+    `tos_endpoint\t${input.tosStorage.endpoint ?? "(unset)"}`,
+    `tos_prefix\t${input.tosStorage.prefix ?? "(unset)"}`,
+    `tos_signed_url_expires\t${input.tosStorage.signedUrlExpires ?? "(unset)"}`,
+    `tos_access_key\t${input.tosStorage.accessKeyConfigured ? "configured" : "missing"}`,
   ];
 
   if (input.lastRun) {

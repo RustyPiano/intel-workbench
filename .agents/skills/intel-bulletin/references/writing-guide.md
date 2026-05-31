@@ -1,6 +1,38 @@
-# Writing Guide
+# 公文写作规范（情报通报）
 
-- Lead with the main fact.
-- Keep dates explicit.
-- Separate source facts from conclusions.
-- Prefer short paragraphs over long narrative blocks.
+情报报文应符合一般公文规范，结构清晰、要点突出、措辞规范。
+
+## 结构
+
+1. **标题**：准确概括主旨，常见式样"关于……的情报通报/情况通报"。
+2. **密级 / 编号**（可选）：如"内部""秘密"；编号如"情报〔2026〕第008号"。
+3. **主送机关**：报文呈送对象，单列一行并以全角冒号结尾，如"各相关部门："。
+4. **概要**：开篇一段概述核心结论与背景，便于快速把握全局。
+5. **分小节正文**：以"一、二、三、"编号，每节一个主题；先摆事实、再作研判。
+6. **结论 / 建议**：归纳总体判断并给出下一步建议。
+7. **落款与日期**：署名责任主体与成文日期。
+
+## 行文要求
+
+- 先列主要事实，后给分析结论；事实与研判分离，避免混淆。
+- 日期、数字、地名等要素写明、写准，必要时标注信息来源。
+- 段落短小，一段一意；多用陈述句，少用修饰。
+- 用语客观、严谨、规范，避免主观情绪化表述。
+- 对不确定信息明确标注"待核实""暂不明确"，不臆测。
+- Do not invent classification, document number, recipient, issuer, or date.
+  Use only user-provided or source-supported metadata; otherwise omit the field
+  or mark it as unknown/pending verification when a placeholder is required.
+
+## 与 spec 字段的对应
+
+`render_report.py` 消费的 JSON spec 字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `title` | 标题 |
+| `classification` / `doc_number` | 密级 / 编号（可选） |
+| `recipient` | 主送机关（可选） |
+| `summary` | 概要 |
+| `sections[].heading` / `body` | 分小节标题 / 正文 |
+| `conclusion` | 结论与建议 |
+| `issuer` / `date` | 落款 / 日期 |

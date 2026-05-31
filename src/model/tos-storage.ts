@@ -1,8 +1,11 @@
+import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 
-import TOS from "@volcengine/tos-sdk";
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { RuntimeError } from "../runtime/errors.js";
 import type { TosStorageConfig } from "../tools/types.js";
@@ -40,14 +43,6 @@ export interface PublishFileToTosParams {
   contentType?: string;
   client?: TosStorageClient;
 }
-
-type TosConstructor = new (options: {
-  accessKeyId: string;
-  accessKeySecret: string;
-  bucket: string;
-  region: string;
-  endpoint?: string;
-}) => TosStorageClient;
 
 export async function publishFileToTos(params: PublishFileToTosParams): Promise<PublishedMedia> {
   const { config, filePath, runId, toolCallId, contentType } = params;
@@ -95,26 +90,68 @@ export function toPublishedMediaMetadata(media: PublishedMedia): PublishedMediaM
 }
 
 function createTosClient(config: TosStorageConfig): TosStorageClient {
-  const Client = TOS as unknown as TosConstructor;
-  return new Client({
-    accessKeyId: config.accessKeyId,
-    accessKeySecret: config.accessKeySecret,
-    bucket: config.bucket,
+  const client = new S3Client({
     region: config.region,
-    endpoint: normalizeEndpointForSdk(config.endpoint),
+    endpoint: resolveS3Endpoint(config.endpoint, config.region),
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.accessKeySecret,
+    },
+    // TOS only accepts virtual-host-style requests over the S3 protocol.
+    forcePathStyle: false,
+    // TOS does not support the AWS flexible (aws-chunked / x-amz-checksum-*)
+    // integrity scheme that newer SDKs send by default, so keep it opt-in.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
+
+  return {
+    async putObjectFromFile({ bucket, key, filePath, contentType }) {
+      const body = createReadStream(filePath);
+      try {
+        const upload = new Upload({
+          client,
+          params: {
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+            ...(contentType ? { ContentType: contentType } : {}),
+          },
+        });
+        await upload.done();
+      } finally {
+        // lib-storage closes the stream on a clean run; destroy it explicitly so
+        // a failed/aborted upload cannot leak the file descriptor.
+        body.destroy();
+      }
+    },
+    getPreSignedUrl({ bucket, key, expires }) {
+      return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), {
+        expiresIn: expires,
+      });
+    },
+  };
 }
 
-function normalizeEndpointForSdk(endpoint: string | undefined): string | undefined {
+// TOS exposes a dedicated S3-protocol host (`tos-s3-<region>...`) that differs
+// from the native TOS host (`tos-<region>...`). Derive it from the region when
+// no endpoint is set, and transparently upgrade a native Volcano host so an
+// existing `MINI_AGENT_TOS_ENDPOINT` keeps working after the S3 migration.
+export function resolveS3Endpoint(endpoint: string | undefined, region: string): string {
   const trimmed = endpoint?.trim();
   if (!trimmed) {
-    return undefined;
+    return `https://tos-s3-${region}.volces.com`;
   }
+
+  let host: string;
   try {
-    return new URL(trimmed).host;
+    host = new URL(/^https?:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`).host;
   } catch {
-    return trimmed.replace(/^https?:\/\//iu, "").replace(/\/+$/u, "");
+    host = trimmed.replace(/^https?:\/\//iu, "").replace(/\/+$/u, "");
   }
+
+  const s3Host = host.replace(/^tos-(?!s3-)(.*\.i?volces\.com)$/iu, "tos-s3-$1");
+  return `https://${s3Host}`;
 }
 
 function buildObjectKey(prefix: string, runId: string, toolCallId: string, filePath: string): string {

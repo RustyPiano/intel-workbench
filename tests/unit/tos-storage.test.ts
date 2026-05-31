@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { publishFileToTos, type TosStorageClient } from "../../src/model/tos-storage.js";
+import { publishFileToTos, resolveS3Endpoint, type TosStorageClient } from "../../src/model/tos-storage.js";
 import { RuntimeError } from "../../src/runtime/errors.js";
 import type { TosStorageConfig } from "../../src/tools/types.js";
 
@@ -144,6 +144,31 @@ describe("publishFileToTos", () => {
         client,
       }),
     ).rejects.toBeInstanceOf(RuntimeError);
+  });
+
+  test("derives the S3-protocol endpoint from region when none is set", () => {
+    expect(resolveS3Endpoint(undefined, "cn-beijing")).toBe("https://tos-s3-cn-beijing.volces.com");
+    expect(resolveS3Endpoint("  ", "cn-shanghai")).toBe("https://tos-s3-cn-shanghai.volces.com");
+  });
+
+  test("upgrades a native TOS host to the S3-protocol host", () => {
+    expect(resolveS3Endpoint("https://tos-cn-beijing.volces.com", "cn-beijing")).toBe(
+      "https://tos-s3-cn-beijing.volces.com",
+    );
+    expect(resolveS3Endpoint("tos-cn-beijing.volces.com", "cn-beijing")).toBe(
+      "https://tos-s3-cn-beijing.volces.com",
+    );
+    // Internal (VPC) host keeps its ivolces.com suffix.
+    expect(resolveS3Endpoint("tos-cn-beijing.ivolces.com", "cn-beijing")).toBe(
+      "https://tos-s3-cn-beijing.ivolces.com",
+    );
+  });
+
+  test("leaves an already-S3 or non-Volcano endpoint untouched (only adds scheme)", () => {
+    expect(resolveS3Endpoint("https://tos-s3-cn-beijing.volces.com", "cn-beijing")).toBe(
+      "https://tos-s3-cn-beijing.volces.com",
+    );
+    expect(resolveS3Endpoint("s3.example.com", "cn-beijing")).toBe("https://s3.example.com");
   });
 
   test("reports missing local files as invalid arguments before TOS upload", async () => {

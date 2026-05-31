@@ -112,16 +112,38 @@ export MINI_AGENT_ASR_BASE_URL=https://openspeech.bytedance.com
 export MINI_AGENT_ASR_TIMEOUT_MS=180000
 ```
 
+Optional engine selection:
+
+```bash
+# auto (default): prefer standard; only fall back to turbo for a local file
+#   with no TOS configured.
+# standard: 录音文件标准版 volc.seedasr.auc — needs a model-reachable URL (local
+#   files go through TOS); full features incl. emotion/gender/speech-rate/volume;
+#   handles long/large audio.
+# turbo: 录音文件极速版 — one-shot, sends a local file inline as base64 with NO
+#   TOS, lower latency, but only wav/mp3/ogg/opus, <=2h/<=100MB, and no emotion/
+#   gender/speech-rate/volume.
+export MINI_AGENT_ASR_ENGINE=auto
+export MINI_AGENT_ASR_TURBO_RESOURCE_ID=volc.bigasr.auc_turbo
+export MINI_AGENT_ASR_TURBO_MAX_BYTES=20000000
+```
+
+`analyze_audio` also takes a per-call `engine` ("auto" | "standard" | "turbo")
+that overrides this default, and its result reports `engineUsed` plus any
+`capabilitiesDropped` (e.g. emotion when turbo was used).
+
 Then run:
 
 ```bash
 npm run dev -- doctor
 ```
 
-Tell the user to check `[asr_path]` for `asr_configured yes`.
+Tell the user to check `[asr_path]` for `asr_configured yes` (and `asr_engine`
+for the active default).
 
-If ASR is configured but the user only has a local audio file, explain that the
-ASR tool needs a model-reachable audio URL. Move to Phase 4.
+If ASR is configured but the user only has a local audio file, they have two
+options: use the `turbo` engine to send it inline without any TOS (within the
+turbo size/format limits), or configure TOS (Phase 4) and use `standard`.
 
 ### Phase 4: Optional TOS For Large Local Media
 

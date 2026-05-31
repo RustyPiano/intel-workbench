@@ -237,4 +237,92 @@ describe("callAsr", () => {
       details: { category: "asr" },
     });
   });
+
+  test("turbo engine sends one flash request with base64 data, turbo resource id, and no emotion field", async () => {
+    const raw = {
+      audio_info: { duration: 2499 },
+      result: { text: "关闭透传。", utterances: [{ start_time: 450, end_time: 1530, text: "关闭透传。" }] },
+    };
+    const { fetch, calls } = fakeFetch([jsonResponse(raw, "20000000")]);
+
+    const result = await callAsr({
+      config: { ...config, turboResourceId: "volc.bigasr.auc_turbo" },
+      engine: "turbo",
+      data: "BASE64AUDIO",
+      format: "wav",
+      language: "zh-CN",
+      hotwords: ["透传"],
+      enableSpeakerInfo: true,
+      enableEmotionDetection: true, // turbo must drop this
+      fetch,
+    });
+
+    expect(result.text).toBe("关闭透传。");
+    expect(result.durationMs).toBe(2499);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://openspeech.example.com/api/v3/auc/bigmodel/recognize/flash");
+    expect((calls[0]!.init.headers as Record<string, string>)["X-Api-Resource-Id"]).toBe("volc.bigasr.auc_turbo");
+
+    const body = parseCallBody(calls[0]!);
+    expect(body.audio).toEqual({ data: "BASE64AUDIO", format: "wav" });
+    const request = body.request as Record<string, unknown>;
+    expect(request).not.toHaveProperty("enable_emotion_detection");
+    expect(request).toMatchObject({
+      model_name: "bigmodel",
+      enable_punc: true,
+      enable_itn: true,
+      enable_speaker_info: true,
+      show_utterances: true,
+      language: "zh-CN",
+      context: { hotwords: ["透传"] },
+    });
+  });
+
+  test("turbo engine strips unsupported fields even when injected through advanced", async () => {
+    const { fetch, calls } = fakeFetch([jsonResponse({ result: { text: "ok", utterances: [] } }, "20000000")]);
+
+    await callAsr({
+      config,
+      engine: "turbo",
+      data: "x",
+      format: "wav",
+      advanced: {
+        enable_emotion_detection: true,
+        enable_gender_detection: true,
+        callback: "http://evil.example/hook",
+        enable_ddc: true, // a supported field must survive
+      },
+      fetch,
+    });
+
+    const request = parseCallBody(calls[0]!).request as Record<string, unknown>;
+    expect(request).not.toHaveProperty("enable_emotion_detection");
+    expect(request).not.toHaveProperty("enable_gender_detection");
+    expect(request).not.toHaveProperty("callback");
+    expect(request.enable_ddc).toBe(true);
+  });
+
+  test("turbo engine defaults the turbo resource id and accepts a url", async () => {
+    const { fetch, calls } = fakeFetch([jsonResponse({ result: { text: "ok", utterances: [] } }, "20000000")]);
+
+    await callAsr({ config, engine: "turbo", url: "https://example.com/a.mp3", format: "mp3", fetch });
+
+    expect((calls[0]!.init.headers as Record<string, string>)["X-Api-Resource-Id"]).toBe("volc.bigasr.auc_turbo");
+    expect(parseCallBody(calls[0]!).audio).toEqual({ url: "https://example.com/a.mp3", format: "mp3" });
+  });
+
+  test("turbo engine maps silent audio and error status codes", async () => {
+    const silent = fakeFetch([jsonResponse({ result: {} }, "20000003")]);
+    await expect(callAsr({ config, engine: "turbo", data: "x", format: "wav", fetch: silent.fetch })).resolves.toMatchObject({
+      text: "",
+      utterances: [],
+      degradedNote: expect.stringMatching(/silent/u),
+    });
+
+    const badFormat = fakeFetch([jsonResponse({}, "45000151")]);
+    await expect(callAsr({ config, engine: "turbo", data: "x", format: "wav", fetch: badFormat.fetch })).rejects.toMatchObject({
+      code: "INVALID_ARGS",
+      details: { category: "asr", statusCode: "45000151" },
+    });
+  });
 });

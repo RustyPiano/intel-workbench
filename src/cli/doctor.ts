@@ -42,6 +42,8 @@ export interface DoctorReportInput {
     baseURL?: string;
     auth: "api-key" | "app-key+access-key" | "missing";
     timeoutMs?: number;
+    engine?: string;
+    turboResourceId?: string;
   };
   tosStorage: {
     configured: boolean;
@@ -141,6 +143,8 @@ export function formatDoctorReport(input: DoctorReportInput): string {
     `asr_resource_id\t${input.asrPath.resourceId ?? "(unset)"}`,
     `asr_base_url\t${input.asrPath.baseURL ?? "(unset)"}`,
     `asr_auth\t${input.asrPath.auth}`,
+    `asr_engine\t${input.asrPath.engine ?? "(unset)"}`,
+    `asr_turbo_resource_id\t${input.asrPath.turboResourceId ?? "(unset)"}`,
     `asr_timeout_ms\t${input.asrPath.timeoutMs ?? "(unset)"}`,
     "",
     "[tos_storage]",

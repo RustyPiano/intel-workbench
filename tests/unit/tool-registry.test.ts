@@ -296,7 +296,7 @@ describe("ToolRegistry", () => {
     const properties = schema.properties as Record<string, { type: unknown }>;
     const required = schema.required as string[];
     expect([...required].sort()).toEqual(
-      ["advanced", "emotion", "format", "hotwords", "language", "out_path", "path", "speaker", "url"].sort(),
+      ["advanced", "emotion", "engine", "format", "hotwords", "language", "out_path", "path", "speaker", "url"].sort(),
     );
 
     const acceptsNull = (value: unknown): boolean => Array.isArray(value) && value.includes("null");

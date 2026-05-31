@@ -1,6 +1,8 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { AsrEngine } from "../model/asr.js";
+
 export interface RuntimeConfig {
   provider: string;
   model: string;
@@ -27,6 +29,9 @@ export interface RuntimeConfig {
   asrAppKey?: string;
   asrResourceId?: string;
   asrBaseURL?: string;
+  asrEngine?: AsrEngine;
+  asrTurboResourceId?: string;
+  asrTurboMaxBytes?: number;
   tosAccessKeyId?: string;
   tosAccessKeySecret?: string;
   tosBucket?: string;
@@ -126,6 +131,14 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function parseAsrEngine(value: string | undefined): AsrEngine | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "auto" || normalized === "standard" || normalized === "turbo" ? normalized : undefined;
+}
+
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -194,6 +207,9 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     asrAppKey,
     asrResourceId: process.env.MINI_AGENT_ASR_RESOURCE_ID ?? (asrConfigured ? "volc.seedasr.auc" : undefined),
     asrBaseURL: process.env.MINI_AGENT_ASR_BASE_URL ?? (asrConfigured ? "https://openspeech.bytedance.com" : undefined),
+    asrEngine: parseAsrEngine(process.env.MINI_AGENT_ASR_ENGINE),
+    asrTurboResourceId: process.env.MINI_AGENT_ASR_TURBO_RESOURCE_ID,
+    asrTurboMaxBytes: parsePositiveInteger(process.env.MINI_AGENT_ASR_TURBO_MAX_BYTES),
     tosAccessKeyId: process.env.MINI_AGENT_TOS_ACCESS_KEY_ID,
     tosAccessKeySecret: process.env.MINI_AGENT_TOS_ACCESS_KEY_SECRET,
     tosBucket: process.env.MINI_AGENT_TOS_BUCKET,

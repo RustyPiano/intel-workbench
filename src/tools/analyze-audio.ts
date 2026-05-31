@@ -1,8 +1,10 @@
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
 
-import { callAsr } from "../model/asr.js";
+import { callAsr, TURBO_UNSUPPORTED_REQUEST_FIELDS, type AsrEngine } from "../model/asr.js";
+import { ASR_TURBO_HARD_MAX_BYTES, DEFAULT_ASR_TURBO_MAX_BYTES } from "../model/media-limits.js";
 import { isSupportedAudioUrlFormat, mediaMimeType } from "../model/media-source.js";
 import {
   publishFileToTos,
@@ -21,7 +23,9 @@ const analyzeAudioArgsSchema = z
       .string()
       .min(1)
       .optional()
-      .describe("Path to a local audio file in the workspace. Requires configured TOS so the ASR provider can fetch it."),
+      .describe(
+        "Path to a local audio file in the workspace. The standard engine uploads it to TOS (must be configured); the turbo/auto engines can send it inline without TOS.",
+      ),
     format: z
       .string()
       .min(1)
@@ -34,15 +38,21 @@ const analyzeAudioArgsSchema = z
       .describe(
         "Optional. Workspace-relative path to persist the full ASR result JSON, including the raw provider payload (e.g. `av-tasks/<id>/analysis/audio-asr.json`); the tool then returns a short summary. Omit to get the transcript and utterances inline — prefer naming a path for long recordings to keep the conversation small.",
       ),
+    engine: z
+      .enum(["auto", "standard", "turbo"])
+      .optional()
+      .describe(
+        "ASR engine. Capabilities: 'standard' (volc.seedasr.auc) — emotion/gender/speech-rate/volume, long/large audio, but input must be a URL (local files go through TOS). 'turbo' (volc.bigasr.auc_turbo) — one-shot, local audio inline without TOS, but wav/mp3/ogg/opus only, ≤2h/≤100MB, transcript+speaker only. 'auto' (default) — standard when a URL or TOS is available, turbo for a local file without TOS. The result reports `engineUsed` and any `capabilitiesDropped`.",
+      ),
     language: z.string().min(1).optional().describe("Optional recognition language hint passed to Doubao ASR."),
     speaker: z
       .boolean()
-      .default(true)
-      .describe("Enable speaker separation metadata when supported by the provider. Defaults to true."),
+      .optional()
+      .describe("Request speaker separation metadata (standard and turbo). Defaults to on."),
     emotion: z
       .boolean()
-      .default(true)
-      .describe("Enable per-utterance emotion metadata when supported by the provider. Defaults to true."),
+      .optional()
+      .describe("Request per-utterance emotion metadata. Standard only — ignored by turbo, which reports it under capabilitiesDropped. Defaults to on for standard."),
     hotwords: z.array(z.string().min(1)).optional().describe("Domain terms to bias recognition."),
     advanced: z
       .string()
@@ -83,6 +93,9 @@ interface AnalyzeAudioData {
   durationMs?: number;
   utteranceCount: number;
   speakerCount: number;
+  engineUsed: "standard" | "turbo";
+  reason: string;
+  capabilitiesDropped?: string[];
   source?: { type: "url"; url: string } | { type: "file"; path: string };
   publishedMedia?: PublishedMediaMetadata;
 }
@@ -90,7 +103,7 @@ interface AnalyzeAudioData {
 export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> = {
   name: "analyze_audio",
   description:
-    "Transcribe & analyze a model-reachable audio URL or local audio path with the Doubao recording model: word/utterance timestamps, speaker separation, per-utterance emotion, speech-rate, volume, gender. Local path inputs require configured TOS automatic upload. Returns the transcript and utterances inline; pass `out_path` to instead persist the full result (incl. raw provider payload) and get a short summary back — prefer that for long recordings. Use for meeting/interview/call audio; for video use `analyze_media`. ASR transcripts may contain recognition errors — correct them against the surrounding transcript context when analyzing.",
+    "Transcribe & analyze a model-reachable audio URL or local audio path with the Doubao recording model: word/utterance timestamps, speaker separation, per-utterance emotion, speech-rate, volume, gender. The `standard` engine needs a URL (local files upload to TOS) and returns the rich metadata; the `turbo` engine sends a local file inline without TOS but only returns transcript+speaker (wav/mp3/ogg/opus, ≤2h/≤100MB); `engine` defaults to `auto` and the result reports `engineUsed`/`capabilitiesDropped`. Returns the transcript and utterances inline; pass `out_path` to instead persist the full result (incl. raw provider payload) and get a short summary back — prefer that for long recordings. Use for meeting/interview/call audio; for video use `analyze_media`. ASR transcripts may contain recognition errors — correct them against the surrounding transcript context when analyzing.",
   inputSchema: analyzeAudioArgsSchema,
   async execute(args, ctx) {
     try {
@@ -105,32 +118,42 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
 
       const advanced = parseAdvanced(args.advanced);
       const audioInput = await resolveAudioInput(args, ctx);
+      const engineUsed = audioInput.engine;
+      const capabilitiesDropped = engineUsed === "turbo" ? turboDroppedCapabilities(args, advanced) : [];
       const result = await callAsr({
         config: asr,
+        engine: engineUsed,
         url: audioInput.url,
+        data: audioInput.data,
         format: audioInput.format,
         language: args.language,
         hotwords: args.hotwords,
-        enableSpeakerInfo: args.speaker,
-        enableEmotionDetection: args.emotion,
+        // Default the rich metadata on; the turbo body drops emotion regardless.
+        enableSpeakerInfo: args.speaker ?? true,
+        enableEmotionDetection: args.emotion ?? true,
         advanced,
         signal: ctx.signal,
       });
+      const degradedNote = result.degradedNote;
       const utteranceCount = result.utterances.length;
       const speakerCount = countSpeakers(result.utterances);
       const durationSummary = result.durationMs === undefined ? "unknown duration" : `${result.durationMs}ms`;
-      const degradedSummary = result.degradedNote ? ` Degraded note: ${result.degradedNote}` : "";
+      const degradedSummary = degradedNote ? ` Degraded note: ${degradedNote}` : "";
+      const droppedSummary = capabilitiesDropped.length > 0 ? ` Dropped on turbo: ${capabilitiesDropped.join(", ")}.` : "";
+      const droppedField = capabilitiesDropped.length > 0 ? { capabilitiesDropped } : {};
 
       if (args.out_path === undefined) {
         // Inline: return the normalized transcript and utterances, but not the
         // bulky raw provider payload (that only goes to a persisted out_path).
         const inline = {
           provider: "doubao-asr",
+          engine: engineUsed,
           language: args.language,
           text: result.text,
           durationMs: result.durationMs,
           utterances: result.utterances,
-          ...(result.degradedNote ? { degradedNote: result.degradedNote } : {}),
+          ...droppedField,
+          ...(degradedNote ? { degradedNote } : {}),
         };
         return {
           ok: true,
@@ -139,6 +162,9 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
             durationMs: result.durationMs,
             utteranceCount,
             speakerCount,
+            engineUsed,
+            reason: audioInput.reason,
+            ...droppedField,
             ...(audioInput.source ? { source: audioInput.source } : {}),
             ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
           },
@@ -147,15 +173,17 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
 
       const envelope = {
         provider: "doubao-asr",
+        engine: engineUsed,
         resourceId: asr.resourceId,
         language: args.language,
         text: result.text,
         durationMs: result.durationMs,
         utterances: result.utterances,
         raw: result.raw,
+        ...droppedField,
         ...(audioInput.source ? { source: audioInput.source } : {}),
         ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
-        ...(result.degradedNote ? { degradedNote: result.degradedNote } : {}),
+        ...(degradedNote ? { degradedNote } : {}),
       };
 
       let persisted: Awaited<ReturnType<typeof persistToolResult>>;
@@ -176,12 +204,15 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
 
       return {
         ok: true,
-        content: `Analyzed audio with Doubao ASR: ${utteranceCount} utterances, ${durationSummary}, ${speakerCount} speakers.${degradedSummary} Wrote result to ${persisted.absPath}; read ${args.out_path} for transcript and utterances.`,
+        content: `Analyzed audio with Doubao ASR (${engineUsed}): ${utteranceCount} utterances, ${durationSummary}, ${speakerCount} speakers.${droppedSummary}${degradedSummary} Wrote result to ${persisted.absPath}; read ${args.out_path} for transcript and utterances.`,
         meta: {
           outPath: persisted.absPath,
           durationMs: result.durationMs,
           utteranceCount,
           speakerCount,
+          engineUsed,
+          reason: audioInput.reason,
+          ...droppedField,
           ...(audioInput.source ? { source: audioInput.source } : {}),
           ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
         },
@@ -203,28 +234,31 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
   },
 };
 
-async function resolveAudioInput(
-  args: AnalyzeAudioArgs,
-  ctx: ToolContext,
-): Promise<{
-  url: string;
+// Turbo (录音文件极速版) only supports these container/codecs.
+const TURBO_AUDIO_FORMATS = new Set(["wav", "mp3", "ogg", "opus"]);
+
+interface ResolvedAudioInput {
+  engine: "standard" | "turbo";
+  reason: string;
   format: string;
+  url?: string;
+  data?: string;
   source?: { type: "url"; url: string } | { type: "file"; path: string };
   publishedMedia?: PublishedMediaMetadata;
-}> {
-  if (args.url !== undefined && args.format !== undefined) {
-    return { url: args.url, format: args.format.toLowerCase() };
-  }
+}
 
-  if (args.path === undefined) {
+async function resolveAudioInput(args: AnalyzeAudioArgs, ctx: ToolContext): Promise<ResolvedAudioInput> {
+  const asr = ctx.config.asr!;
+  const isRemote = args.url !== undefined;
+  if (isRemote === (args.path !== undefined)) {
     throw new RuntimeError({
       code: "INVALID_ARGS",
       message: "Provide exactly one of path or url, with format for URL inputs.",
     });
   }
 
-  const filePath = ctx.policy.resolveReadPath(args.path);
-  const format = (args.format ?? path.extname(filePath).slice(1)).toLowerCase();
+  const filePath = isRemote ? undefined : ctx.policy.resolveReadPath(args.path!);
+  const format = (args.format ?? (filePath ? path.extname(filePath).slice(1) : "")).toLowerCase();
   if (!isSupportedAudioUrlFormat(format)) {
     throw new RuntimeError({
       code: "INVALID_ARGS",
@@ -232,12 +266,36 @@ async function resolveAudioInput(
     });
   }
 
+  const { engine, reason } = selectEngine(args.engine ?? asr.engine, isRemote, Boolean(ctx.config.tos));
+
+  if (engine === "turbo") {
+    if (!TURBO_AUDIO_FORMATS.has(format)) {
+      throw new RuntimeError({
+        code: "INVALID_ARGS",
+        message: `Turbo ASR only supports wav/mp3/ogg/opus; got ${format}. Use engine "standard" for this format.`,
+      });
+    }
+
+    if (isRemote) {
+      return { engine, reason, format, url: args.url };
+    }
+
+    const data = await readLocalAudioAsBase64(filePath!, asr.turboMaxBytes);
+    return { engine, reason, format, data, source: { type: "file", path: filePath! } };
+  }
+
+  // Standard engine: requires a model-reachable URL.
+  if (isRemote) {
+    return { engine, reason, format, url: args.url };
+  }
+
   if (!ctx.config.tos) {
     throw new RuntimeError({
       code: "MODEL_ERROR",
       message:
         "Local audio files must be reachable by Doubao ASR. Configure Volcano Engine TOS with MINI_AGENT_TOS_* " +
-        "and use `volcengine-media-setup`, or pass an existing model-reachable audio URL.",
+        'and use `volcengine-media-setup`, pass engine "turbo" to send the file inline without TOS, ' +
+        "or pass an existing model-reachable audio URL.",
       details: { category: "tos", missingTosConfig: true },
     });
   }
@@ -245,18 +303,96 @@ async function resolveAudioInput(
   ctx.onUpdate?.("Uploading local audio to Volcano Engine TOS for a short-lived ASR URL...");
   const publishedMedia = await publishFileToTos({
     config: ctx.config.tos,
-    filePath,
+    filePath: filePath!,
     runId: ctx.runId,
     toolCallId: ctx.toolCallId,
-    contentType: mediaMimeType(filePath),
+    contentType: mediaMimeType(filePath!),
   });
 
   return {
+    engine,
+    reason,
     url: publishedMedia.url,
     format,
-    source: { type: "file", path: filePath },
+    source: { type: "file", path: filePath! },
     publishedMedia: toPublishedMediaMetadata(publishedMedia),
   };
+}
+
+// "auto" stays predictable: prefer the cheaper, fuller standard engine whenever
+// the audio can reach it (a URL, or TOS to host a local file), and only fall
+// back to turbo when a local file would otherwise be unusable. Intent-based
+// routing is left to the caller, who can read engineUsed/capabilitiesDropped.
+function selectEngine(
+  requested: AsrEngine | undefined,
+  isRemote: boolean,
+  hasTos: boolean,
+): { engine: "standard" | "turbo"; reason: string } {
+  const configured = requested ?? "auto";
+  if (configured !== "auto") {
+    return { engine: configured, reason: `engine explicitly set to ${configured}` };
+  }
+  if (isRemote) {
+    return { engine: "standard", reason: "auto: remote URL handled by the standard engine" };
+  }
+  if (hasTos) {
+    return { engine: "standard", reason: "auto: local file uploaded to TOS for the standard engine" };
+  }
+  return { engine: "turbo", reason: "auto: local file sent inline to turbo (no TOS configured)" };
+}
+
+// Capabilities the user asked for that the turbo engine cannot honor — surfaced
+// so the caller can switch to standard rather than silently losing them.
+function turboDroppedCapabilities(args: AnalyzeAudioArgs, advanced: Record<string, unknown> | undefined): string[] {
+  const dropped: string[] = [];
+  if (args.emotion === true) {
+    dropped.push("emotion");
+  }
+  for (const field of TURBO_UNSUPPORTED_REQUEST_FIELDS) {
+    // "emotion" already represents enable_emotion_detection; don't list it twice.
+    if (field === "enable_emotion_detection" && dropped.includes("emotion")) {
+      continue;
+    }
+    if (advanced && field in advanced && !dropped.includes(field)) {
+      dropped.push(field);
+    }
+  }
+  return dropped;
+}
+
+async function readLocalAudioAsBase64(filePath: string, configuredMaxBytes: number | undefined): Promise<string> {
+  const maxBytes = Math.min(configuredMaxBytes ?? DEFAULT_ASR_TURBO_MAX_BYTES, ASR_TURBO_HARD_MAX_BYTES);
+  let size: number;
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) {
+      throw new RuntimeError({
+        code: "INVALID_ARGS",
+        message: `Cannot send local audio to turbo ASR because the path is not a file: ${filePath}`,
+      });
+    }
+    size = info.size;
+  } catch (error) {
+    if (error instanceof RuntimeError) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : "Unknown file access error";
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: `Cannot read local audio file for turbo ASR: ${filePath}: ${message}`,
+    });
+  }
+
+  if (size > maxBytes) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message:
+        `Local audio is ${size} bytes, over the turbo inline limit of ${maxBytes} bytes. ` +
+        "Use a shorter/smaller clip, raise MINI_AGENT_ASR_TURBO_MAX_BYTES, or configure TOS and use engine \"standard\".",
+    });
+  }
+
+  return (await readFile(filePath)).toString("base64");
 }
 
 function parseAdvanced(value: string | undefined): Record<string, unknown> | undefined {

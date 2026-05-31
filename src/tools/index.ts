@@ -3,8 +3,11 @@ import type { ZodError } from "zod";
 import { toRuntimeErrorShape } from "../runtime/errors.js";
 import type { ToolCall } from "../runtime/types.js";
 import { activateSkillTool } from "./activate-skill.js";
+import { analyzeAudioTool } from "./analyze-audio.js";
+import { analyzeMediaTool } from "./analyze-media.js";
 import { bashTool } from "./bash.js";
 import { editTool } from "./edit.js";
+import { probeMediaTool } from "./probe-media.js";
 import { readTool } from "./read.js";
 import type { RuntimeTool, ToolContext, ToolExecutionResult } from "./types.js";
 import { writeTool } from "./write.js";
@@ -103,20 +106,25 @@ export class ToolRegistry {
     const handleAbort = () => controller.abort();
     ctx.signal.addEventListener("abort", handleAbort, { once: true });
 
+    const perToolTimeouts: Record<string, number | undefined> = {
+      analyze_media: ctx.config.mmTimeoutMs,
+      analyze_audio: ctx.config.asrTimeoutMs,
+    };
+    const timeoutMs = perToolTimeouts[tool.name] ?? ctx.config.toolTimeoutMs;
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
       timeoutHandle = setTimeout(() => {
         controller.abort();
         resolve({
           ok: false,
-          content: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+          content: `Tool ${tool.name} timed out after ${timeoutMs}ms`,
           error: {
             code: "TOOL_TIMEOUT",
-            message: `Tool ${tool.name} timed out after ${ctx.config.toolTimeoutMs}ms`,
+            message: `Tool ${tool.name} timed out after ${timeoutMs}ms`,
             retriable: true,
           },
         });
-      }, ctx.config.toolTimeoutMs);
+      }, timeoutMs);
     });
 
     const executionPromise: Promise<ToolExecutionResult> = tool
@@ -142,5 +150,14 @@ export class ToolRegistry {
 }
 
 export function createDefaultToolRegistry(): ToolRegistry {
-  return new ToolRegistry([readTool, writeTool, editTool, bashTool, activateSkillTool]);
+  return new ToolRegistry([
+    readTool,
+    writeTool,
+    editTool,
+    bashTool,
+    activateSkillTool,
+    probeMediaTool,
+    analyzeMediaTool,
+    analyzeAudioTool,
+  ]);
 }

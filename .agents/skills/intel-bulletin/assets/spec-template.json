@@ -1,0 +1,15 @@
+{
+  "title": "关于<主题>的情报通报",
+  "classification": null,
+  "doc_number": null,
+  "recipient": null,
+  "summary": "一段概要：核心结论 + 背景。",
+  "sections": [
+    { "heading": "基本情况", "body": "陈述已核实的关键事实，写明日期与来源。" },
+    { "heading": "分析研判", "body": "基于事实给出研判，事实与结论分离。" }
+  ],
+  "conclusion": "总体判断与下一步建议。",
+  "issuer": null,
+  "date": null,
+  "_notes": "Do not invent optional metadata. Fill classification, doc_number, recipient, issuer, and date only when user-provided or source-supported."
+}

@@ -1,0 +1,23 @@
+{
+  "media": "meeting.mp4",
+  "duration_seconds": 95.0,
+  "summary": "一场关于预算方案的项目例会：主持人开场后，参会者A提出异议，在预算被否决时情绪明显波动，最终达成下次复议的共识。",
+  "events": [
+    { "time": "00:05", "title": "会议开始", "detail": "主持人开场并说明本次议程为预算评审。" },
+    { "time": "00:48", "title": "提出异议", "detail": "参会者A对预算分配提出不同意见。" },
+    { "time": "01:12", "title": "预算被否决", "detail": "多数意见否决了当前预算方案。" },
+    { "time": "01:30", "title": "达成共识", "detail": "决定下周复议并补充数据。" }
+  ],
+  "speakers": [
+    { "id": "S1", "label": "主持人", "talk_ratio": 0.5, "profile": "语速平稳，主导议程推进。" },
+    { "id": "S2", "label": "参会者A", "talk_ratio": 0.35, "profile": "表达直接，对预算敏感。" }
+  ],
+  "emotion_timeline": [
+    { "time": "00:05", "speaker": "S1", "emotion": "neutral", "valence": 0.0, "note": "开场陈述，语气平稳。" },
+    { "time": "01:12", "speaker": "S2", "emotion": "anger", "valence": -0.6, "note": "预算被否决，语气升高、皱眉。" },
+    { "time": "01:30", "speaker": "S2", "emotion": "calm", "valence": 0.1, "note": "接受复议安排，情绪回落。" }
+  ],
+  "key_triggers": [
+    { "time": "01:12", "description": "预算方案被否决直接引发参会者A的不满。", "evidence": "语气突然升高并伴随面部表情变化。" }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "skill_name": "volcengine-media-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我第一次启动 mini-agent，先只想把大模型配置好，TOS 先不弄。",
+      "expected_output": "Guides the user through only the primary OpenAI-compatible model variables and doctor verification, without requiring TOS."
+    },
+    {
+      "id": 2,
+      "prompt": "我要用火山的语音识别 API key 做会议录音转写，应该怎么配？",
+      "expected_output": "Provides Doubao ASR environment variables, explains API-key and app-key/access-key modes, and tells the user to verify [asr_path] in doctor."
+    },
+    {
+      "id": 3,
+      "prompt": "本地视频太大，模型服务要公网 URL，帮我创建 TOS 并配置临时链接流程。",
+      "expected_output": "Guides private TOS bucket creation, least-privilege credentials, lifecycle cleanup, and short-lived pre-signed URL workflow while noting whether automatic upload is supported."
+    }
+  ]
+}

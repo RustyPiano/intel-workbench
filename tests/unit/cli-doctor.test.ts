@@ -95,6 +95,30 @@ describe("doctor helpers", () => {
         model: "gpt-4.1",
         baseURL: "https://example.com/v1",
       },
+      multimodalPath: {
+        configured: true,
+        provider: "openai-compatible",
+        model: "qwen3.5-omni-plus",
+        baseURL: "https://dashscope.example.com/v1",
+        apiKeyConfigured: true,
+        timeoutMs: 180_000,
+      },
+      asrPath: {
+        configured: true,
+        resourceId: "volc.seedasr.auc",
+        baseURL: "https://openspeech.bytedance.com",
+        auth: "api-key",
+        timeoutMs: 240_000,
+      },
+      tosStorage: {
+        configured: true,
+        bucket: "media-bucket",
+        region: "cn-beijing",
+        endpoint: "tos.example.com",
+        prefix: "mini-agent/uploads",
+        signedUrlExpires: 3600,
+        accessKeyConfigured: true,
+      },
       lastRun: {
         run_id: "run_123",
         status: "failed",
@@ -118,8 +142,26 @@ describe("doctor helpers", () => {
     expect(report).toContain("[skill_discovery]");
     expect(report).toContain("[session_health]");
     expect(report).toContain("[smoke_path]");
+    expect(report).toContain("[multimodal_path]");
+    expect(report).toContain("[asr_path]");
+    expect(report).toContain("[tos_storage]");
     expect(report).toContain("[last_run]");
     expect(report).toContain("smoke_configured\tyes");
+    expect(report).toContain("mm_model\tqwen3.5-omni-plus");
+    expect(report).toContain("mm_timeout_ms\t180000");
+    expect(report).toContain("asr_configured\tyes");
+    expect(report).toContain("asr_resource_id\tvolc.seedasr.auc");
+    expect(report).toContain("asr_base_url\thttps://openspeech.bytedance.com");
+    expect(report).toContain("asr_auth\tapi-key");
+    expect(report).toContain("asr_timeout_ms\t240000");
+    expect(report).toContain("tos_configured\tyes");
+    expect(report).toContain("tos_bucket\tmedia-bucket");
+    expect(report).toContain("tos_region\tcn-beijing");
+    expect(report).toContain("tos_endpoint\ttos.example.com");
+    expect(report).toContain("tos_prefix\tmini-agent/uploads");
+    expect(report).toContain("tos_signed_url_expires\t3600");
+    expect(report).toContain("tos_access_key\tconfigured");
+    expect(report).not.toContain("secret");
     expect(report).toContain("corrupted_sessions\t1");
     expect(report).toContain("run_id\trun_123");
     expect(report).toContain("first_error_code\tprovider_quota_error");

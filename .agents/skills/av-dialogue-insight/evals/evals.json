@@ -1,0 +1,53 @@
+{
+  "skill_name": "av-dialogue-insight",
+  "evals": [
+    {
+      "id": "av-positive-short-meeting-report",
+      "kind": "positive",
+      "category": "short-meeting-report",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "我准备分析一段会议录音，但还没给文件。请先说明需要我提供本地路径或公网 URL，然后按事件、说话人、情绪时间线和关键触发点产出报告。",
+      "expected_output": "Activates the A/V dialogue workflow and asks for a media path or URL before probing/analyzing.",
+      "required_markers": ["probe_media", "analyze_media", "media path or URL"],
+      "forbidden_markers": ["generic caption only"],
+      "files": []
+    },
+    {
+      "id": "av-positive-oversized-media-planning",
+      "kind": "positive",
+      "category": "oversized-media-planning",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "这个监控对话视频很大，超出内联上限，帮我规划怎么分析并产出情绪和触发点报告。",
+      "expected_output": "Checks probe_media size, then analyzes a small file inline as Base64 or uploads large media to a model-reachable pre-signed URL (e.g. Volcano Engine TOS) and analyzes that URL with analyze_media.",
+      "required_markers": ["probe_media", "analyze_media"],
+      "forbidden_markers": ["split_media.py", "merge_chunks.py"],
+      "files": []
+    },
+    {
+      "id": "av-positive-missing-mm-config",
+      "kind": "positive",
+      "category": "missing-mm-config",
+      "should_activate": true,
+      "requires_files": false,
+      "prompt": "帮我分析电话录音里的说话人情绪，但现在没有配置多模态模型。",
+      "expected_output": "Explains the required MINI_AGENT_MM_* (video) or MINI_AGENT_ASR_* (audio) connection settings instead of inventing analysis.",
+      "required_markers": ["MINI_AGENT_MM_MODEL"],
+      "forbidden_markers": ["configured by default"],
+      "files": []
+    },
+    {
+      "id": "av-negative-generic-image-caption",
+      "kind": "negative",
+      "category": "negative-generic-image-caption",
+      "should_activate": false,
+      "requires_files": false,
+      "prompt": "给一张风景照片写一句图片说明，不需要对话分析。",
+      "expected_output": "Does not force the A/V dialogue skill because the task is generic captioning without dialogue or conversation analysis.",
+      "required_markers": [],
+      "forbidden_markers": ["speaker profiles", "emotion timeline", "key trigger points"],
+      "files": []
+    }
+  ]
+}

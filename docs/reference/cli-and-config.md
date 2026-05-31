@@ -78,6 +78,9 @@ mini-agent [prompt]
 | `MINI_AGENT_TOS_ENDPOINT` | Optional S3-protocol endpoint override. Defaults to `tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A native `tos-<region>...` host is upgraded to the `tos-s3-<region>...` host automatically; a leading `https://` is optional. |
 | `MINI_AGENT_TOS_PREFIX` | Optional object key prefix for uploaded local media. |
 | `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` | Optional pre-signed URL lifetime in seconds. Defaults to `3600`. |
+| `MINI_AGENT_ASR_ENGINE` | Default `analyze_audio` engine. `auto` (default): prefer `standard`, fall back to `turbo` only for a local file with no TOS. `standard` (volc.seedasr.auc): needs a URL/TOS, full features. `turbo` (volc.bigasr.auc_turbo): local audio inline as base64 with no TOS, but wav/mp3/ogg/opus only, ≤2h/≤100MB, no emotion/gender/speech-rate/volume. The per-call `engine` arg overrides it; the result reports `engineUsed` and any `capabilitiesDropped`. |
+| `MINI_AGENT_ASR_TURBO_RESOURCE_ID` | Resource ID for the turbo engine. Defaults to `volc.bigasr.auc_turbo`. |
+| `MINI_AGENT_ASR_TURBO_MAX_BYTES` | Max raw bytes of a local audio file the turbo engine will base64-inline. Defaults to `20000000`; hard-capped at `100000000`. |
 
 ## `mini-agent.config.json`
 

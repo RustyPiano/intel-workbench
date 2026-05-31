@@ -22,6 +22,10 @@ export interface AsrResult {
   degradedNote?: string;
 }
 
+// "auto" is resolved to a concrete engine by the tool layer; `callAsr` only ever
+// receives "standard" or "turbo".
+export type AsrEngine = "auto" | "standard" | "turbo";
+
 export interface AsrClientConfig {
   baseURL: string;
   resourceId: string;
@@ -30,12 +34,20 @@ export interface AsrClientConfig {
   appKey?: string;
   accessKey?: string;
   timeoutMs?: number;
+  // Resource ID for the recording-flash (极速版) engine; defaults to the
+  // documented `volc.bigasr.auc_turbo` when unset.
+  turboResourceId?: string;
 }
 
 export interface CallAsrParams {
   config: AsrClientConfig;
-  url: string;
+  // Standard always uses `url`. Turbo accepts either a model-reachable `url` or
+  // an inline base64 `data` payload (exactly one must be provided).
+  url?: string;
+  data?: string;
   format: string;
+  // Defaults to "standard" so existing callers keep the submit/query flow.
+  engine?: "standard" | "turbo";
   user?: string;
   language?: string;
   hotwords?: string[];
@@ -50,7 +62,22 @@ export interface CallAsrParams {
 
 const SUBMIT_PATH = "/api/v3/auc/bigmodel/submit";
 const QUERY_PATH = "/api/v3/auc/bigmodel/query";
+const FLASH_PATH = "/api/v3/auc/bigmodel/recognize/flash";
+const DEFAULT_TURBO_RESOURCE_ID = "volc.bigasr.auc_turbo";
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+// Fields the flash (极速版) engine removes relative to the standard request
+// (callback + 客服能力). They are stripped from the turbo body even if a caller
+// re-injects them through `advanced`, so the wire request can never carry them.
+export const TURBO_UNSUPPORTED_REQUEST_FIELDS = [
+  "enable_emotion_detection",
+  "enable_gender_detection",
+  "enable_lid",
+  "show_volume",
+  "show_speech_rate",
+  "callback",
+  "callback_data",
+] as const;
 const DEFAULT_POLL_DELAYS_MS = [2_000, 3_000, 5_000, 10_000];
 const PROCESSING_CODES = new Set(["20000001", "20000002"]);
 
@@ -60,6 +87,7 @@ const RETRIABLE_STATUS = new Set(["45000131", "55000031"]);
 type JsonObject = Record<string, unknown>;
 
 export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
+  const engine = params.engine ?? "standard";
   const requestId = randomUUID();
   const startedAt = Date.now();
   const timeoutMs = params.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -73,39 +101,10 @@ export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
     });
   }
 
-  const headers = buildHeaders(params.config, requestId);
-  const submitBody = buildSubmitBody(params);
-
   try {
-    await postJson(fetchFn, buildURL(params.config.baseURL, SUBMIT_PATH), headers, submitBody, params.signal);
-
-    for (let attempt = 0; ; attempt += 1) {
-      assertWithinTimeout(startedAt, timeoutMs);
-      const response = await postJson(fetchFn, buildURL(params.config.baseURL, QUERY_PATH), headers, {}, params.signal);
-      const statusCode = response.headers.get("X-Api-Status-Code") ?? response.headers.get("x-api-status-code");
-
-      if (statusCode === "20000000") {
-        const raw = await parseResponseJson(response);
-        return normalizeAsrResult(raw);
-      }
-
-      if (statusCode === "20000003") {
-        const raw = await parseResponseJson(response);
-        return {
-          text: "",
-          utterances: [],
-          raw,
-          degradedNote: "Doubao ASR reported silent audio; returning an empty transcript.",
-        };
-      }
-
-      if (statusCode && PROCESSING_CODES.has(statusCode)) {
-        await waitBeforeNextPoll(params.pollDelaysMs ?? DEFAULT_POLL_DELAYS_MS, attempt, startedAt, timeoutMs, params.signal);
-        continue;
-      }
-
-      throw asrStatusError(statusCode, response);
-    }
+    return engine === "turbo"
+      ? await runTurbo(params, fetchFn, requestId)
+      : await runStandard(params, fetchFn, requestId, startedAt, timeoutMs);
   } catch (error) {
     if (isAbortError(error, params.signal)) {
       throw new RuntimeError({
@@ -122,10 +121,88 @@ export async function callAsr(params: CallAsrParams): Promise<AsrResult> {
   }
 }
 
-function buildHeaders(config: AsrClientConfig, requestId: string): Record<string, string> {
+// 录音文件识别标准版 (volc.seedasr.auc): submit then poll query until done.
+async function runStandard(
+  params: CallAsrParams,
+  fetchFn: typeof fetch,
+  requestId: string,
+  startedAt: number,
+  timeoutMs: number,
+): Promise<AsrResult> {
+  if (!params.url) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: "Standard Doubao ASR requires a model-reachable audio URL.",
+      retriable: false,
+      details: { category: "asr" },
+    });
+  }
+
+  const headers = buildHeaders(params.config, requestId, params.config.resourceId);
+  const submitBody = buildSubmitBody(params);
+
+  await postJson(fetchFn, buildURL(params.config.baseURL, SUBMIT_PATH), headers, submitBody, params.signal);
+
+  for (let attempt = 0; ; attempt += 1) {
+    assertWithinTimeout(startedAt, timeoutMs);
+    const response = await postJson(fetchFn, buildURL(params.config.baseURL, QUERY_PATH), headers, {}, params.signal);
+    const statusCode = response.headers.get("X-Api-Status-Code") ?? response.headers.get("x-api-status-code");
+
+    if (statusCode === "20000000") {
+      return normalizeAsrResult(await parseResponseJson(response));
+    }
+    if (statusCode === "20000003") {
+      return silentResult(await parseResponseJson(response));
+    }
+    if (statusCode && PROCESSING_CODES.has(statusCode)) {
+      await waitBeforeNextPoll(params.pollDelaysMs ?? DEFAULT_POLL_DELAYS_MS, attempt, startedAt, timeoutMs, params.signal);
+      continue;
+    }
+
+    throw asrStatusError(statusCode, response);
+  }
+}
+
+// 录音文件极速版 (volc.bigasr.auc_turbo): one request returns the result, no
+// polling. Accepts a base64 `data` payload, so local audio needs no TOS URL.
+async function runTurbo(params: CallAsrParams, fetchFn: typeof fetch, requestId: string): Promise<AsrResult> {
+  if (!params.url && !params.data) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: "Turbo Doubao ASR requires either a URL or base64 audio data.",
+      retriable: false,
+      details: { category: "asr" },
+    });
+  }
+
+  const resourceId = params.config.turboResourceId ?? DEFAULT_TURBO_RESOURCE_ID;
+  const headers = buildHeaders(params.config, requestId, resourceId);
+  const response = await postJson(fetchFn, buildURL(params.config.baseURL, FLASH_PATH), headers, buildFlashBody(params), params.signal);
+  const statusCode = response.headers.get("X-Api-Status-Code") ?? response.headers.get("x-api-status-code");
+
+  if (statusCode === "20000000") {
+    return normalizeAsrResult(await parseResponseJson(response));
+  }
+  if (statusCode === "20000003") {
+    return silentResult(await parseResponseJson(response));
+  }
+
+  throw asrStatusError(statusCode, response);
+}
+
+function silentResult(raw: unknown): AsrResult {
+  return {
+    text: "",
+    utterances: [],
+    raw,
+    degradedNote: "Doubao ASR reported silent audio; returning an empty transcript.",
+  };
+}
+
+function buildHeaders(config: AsrClientConfig, requestId: string, resourceId: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "X-Api-Resource-Id": config.resourceId,
+    "X-Api-Resource-Id": resourceId,
     "X-Api-Request-Id": requestId,
     "X-Api-Sequence": "-1",
   };
@@ -173,6 +250,40 @@ function buildSubmitBody(params: CallAsrParams): JsonObject {
       format: params.format,
       ...(params.audio ?? {}),
     },
+    request,
+  };
+}
+
+function buildFlashBody(params: CallAsrParams): JsonObject {
+  // The flash engine drops callback and the 客服能力 fields
+  // (enable_emotion_detection / gender / lid / volume / speech_rate), so they
+  // are intentionally never sent here — only transcription + speaker survive.
+  const request: JsonObject = {
+    model_name: "bigmodel",
+    enable_punc: true,
+    enable_itn: true,
+    enable_speaker_info: params.enableSpeakerInfo ?? true,
+  };
+  if (params.language) {
+    request.language = params.language;
+  }
+  if (params.hotwords?.length) {
+    request.context = { hotwords: params.hotwords };
+  }
+  Object.assign(request, params.advanced ?? {});
+  for (const field of TURBO_UNSUPPORTED_REQUEST_FIELDS) {
+    delete request[field];
+  }
+  request.show_utterances = true;
+
+  // url and data are mutually exclusive; runTurbo guarantees one is present.
+  const audio: JsonObject = params.data !== undefined ? { data: params.data } : { url: params.url };
+  audio.format = params.format;
+  Object.assign(audio, params.audio ?? {});
+
+  return {
+    user: params.user ?? params.config.appId ?? "mini-agent",
+    audio,
     request,
   };
 }

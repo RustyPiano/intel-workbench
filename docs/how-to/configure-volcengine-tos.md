@@ -3,7 +3,12 @@
 Use this only when local media must become reachable by a model service:
 
 - large local video/image files that cannot be sent inline
-- local audio for `analyze_audio`, which needs a URL
+- local audio for `analyze_audio` on the `standard` engine, which needs a URL
+
+For audio you can often skip TOS entirely: `analyze_audio` with `engine: "turbo"`
+sends a local file inline (base64) with no upload, within the turbo limits
+(wav/mp3/ogg/opus, ≤2h/≤100MB, no emotion/gender/speech-rate/volume). TOS is
+still required for the `standard` audio engine and for large video/image.
 
 You do not need TOS for first startup. Configure the primary model first, then
 add multimodal or Doubao ASR as needed. Add TOS only when local media needs an

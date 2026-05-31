@@ -325,7 +325,10 @@ async function resolveAudioInput(args: AnalyzeAudioArgs, ctx: ToolContext): Prom
 // so the caller can switch to standard rather than silently losing them.
 function turboDroppedCapabilities(args: AnalyzeAudioArgs, advanced: Record<string, unknown> | undefined): string[] {
   const dropped: string[] = [];
-  if (args.emotion === true) {
+  // Emotion defaults on (args.emotion ?? true), and turbo cannot honor it, so it
+  // is dropped whenever the caller did not explicitly opt out — matching the
+  // tool's documented "ignored by turbo, which reports it under capabilitiesDropped".
+  if (args.emotion !== false) {
     dropped.push("emotion");
   }
   for (const field of TURBO_UNSUPPORTED_REQUEST_FIELDS) {

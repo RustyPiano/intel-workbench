@@ -146,7 +146,15 @@ async function runStandard(
   const headers = buildHeaders(params.config, requestId, params.config.resourceId);
   const submitBody = buildSubmitBody(params);
 
-  await postJson(fetchFn, buildURL(params.config.baseURL, SUBMIT_PATH), headers, submitBody, params.signal);
+  const submitResponse = await postJson(fetchFn, buildURL(params.config.baseURL, SUBMIT_PATH), headers, submitBody, params.signal);
+  // Doubao reports logical failures (bad params, auth, unreachable audio) via the
+  // status header on an HTTP 200, so surface a submit-time error immediately
+  // instead of polling a task that was never accepted. A missing header is
+  // tolerated for gateways that only set it on query.
+  const submitStatus = submitResponse.headers.get("X-Api-Status-Code") ?? submitResponse.headers.get("x-api-status-code");
+  if (submitStatus && submitStatus !== "20000000" && !PROCESSING_CODES.has(submitStatus)) {
+    throw asrStatusError(submitStatus, submitResponse);
+  }
 
   for (let attempt = 0; ; attempt += 1) {
     assertWithinTimeout(startedAt, timeoutMs);

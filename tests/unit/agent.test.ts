@@ -8,7 +8,7 @@ import { RuntimeAgent } from "../../src/runtime/agent.js";
 import { formatToolMessageContent } from "../../src/runtime/loop.js";
 import { ScriptedModelAdapter } from "../../src/model/mock.js";
 import type { ToolExecutionResult } from "../../src/tools/types.js";
-import type { ToolResultEntry } from "../../src/runtime/types.js";
+import type { RuntimeMessage, ToolResultEntry } from "../../src/runtime/types.js";
 
 const tempRoots: string[] = [];
 
@@ -161,6 +161,70 @@ describe("RuntimeConversation.send concurrency", () => {
     await expect(first).rejects.toThrow("first send failed");
     const secondResult = await second;
     expect(secondResult.finalMessage.content).toBe("recovered");
+  });
+});
+
+describe("resume repairs interrupted tool calls", () => {
+  test("synthesizes a tool result for an assistant tool_call left unanswered by a crashed run", async () => {
+    const workspaceRoot = await createWorkspace();
+    const capturedMessages: RuntimeMessage[][] = [];
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: {
+        name: "mock",
+        async generate(input) {
+          capturedMessages.push(input.messages);
+          return { message: { role: "assistant", content: "resumed ok" }, stopReason: "end_turn" };
+        },
+      },
+    });
+
+    // Build a session that was interrupted between the tool-call request and its
+    // result: assistant asks for `call_x`, the tool_call is recorded, but the
+    // process died before any tool_result was written.
+    const ts = "2026-01-01T00:00:00.000Z";
+    const session = await agent.sessionStore.createSession();
+    await agent.sessionStore.appendEntry(session.sessionId, {
+      type: "message",
+      role: "user",
+      messageId: "m1",
+      timestamp: ts,
+      content: "read the file",
+    });
+    await agent.sessionStore.appendEntry(session.sessionId, {
+      type: "message",
+      role: "assistant",
+      messageId: "m2",
+      timestamp: ts,
+      content: "",
+      toolCalls: [{ id: "call_x", name: "read", arguments: { path: "x.txt" } }],
+    });
+    await agent.sessionStore.appendEntry(session.sessionId, {
+      type: "tool_call",
+      toolCallId: "call_x",
+      toolName: "read",
+      args: { path: "x.txt" },
+      timestamp: ts,
+    });
+
+    const conversation = await agent.createConversation(session.sessionId);
+    const result = await conversation.send("continue");
+    expect(result.finalMessage.content).toBe("resumed ok");
+
+    // The messages handed to the provider must answer every tool_call id.
+    const sent = capturedMessages[0]!;
+    for (const message of sent) {
+      if (message.role === "assistant" && message.toolCalls) {
+        for (const toolCall of message.toolCalls) {
+          expect(sent.some((other) => other.role === "tool" && other.toolCallId === toolCall.id)).toBe(true);
+        }
+      }
+    }
+    const synthetic = sent.find((message) => message.role === "tool" && message.toolCallId === "call_x");
+    expect(synthetic).toBeDefined();
+    expect(synthetic!.content).toContain("interrupted");
   });
 });
 

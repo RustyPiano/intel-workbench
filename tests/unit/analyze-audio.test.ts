@@ -506,6 +506,30 @@ describe("analyzeAudioTool", () => {
     });
   });
 
+  test("turbo reports emotion as dropped by default and only suppresses it when explicitly off", async () => {
+    const root = await createWorkspace();
+    await createAudioFile(root);
+    vi.doMock("../../src/model/asr.js", async () => ({
+      ...(await vi.importActual<typeof import("../../src/model/asr.js")>("../../src/model/asr.js")),
+      callAsr: async () => ({ text: "hi", durationMs: 100, utterances: [{ startMs: 0, endMs: 100, text: "hi" }], raw: {} }),
+    }));
+    const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+    const asr = { baseURL: "https://openspeech.bytedance.com", resourceId: "volc.seedasr.auc", apiKey: "k" };
+
+    // Emotion omitted -> defaults on -> turbo cannot honor it -> reported dropped.
+    const defaulted = await analyzeAudioTool.execute({ path: "talk.wav", engine: "turbo" }, createContext(root, asr));
+    expect(defaulted.ok).toBe(true);
+    expect(defaulted.meta).toMatchObject({ capabilitiesDropped: ["emotion"] });
+
+    // Explicitly disabling emotion means nothing was dropped.
+    const optedOut = await analyzeAudioTool.execute(
+      { path: "talk.wav", engine: "turbo", emotion: false },
+      createContext(root, asr),
+    );
+    expect(optedOut.ok).toBe(true);
+    expect(optedOut.meta).not.toHaveProperty("capabilitiesDropped");
+  });
+
   test("requires the caller to choose an ASR engine explicitly", async () => {
     const root = await createWorkspace();
     await createAudioFile(root, "clip.mp3");

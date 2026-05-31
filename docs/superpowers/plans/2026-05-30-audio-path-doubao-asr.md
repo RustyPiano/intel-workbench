@@ -177,7 +177,8 @@ Do this first: it establishes the pattern both tools use and converts the existi
   - Body states both media tools **write to a file you name (`out_path`) and you read it back** — large results are not returned inline.
   - Body references `audio_stats.py` for reproducible talk-ratio/emotion counts.
   - Body says transcripts may contain errors and the model should correct them using context.
-  - Body keeps the local-audio path as an explicit TODO (URL-only for now).
+  - Body explains local-audio routing: turbo can inline supported formats, while
+    standard needs a model-reachable URL/TOS.
 - [ ] **Step 2: Rewrite SKILL.md workflow**
   - Routing: audio → `analyze_audio(url, format, out_path)`; video → `probe_media` then `analyze_media(..., out_path)`.
   - Read the written file; optionally run `audio_stats.py`; the model does correction + events/triggers/summary/profile in-loop; persist `analysis.json` only if the user wants a saved report, then `validate_analysis.py` → `render_report.py`.
@@ -193,7 +194,7 @@ Do this first: it establishes the pattern both tools use and converts the existi
 - Modify: `README.md`
 - Modify: `docs/specs/av-dialogue-insight-spec.md`
 
-- [ ] **Step 1:** Document the audio path: Doubao recording model, `MINI_AGENT_ASR_*` env, URL-only (local = TODO), async submit→poll with `asrTimeoutMs`, write-to-file tool contract for both media tools, and that ASR auth is separate from the text/mm connections.
+- [ ] **Step 1:** Document the audio path: Doubao recording model, `MINI_AGENT_ASR_*` env, explicit `engine: "standard" | "turbo"`, local turbo inline for supported formats, standard URL/TOS for rich metadata or preserved formats, async submit→poll with `asrTimeoutMs`, write-to-file tool contract for both media tools, and that ASR auth is separate from the text/mm connections.
 - [ ] **Step 2:** Update the spec §2 tool table to add `analyze_audio` and note the write-to-file change for `analyze_media`.
 - [ ] **Step 3: Verify** `npm run check`.
 

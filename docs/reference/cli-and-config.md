@@ -48,39 +48,97 @@ mini-agent [prompt]
 
 ## Environment Variables
 
+Environment variables are grouped by setup path. Most users only need the
+primary model variables; media variables are additive.
+
+### Primary Model
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `MINI_AGENT_PROVIDER` | No | Provider name. Defaults to `openai-compatible`. |
+| `MINI_AGENT_MODEL` | Yes | Model used by the agent loop. |
+| `MINI_AGENT_API_KEY` | Yes | Provider API key. `OPENAI_API_KEY` is accepted as a fallback. |
+| `MINI_AGENT_BASE_URL` | Depends | OpenAI-compatible endpoint. Omit only when using the provider default. |
+
+### Doctor Smoke Path
+
+These values do not change the active runtime connection. They only let
+`doctor` display an operator-known-good path for comparison.
+
 | Variable | Meaning |
 | --- | --- |
-| `MINI_AGENT_PROVIDER` | Provider name. |
-| `MINI_AGENT_MODEL` | Model name. |
-| `MINI_AGENT_BASE_URL` | Provider base URL. |
-| `MINI_AGENT_API_KEY` | Provider API key. |
-| `MINI_AGENT_SMOKE_PROVIDER` | Optional known-good smoke-path provider name shown by `doctor`. |
-| `MINI_AGENT_SMOKE_MODEL` | Optional known-good smoke-path model shown by `doctor`. |
-| `MINI_AGENT_SMOKE_BASE_URL` | Optional known-good smoke-path base URL shown by `doctor`. |
+| `MINI_AGENT_SMOKE_PROVIDER` | Smoke-path provider name. |
+| `MINI_AGENT_SMOKE_MODEL` | Smoke-path model. |
+| `MINI_AGENT_SMOKE_BASE_URL` | Smoke-path base URL. |
+
+### Multimodal Video/Image
+
+`analyze_media` activates only when `MINI_AGENT_MM_MODEL` is set. `MM_BASE_URL`
+and `MM_API_KEY` fall back to the primary connection when omitted.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `MINI_AGENT_MM_PROVIDER` | No | Multimodal provider. Defaults to `openai-compatible` when `MM_MODEL` is set. |
+| `MINI_AGENT_MM_MODEL` | Yes, for `analyze_media` | Multimodal model name. |
+| `MINI_AGENT_MM_BASE_URL` | No | Multimodal endpoint override. |
+| `MINI_AGENT_MM_API_KEY` | No | Multimodal API key override. |
+| `MINI_AGENT_MM_TIMEOUT_MS` | No | Timeout for `analyze_media`; useful for long media. |
+
+### Doubao Audio ASR
+
+`analyze_audio` uses dedicated ASR credentials and never falls back to the text
+or multimodal connection. There is no global engine variable: pass
+`engine: "standard" | "turbo"` on each tool call.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `MINI_AGENT_ASR_API_KEY` | One auth mode | API-key auth. |
+| `MINI_AGENT_ASR_APP_KEY` | One auth mode | App-key auth; use with `MINI_AGENT_ASR_ACCESS_KEY`. |
+| `MINI_AGENT_ASR_ACCESS_KEY` | One auth mode | Access key for app-key auth. |
+| `MINI_AGENT_ASR_APP_ID` | No | Optional app ID. |
+| `MINI_AGENT_ASR_RESOURCE_ID` | No | Standard engine resource. Defaults to `volc.seedasr.auc` when ASR auth is configured. |
+| `MINI_AGENT_ASR_BASE_URL` | No | Defaults to `https://openspeech.bytedance.com` when ASR auth is configured. |
+| `MINI_AGENT_ASR_TIMEOUT_MS` | No | Timeout for `analyze_audio`. |
+| `MINI_AGENT_ASR_TURBO_RESOURCE_ID` | No | Turbo engine resource. Defaults to `volc.bigasr.auc_turbo`. |
+| `MINI_AGENT_ASR_TURBO_MAX_BYTES` | No | Max raw bytes for local turbo inline audio. Defaults to `20000000`; hard-capped at `100000000`. |
+
+Legacy `asrEngine` in `mini-agent.config.json` and `MINI_AGENT_ASR_ENGINE` are
+not used. Engine choice belongs to each `analyze_audio` call so the agent can
+match the request, file, and desired output.
+
+### Optional TOS Upload
+
+TOS is only needed when local media must become a model-reachable URL, such as
+large local video/image or standard-engine local audio.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `MINI_AGENT_TOS_ACCESS_KEY_ID` | Yes, for TOS | Volcano Engine TOS access key ID. |
+| `MINI_AGENT_TOS_ACCESS_KEY_SECRET` | Yes, for TOS | TOS access key secret. |
+| `MINI_AGENT_TOS_BUCKET` | Yes, for TOS | Private bucket for temporary media objects. |
+| `MINI_AGENT_TOS_REGION` | Yes, for TOS | Bucket region, for example `cn-beijing`. |
+| `MINI_AGENT_TOS_ENDPOINT` | No | Endpoint override. Native `tos-<region>...` and S3 `tos-s3-<region>...` hosts are both accepted; uploads use the S3-protocol host. |
+| `MINI_AGENT_TOS_PREFIX` | No | Object key prefix. Defaults to `mini-agent/uploads`. |
+| `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` | No | Pre-signed URL lifetime in seconds. Defaults to `3600`. |
+
+### Runtime Behavior
+
+| Variable | Meaning |
+| --- | --- |
 | `MINI_AGENT_SESSION_DIR` | Session directory override. |
 | `MINI_AGENT_MAX_TURNS` | Loop turn cap. |
 | `MINI_AGENT_TOOL_TIMEOUT_MS` | Generic tool timeout. |
 | `MINI_AGENT_BASH_TIMEOUT_MS` | Bash timeout. |
 | `MINI_AGENT_MAX_BASH_OUTPUT_BYTES` | Bash output tail size kept in context. |
-| `MINI_AGENT_READ_MAX_BYTES` | Max bytes returned by `read`. |
+| `MINI_AGENT_READ_MAX_BYTES` | Byte cap on how much of a file `read` scans; line windowing (`offset`/`limit`) is applied within it. |
 | `MINI_AGENT_GLOBAL_SKILL_DIRS` | Comma-separated global skill directories. |
 | `MINI_AGENT_ALLOW_READ_OUTSIDE_WORKSPACE` | Allow reads outside the workspace. |
 | `MINI_AGENT_ALLOW_WRITE_OUTSIDE_WORKSPACE` | Allow writes outside the workspace. |
 | `MINI_AGENT_TRACE_MODE` | Default trace mode: `compact`, `verbose`, or `json`. |
 | `MINI_AGENT_SHOW_PLAN` | Show planning/progress summaries. |
 | `MINI_AGENT_HIDE_DEBUG` | Hide debug-only details in verbose output. |
-| `MINI_AGENT_JSON_EVENTS` | Enable JSON event output. |
+| `MINI_AGENT_JSON_EVENTS` | Enable JSON event output; also selects JSON trace mode. |
 | `MINI_AGENT_READ_ONLY` | Enable read-only mode. |
-| `MINI_AGENT_TOS_ACCESS_KEY_ID` | Volcano Engine TOS access key ID for optional local media upload. |
-| `MINI_AGENT_TOS_ACCESS_KEY_SECRET` | Volcano Engine TOS access key secret for optional local media upload. |
-| `MINI_AGENT_TOS_BUCKET` | TOS bucket used for optional local media upload. Keep it private. |
-| `MINI_AGENT_TOS_REGION` | TOS bucket region, for example `cn-beijing`. |
-| `MINI_AGENT_TOS_ENDPOINT` | Optional S3-protocol endpoint override. Defaults to `tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A native `tos-<region>...` host is upgraded to the `tos-s3-<region>...` host automatically; a leading `https://` is optional. |
-| `MINI_AGENT_TOS_PREFIX` | Optional object key prefix for uploaded local media. |
-| `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` | Optional pre-signed URL lifetime in seconds. Defaults to `3600`. |
-| `MINI_AGENT_ASR_ENGINE` | Default `analyze_audio` engine. `auto` (default): prefer `standard`, fall back to `turbo` only for a local file with no TOS. `standard` (volc.seedasr.auc): needs a URL/TOS, full features. `turbo` (volc.bigasr.auc_turbo): local audio inline as base64 with no TOS, but wav/mp3/ogg/opus only, ≤2h/≤100MB, no emotion/gender/speech-rate/volume. The per-call `engine` arg overrides it; the result reports `engineUsed` and any `capabilitiesDropped`. |
-| `MINI_AGENT_ASR_TURBO_RESOURCE_ID` | Resource ID for the turbo engine. Defaults to `volc.bigasr.auc_turbo`. |
-| `MINI_AGENT_ASR_TURBO_MAX_BYTES` | Max raw bytes of a local audio file the turbo engine will base64-inline. Defaults to `20000000`; hard-capped at `100000000`. |
 
 ## `mini-agent.config.json`
 
@@ -95,10 +153,24 @@ mini-agent [prompt]
   "smokeProvider": "openai-compatible",
   "smokeModel": "gpt-4.1",
   "smokeBaseURL": "https://your-endpoint.example.com/v1",
+  "mmProvider": "openai-compatible",
+  "mmModel": "qwen3.5-omni-plus",
+  "mmBaseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "mmApiKey": "your-multimodal-api-key",
+  "asrAppId": "your-asr-app-id",
+  "asrApiKey": "your-doubao-asr-api-key",
+  "asrAccessKey": "your-doubao-access-key",
+  "asrAppKey": "your-doubao-app-key",
+  "asrResourceId": "volc.seedasr.auc",
+  "asrBaseURL": "https://openspeech.bytedance.com",
+  "asrTurboResourceId": "volc.bigasr.auc_turbo",
+  "asrTurboMaxBytes": 20000000,
   "workspaceRoot": ".",
   "sessionDir": ".mini-agent/sessions",
   "maxTurns": 12,
   "toolTimeoutMs": 60000,
+  "mmTimeoutMs": 180000,
+  "asrTimeoutMs": 180000,
   "bashTimeoutMs": 120000,
   "maxBashOutputBytes": 65536,
   "readMaxBytes": 262144,
@@ -110,6 +182,7 @@ mini-agent [prompt]
   "tosPrefix": "mini-agent/uploads",
   "tosSignedUrlExpires": 3600,
   "globalSkillDirs": ["~/.agents/skills"],
+  "explicitSkillDirs": [],
   "allowReadOutsideWorkspace": false,
   "allowWriteOutsideWorkspace": false,
   "traceMode": "compact",
@@ -128,6 +201,9 @@ Uses the OpenAI Node SDK against:
 
 - the default OpenAI endpoint when `baseURL` is omitted
 - any compatible endpoint when `baseURL` is supplied
+
+For Alibaba Cloud Model Studio / Bailian / DashScope, see
+[Configure Alibaba Cloud Bailian / DashScope](../how-to/configure-alibaba-bailian.md).
 
 Required connection inputs:
 
@@ -148,29 +224,9 @@ These do not change the runtime’s active provider. They only let `doctor` repo
 
 ## Optional Volcano Engine TOS Upload
 
-TOS is not needed for first startup. Configure the primary model first, then add
-TOS only when large local video/image files or local audio need a
-model-reachable URL.
-
-mini-agent's TOS path is designed for private buckets plus short-lived
-pre-signed GET URLs, not public-read buckets. The minimal environment variables
-are:
-
-```bash
-export MINI_AGENT_TOS_ACCESS_KEY_ID=your-tos-ak
-export MINI_AGENT_TOS_ACCESS_KEY_SECRET=your-tos-sk
-export MINI_AGENT_TOS_BUCKET=your-bucket
-export MINI_AGENT_TOS_REGION=cn-beijing
-```
-
-Optional settings:
-
-```bash
-export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
-export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
-# Optional only when overriding the region-derived endpoint (S3-protocol host):
-export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
-```
+TOS is optional. Add it only when local media must become a model-reachable URL:
+large video/image, or standard-engine local audio. Turbo audio can inline
+supported local wav/mp3/ogg/opus files without TOS.
 
 Use the Volcano Engine TOS service and API references when creating the bucket,
 credentials, and upload permissions:
@@ -179,7 +235,7 @@ credentials, and upload permissions:
 - https://www.volcengine.com/docs/6349/74837?lang=zh
 
 See [Configure Volcano Engine TOS for local media](../how-to/configure-volcengine-tos.md)
-for the full workflow.
+for the full workflow and the exact environment variables.
 
 ## `doctor` Output
 

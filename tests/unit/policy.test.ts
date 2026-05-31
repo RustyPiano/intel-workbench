@@ -121,6 +121,22 @@ describe("policy engine", () => {
     expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
   });
 
+  test("rejects direct reads of workspace secret files but allows env examples", async () => {
+    const workspaceRoot = await createWorkspace();
+    const policy = createPolicyEngine({ workspaceRoot });
+
+    let captured: unknown;
+    try {
+      policy.resolveReadPath(".env");
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(RuntimeError);
+    expect((captured as RuntimeError).code).toBe("PATH_NOT_ALLOWED");
+    expect(policy.resolveReadPath(".env.example")).toBe(path.join(workspaceRoot, ".env.example"));
+  });
+
   test("rejects writes when readOnly mode is on", async () => {
     const workspaceRoot = await createWorkspace();
     const policy = createPolicyEngine({

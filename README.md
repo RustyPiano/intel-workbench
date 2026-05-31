@@ -184,20 +184,27 @@ Example `mini-agent.config.json`:
 
 The `probe_media`, `analyze_media`, and `analyze_audio` tools let the agent
 inspect and understand media while the runtime itself remains text-only.
-`analyze_media` is for video/image multimodal analysis. `analyze_audio` is the
-dedicated pure-audio path and uses Doubao recording ASR (`volc.seedasr.auc`).
+`analyze_media` handles video/image through a multimodal model. `analyze_audio`
+handles pure audio through Doubao recording ASR.
 
-Both media analysis tools return their result inline by default — good for
-images and short clips. The agent may instead pass an optional `out_path`, in
-which case the full result JSON (including the raw provider payload for
-`analyze_audio`) is written there and the tool returns only a short summary plus
-the path; the agent then reads the file. Prefer `out_path` for long transcripts
-so the conversation stays small.
+Start with the smallest setup for the task:
+
+| Task | Configure | Notes |
+| --- | --- | --- |
+| Text-only agent | `MINI_AGENT_MODEL`, `MINI_AGENT_API_KEY`, optional `MINI_AGENT_BASE_URL` | No media variables needed. |
+| Video/image analysis | Add `MINI_AGENT_MM_MODEL`; add `MINI_AGENT_MM_BASE_URL` / `MINI_AGENT_MM_API_KEY` only when different from the primary connection. | `analyze_media` activates only when `mmModel` is set. |
+| Fast local audio transcription | Add ASR auth, then call `analyze_audio` with `engine: "turbo"`. | Turbo can inline wav/mp3/ogg/opus local files without TOS. |
+| Rich, long, large, or original-format audio | Add ASR auth, call `engine: "standard"`, and provide a reachable URL or configure TOS for local files. | Standard supports richer metadata and broader formats. |
+| Large local video/image URL path | Configure TOS only when inline Base64 is not enough. | Buckets should stay private; mini-agent uses short-lived pre-signed URLs. |
+
+Both media analysis tools return inline results by default. The agent may pass
+`out_path` to write the full JSON result to disk and return only a short summary
+plus the path; prefer this for long transcripts or large structured outputs.
 
 ### Multimodal video/image
 
-Configure it independently of the primary connection; `baseURL`/`apiKey` fall
-back to the primary connection when omitted:
+Configure it independently of the primary connection. `baseURL` and `apiKey`
+fall back to the primary connection when omitted:
 
 ```bash
 export MINI_AGENT_MM_MODEL=qwen3.5-omni-plus
@@ -210,16 +217,14 @@ export MINI_AGENT_MM_TIMEOUT_MS=180000
 Or in `mini-agent.config.json`: `mmProvider`, `mmModel`, `mmBaseURL`,
 `mmApiKey`, `mmTimeoutMs`.
 
-`analyze_media` stays inactive until `mmModel` is set; verify your setup with
-`npm run dev -- doctor` (see the `[multimodal_path]` section). `probe_media`
-requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
+Verify with `npm run dev -- doctor` and the `[multimodal_path]` section.
+`probe_media` requires `ffprobe` from `ffmpeg` on the `PATH`.
 
 For DashScope Qwen-Omni local files, `analyze_media` sends inline Base64 content
-and enforces DashScope's requirement that the encoded payload is under 10MB.
-For larger local files, configure optional Volcano Engine TOS automatic upload
-so mini-agent can upload to a private bucket and pass the model a short-lived
-pre-signed URL. If the user already has a reachable video/image URL,
-`analyze_media` can send that URL directly; URL calls require `kind`.
+and enforces DashScope's encoded payload limit of 10MB. For larger local files,
+configure optional Volcano Engine TOS upload so mini-agent can pass a
+short-lived pre-signed URL. Existing reachable video/image URLs can be sent
+directly; URL calls require `kind`.
 
 `qwen3.5-omni-plus` does not provide native structured output on this path, so
 `want_json` uses prompt-plus-parse. A/V report workflows should run
@@ -228,13 +233,23 @@ so the agent can retry once or produce degraded output.
 
 ### Doubao audio ASR
 
-Pure audio uses `analyze_audio` with a model-reachable audio URL plus explicit
-`format` such as `mp3`, `wav`, `ogg`, or `pcm`. Local audio needs a URL;
-configure optional Volcano Engine TOS automatic upload when you want mini-agent
-to publish it through a private bucket and short-lived pre-signed URL.
+Pure audio uses `analyze_audio` with explicit `engine: "standard" | "turbo"`.
+There is no global default engine; the agent should choose per request from the
+tool description and user intent.
+
+- `turbo` (`volc.bigasr.auc_turbo`): faster one-shot transcription, speaker
+  separation, local inline audio without TOS, but only wav/mp3/ogg/opus and no
+  emotion/gender/speech-rate/volume.
+- `standard` (`volc.seedasr.auc`): submit-and-poll flow, broader formats,
+  long/large audio, and richer metadata; local files need TOS or another
+  model-reachable URL.
+
+When a local file is not in a turbo-supported format and rich metadata is not
+required, the agent should try local conversion with `ffmpeg` before asking the
+user to configure TOS.
 
 Doubao ASR auth is separate from the primary text connection and the multimodal
-connection. Configure either API-key auth or app-key/access-key auth:
+connection. Configure one auth mode:
 
 ```bash
 export MINI_AGENT_ASR_API_KEY=your-doubao-api-key
@@ -245,16 +260,17 @@ export MINI_AGENT_ASR_ACCESS_KEY=your-doubao-access-key
 # Optional:
 export MINI_AGENT_ASR_APP_ID=your-app-id
 export MINI_AGENT_ASR_RESOURCE_ID=volc.seedasr.auc
+export MINI_AGENT_ASR_TURBO_RESOURCE_ID=volc.bigasr.auc_turbo
+export MINI_AGENT_ASR_TURBO_MAX_BYTES=20000000
 export MINI_AGENT_ASR_BASE_URL=https://openspeech.bytedance.com
 export MINI_AGENT_ASR_TIMEOUT_MS=180000
 ```
 
 Or in `mini-agent.config.json`: `asrAppId`, `asrApiKey`, `asrAccessKey`,
-`asrAppKey`, `asrResourceId`, `asrBaseURL`, `asrTimeoutMs`.
+`asrAppKey`, `asrResourceId`, `asrTurboResourceId`, `asrTurboMaxBytes`,
+`asrBaseURL`, `asrTimeoutMs`.
 
-The ASR client submits a recording task, then polls until completion; tune
-`asrTimeoutMs` for long recordings. Verify setup with `npm run dev -- doctor`
-and the `[asr_path]` section.
+Verify setup with `npm run dev -- doctor` and the `[asr_path]` section.
 
 TOS is not required for first startup or ordinary text use. Start with the
 primary model connection, then add multimodal, ASR, and TOS only when local
@@ -293,6 +309,7 @@ Commands:
 
 - Tutorial: [docs/tutorials/quickstart.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/tutorials/quickstart.md)
 - How-to: [docs/how-to/connect-openai-compatible-models.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/connect-openai-compatible-models.md)
+- How-to: [docs/how-to/configure-alibaba-bailian.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-alibaba-bailian.md)
 - How-to: [docs/how-to/configure-volcengine-tos.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-volcengine-tos.md)
 - Reference: [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
 - Reference: [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)

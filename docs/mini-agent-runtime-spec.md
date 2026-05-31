@@ -562,8 +562,8 @@ export interface ToolExecutionResult<T = unknown> {
 ```json
 {
   "path": "src/index.ts",
-  "offset": 0,
-  "limit": 20000
+  "offset": 1,
+  "limit": 2000
 }
 ```
 
@@ -571,18 +571,21 @@ export interface ToolExecutionResult<T = unknown> {
 - 路径相对 `workspaceRoot` 解析
 - 检查路径权限
 - 读取 UTF-8 文本文件
-- 返回内容和基本元信息
-- 超大文件只返回部分内容，并标注截断
+- `offset`/`limit` 以**行**为单位（`offset` 从 1 开始，`limit` 缺省 2000 行）
+- 每行以行号加制表符前缀输出（`<n>\t`，即 cat -n 风格）；行号前缀不属于文件内容，复用为 edit old_text 前需去除
+- `readMaxBytes` 限制单次扫描的字节数，过长的单行也会被截断
+- 内容被截断时在元信息中标注 `truncated`
 
 **输出**：
 ```json
 {
   "ok": true,
-  "content": "...文件内容...",
+  "content": "     1\t...第一行...\n     2\t...第二行...",
   "data": {
     "path": "/abs/path/src/index.ts",
-    "offset": 0,
-    "limit": 20000,
+    "offset": 1,
+    "limit": 2000,
+    "lines": 2,
     "truncated": false,
     "size": 1542
   }

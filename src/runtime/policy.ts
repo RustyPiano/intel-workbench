@@ -32,6 +32,9 @@ const SENSITIVE_PATH_PREFIXES = [
   path.resolve("/var/run/docker.sock"),
 ];
 
+const SENSITIVE_FILE_NAMES = new Set([".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "credentials"]);
+const NON_SECRET_ENV_EXAMPLE_NAMES = new Set([".env.example", ".env.sample", ".env.template"]);
+
 export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
   const workspaceRoot = path.resolve(options.workspaceRoot);
   const skillRoots = (options.skillRoots ?? []).map((skillRoot) => path.resolve(skillRoot));
@@ -57,9 +60,24 @@ export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
     }
   }
 
+  function assertNotSensitiveRead(candidate: string) {
+    const baseName = path.basename(candidate);
+    const isSensitiveEnvFile =
+      (baseName === ".env" || baseName.startsWith(".env.")) && !NON_SECRET_ENV_EXAMPLE_NAMES.has(baseName);
+    if (isSensitiveEnvFile || SENSITIVE_FILE_NAMES.has(baseName)) {
+      throw new RuntimeError({
+        code: "PATH_NOT_ALLOWED",
+        message: `Path appears to contain secrets and is not readable by tools: ${candidate}`,
+      });
+    }
+  }
+
   function resolveAllowedPath(inputPath: string, allowedRoots: string[], mode: "read" | "write" | "exec"): string {
     const resolvedPath = resolveAgainstWorkspace(inputPath);
     assertNotSensitive(resolvedPath);
+    if (mode === "read") {
+      assertNotSensitiveRead(resolvedPath);
+    }
 
     if (allowedRoots.length === 0) {
       return resolvedPath;

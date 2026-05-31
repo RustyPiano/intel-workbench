@@ -175,7 +175,7 @@
     ```json
     {
       "inlineBase64Allowed": false,
-      "recommendedTransport": "split",
+      "recommendedTransport": "model_reachable_url_or_preprocess",
       "recommendedChunkSeconds": 300
     }
     ```
@@ -186,10 +186,10 @@
     ```ts
     inlineBase64Bytes: number | null;
     inlineBase64Allowed: boolean | null;
-    recommendedTransport: "inline" | "split";
+    recommendedTransport: "inline" | "model_reachable_url_or_preprocess";
     recommendedChunkSeconds: number | null;
     ```
-  - Do not recommend `"url"` for a local file, because the repo has no upload/OSS tool. Skill text may tell users URL is an option when they already have one.
+  - Oversized local media may use a model-reachable URL/TOS, compression, or chunking depending on current config and user intent.
 
 - [x] **Step 4: Update summary text**
   - Include encoded size and recommendation in the tool content so the model can plan without inspecting `meta`.

@@ -20,7 +20,10 @@ const ENV_KEYS = [
   "MINI_AGENT_ASR_APP_KEY",
   "MINI_AGENT_ASR_RESOURCE_ID",
   "MINI_AGENT_ASR_BASE_URL",
+  "MINI_AGENT_ASR_ENGINE",
   "MINI_AGENT_ASR_TIMEOUT_MS",
+  "MINI_AGENT_ASR_TURBO_RESOURCE_ID",
+  "MINI_AGENT_ASR_TURBO_MAX_BYTES",
   "MINI_AGENT_TOS_ACCESS_KEY_ID",
   "MINI_AGENT_TOS_ACCESS_KEY_SECRET",
   "MINI_AGENT_TOS_BUCKET",
@@ -138,6 +141,29 @@ describe("resolveRuntimeConfig", () => {
 
     expect(config.asrResourceId).toBe("volc.seedasr.auc");
     expect(config.asrBaseURL).toBe("https://openspeech.bytedance.com");
+  });
+
+  test("does not configure a default ASR engine from env", async () => {
+    const workspaceRoot = await createWorkspace();
+    process.env.MINI_AGENT_ASR_API_KEY = "api-key";
+    process.env.MINI_AGENT_ASR_ENGINE = "auto";
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect((config as unknown as Record<string, unknown>).asrEngine).toBeUndefined();
+  });
+
+  test("drops legacy ASR engine values from config files", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(
+      path.join(workspaceRoot, "mini-agent.config.json"),
+      JSON.stringify({ asrApiKey: "file-api-key", asrEngine: "auto" }, null, 2),
+      "utf8",
+    );
+
+    const config = await resolveRuntimeConfig({ cwd: workspaceRoot });
+
+    expect((config as unknown as Record<string, unknown>).asrEngine).toBeUndefined();
   });
 
   test("defaults ASR resource and base URL for app-key/access-key auth", async () => {

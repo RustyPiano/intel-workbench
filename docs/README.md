@@ -12,6 +12,7 @@ as the code evolves.
 ## How-to
 
 - [Connect OpenAI-compatible models](./how-to/connect-openai-compatible-models.md)
+- [Configure Alibaba Cloud Bailian / DashScope](./how-to/configure-alibaba-bailian.md)
 - [Configure Volcano Engine TOS for local media](./how-to/configure-volcengine-tos.md)
 - [Write a skill](./how-to/write-a-skill.md)
 

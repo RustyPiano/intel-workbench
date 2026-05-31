@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { callAsr, TURBO_UNSUPPORTED_REQUEST_FIELDS, type AsrEngine } from "../model/asr.js";
+import { callAsr, TURBO_UNSUPPORTED_REQUEST_FIELDS } from "../model/asr.js";
 import { ASR_TURBO_HARD_MAX_BYTES, DEFAULT_ASR_TURBO_MAX_BYTES } from "../model/media-limits.js";
 import { isSupportedAudioUrlFormat, mediaMimeType } from "../model/media-source.js";
 import {
@@ -24,13 +24,13 @@ const analyzeAudioArgsSchema = z
       .min(1)
       .optional()
       .describe(
-        "Path to a local audio file in the workspace. The standard engine uploads it to TOS (must be configured); the turbo/auto engines can send it inline without TOS.",
+        "Path to a local audio file in the workspace. Turbo can send supported local formats inline; standard needs a model-reachable URL, using TOS for local files when configured.",
       ),
     format: z
       .string()
       .min(1)
       .optional()
-      .describe("Audio format, e.g. wav, mp3, ogg, pcm, m4a, or 3gpp. Required for URL inputs; inferred from path inputs when omitted."),
+      .describe("Audio format, e.g. wav, mp3, ogg, m4a, or 3gpp. Required for URL inputs; inferred from path inputs when omitted."),
     out_path: z
       .string()
       .min(1)
@@ -39,10 +39,9 @@ const analyzeAudioArgsSchema = z
         "Optional. Workspace-relative path to persist the full ASR result JSON, including the raw provider payload (e.g. `av-tasks/<id>/analysis/audio-asr.json`); the tool then returns a short summary. Omit to get the transcript and utterances inline — prefer naming a path for long recordings to keep the conversation small.",
       ),
     engine: z
-      .enum(["auto", "standard", "turbo"])
-      .optional()
+      .enum(["standard", "turbo"])
       .describe(
-        "ASR engine. Capabilities: 'standard' (volc.seedasr.auc) — emotion/gender/speech-rate/volume, long/large audio, but input must be a URL (local files go through TOS). 'turbo' (volc.bigasr.auc_turbo) — one-shot, local audio inline without TOS, but wav/mp3/ogg/opus only, ≤2h/≤100MB, transcript+speaker only. 'auto' (default) — standard when a URL or TOS is available, turbo for a local file without TOS. The result reports `engineUsed` and any `capabilitiesDropped`.",
+        "Required ASR engine chosen by the caller. Use 'turbo' (volc.bigasr.auc_turbo) for fast transcription/speaker separation when audio is wav/mp3/ogg/opus, including local inline audio without TOS. For local unsupported formats such as m4a and no rich metadata requirement, convert with ffmpeg to a supported turbo format and retry. Use 'standard' (volc.seedasr.auc) when the user needs rich metadata such as emotion/gender/speech-rate/volume, long/large audio, or preserving the original format; standard requires a model-reachable URL, with local files uploaded through TOS when configured.",
       ),
     language: z.string().min(1).optional().describe("Optional recognition language hint passed to Doubao ASR."),
     speaker: z
@@ -103,7 +102,7 @@ interface AnalyzeAudioData {
 export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> = {
   name: "analyze_audio",
   description:
-    "Transcribe & analyze a model-reachable audio URL or local audio path with the Doubao recording model: word/utterance timestamps, speaker separation, per-utterance emotion, speech-rate, volume, gender. The `standard` engine needs a URL (local files upload to TOS) and returns the rich metadata; the `turbo` engine sends a local file inline without TOS but only returns transcript+speaker (wav/mp3/ogg/opus, ≤2h/≤100MB); `engine` defaults to `auto` and the result reports `engineUsed`/`capabilitiesDropped`. Returns the transcript and utterances inline; pass `out_path` to instead persist the full result (incl. raw provider payload) and get a short summary back — prefer that for long recordings. Use for meeting/interview/call audio; for video use `analyze_media`. ASR transcripts may contain recognition errors — correct them against the surrounding transcript context when analyzing.",
+    "Transcribe & analyze an audio URL or local path with Doubao ASR. The caller must choose `engine`: `turbo` is fast and can send supported local wav/mp3/ogg/opus inline without TOS, returning transcript+speaker; `standard` is for rich metadata, long/large audio, or preserving original formats, and needs a model-reachable URL (local files use TOS when configured). For local unsupported formats without rich metadata needs, convert with ffmpeg to a turbo-supported format and retry. The result reports `engineUsed`/`capabilitiesDropped`. Use `out_path` for long recordings to persist the full result. ASR transcripts may contain recognition errors — correct them against context when analyzing.",
   inputSchema: analyzeAudioArgsSchema,
   async execute(args, ctx) {
     try {
@@ -266,13 +265,16 @@ async function resolveAudioInput(args: AnalyzeAudioArgs, ctx: ToolContext): Prom
     });
   }
 
-  const { engine, reason } = selectEngine(args.engine ?? asr.engine, isRemote, Boolean(ctx.config.tos));
+  const engine = args.engine;
+  const reason = `engine explicitly set to ${engine}`;
 
   if (engine === "turbo") {
     if (!TURBO_AUDIO_FORMATS.has(format)) {
       throw new RuntimeError({
         code: "INVALID_ARGS",
-        message: `Turbo ASR only supports wav/mp3/ogg/opus; got ${format}. Use engine "standard" for this format.`,
+        message:
+          `Turbo ASR only supports wav/mp3/ogg/opus; got ${format}. ` +
+          'For local files, convert with ffmpeg to wav/mp3/ogg/opus and retry turbo. Use engine "standard" with a URL/TOS when rich metadata or the original format is required.',
       });
     }
 
@@ -293,9 +295,9 @@ async function resolveAudioInput(args: AnalyzeAudioArgs, ctx: ToolContext): Prom
     throw new RuntimeError({
       code: "MODEL_ERROR",
       message:
-        "Local audio files must be reachable by Doubao ASR. Configure Volcano Engine TOS with MINI_AGENT_TOS_* " +
-        'and use `volcengine-media-setup`, pass engine "turbo" to send the file inline without TOS, ' +
-        "or pass an existing model-reachable audio URL.",
+        "Standard ASR for local audio needs a model-reachable URL or configured TOS. " +
+        'If rich metadata is not required, convert locally with ffmpeg to wav/mp3/ogg/opus and retry with engine "turbo"; ' +
+        "otherwise provide a pre-signed URL or configure Volcano Engine TOS with MINI_AGENT_TOS_* via `volcengine-media-setup`.",
       details: { category: "tos", missingTosConfig: true },
     });
   }
@@ -317,28 +319,6 @@ async function resolveAudioInput(args: AnalyzeAudioArgs, ctx: ToolContext): Prom
     source: { type: "file", path: filePath! },
     publishedMedia: toPublishedMediaMetadata(publishedMedia),
   };
-}
-
-// "auto" stays predictable: prefer the cheaper, fuller standard engine whenever
-// the audio can reach it (a URL, or TOS to host a local file), and only fall
-// back to turbo when a local file would otherwise be unusable. Intent-based
-// routing is left to the caller, who can read engineUsed/capabilitiesDropped.
-function selectEngine(
-  requested: AsrEngine | undefined,
-  isRemote: boolean,
-  hasTos: boolean,
-): { engine: "standard" | "turbo"; reason: string } {
-  const configured = requested ?? "auto";
-  if (configured !== "auto") {
-    return { engine: configured, reason: `engine explicitly set to ${configured}` };
-  }
-  if (isRemote) {
-    return { engine: "standard", reason: "auto: remote URL handled by the standard engine" };
-  }
-  if (hasTos) {
-    return { engine: "standard", reason: "auto: local file uploaded to TOS for the standard engine" };
-  }
-  return { engine: "turbo", reason: "auto: local file sent inline to turbo (no TOS configured)" };
 }
 
 // Capabilities the user asked for that the turbo engine cannot honor — surfaced

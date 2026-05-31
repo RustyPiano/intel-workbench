@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import type { AsrEngine } from "../model/asr.js";
 import type { RuntimeErrorShape } from "../runtime/errors.js";
 import type { PolicyEngine } from "../runtime/policy.js";
 import type { ActivatedSkill } from "../skills/registry.js";
@@ -38,9 +37,6 @@ export interface AsrToolConfig {
   accessKey?: string;
   appKey?: string;
   timeoutMs?: number;
-  // Engine selection default; per-call `engine` overrides it. "auto" prefers the
-  // standard engine and only falls back to turbo for local audio with no TOS.
-  engine?: AsrEngine;
   // Resource ID for the turbo (极速版) engine; defaults to volc.bigasr.auc_turbo.
   turboResourceId?: string;
   // Max raw audio bytes the turbo engine will base64-inline for a local file.

@@ -403,7 +403,6 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         baseURL: config.asrBaseURL,
         auth: getAsrAuth(config),
         timeoutMs: config.asrTimeoutMs,
-        engine: getAsrAuth(config) !== "missing" ? (config.asrEngine ?? "auto") : config.asrEngine,
         turboResourceId:
           getAsrAuth(config) !== "missing" ? (config.asrTurboResourceId ?? "volc.bigasr.auc_turbo") : config.asrTurboResourceId,
       },
@@ -470,7 +469,6 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
               accessKey: config.asrAccessKey,
               appKey: config.asrAppKey,
               timeoutMs: config.asrTimeoutMs,
-              engine: config.asrEngine ?? "auto",
               turboResourceId: config.asrTurboResourceId ?? "volc.bigasr.auc_turbo",
               turboMaxBytes: config.asrTurboMaxBytes,
             }

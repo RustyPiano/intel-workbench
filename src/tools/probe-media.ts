@@ -31,7 +31,7 @@ interface ProbeMediaData {
   sizeBytes: number | null;
   inlineBase64Bytes: number | null;
   inlineBase64Allowed: boolean | null;
-  recommendedTransport: "inline" | "split";
+  recommendedTransport: "inline" | "model_reachable_url_or_preprocess";
   recommendedChunkSeconds: number | null;
   hasVideo: boolean;
   hasAudio: boolean;
@@ -107,7 +107,7 @@ export function resolveProbeSizeBytes(ffprobeSize: number | null, statSize: numb
 export interface MediaTransportPlan {
   inlineBase64Bytes: number | null;
   inlineBase64Allowed: boolean | null;
-  recommendedTransport: "inline" | "split";
+  recommendedTransport: "inline" | "model_reachable_url_or_preprocess";
   recommendedChunkSeconds: number | null;
 }
 
@@ -116,7 +116,7 @@ export function planMediaTransport(sizeBytes: number | null): MediaTransportPlan
     return {
       inlineBase64Bytes: null,
       inlineBase64Allowed: null,
-      recommendedTransport: "split",
+      recommendedTransport: "model_reachable_url_or_preprocess",
       recommendedChunkSeconds: 300,
     };
   }
@@ -126,7 +126,7 @@ export function planMediaTransport(sizeBytes: number | null): MediaTransportPlan
   return {
     inlineBase64Bytes,
     inlineBase64Allowed,
-    recommendedTransport: inlineBase64Allowed ? "inline" : "split",
+    recommendedTransport: inlineBase64Allowed ? "inline" : "model_reachable_url_or_preprocess",
     recommendedChunkSeconds: inlineBase64Allowed ? null : 300,
   };
 }
@@ -134,7 +134,7 @@ export function planMediaTransport(sizeBytes: number | null): MediaTransportPlan
 export const probeMediaTool: RuntimeTool<ProbeMediaArgs, ProbeMediaData> = {
   name: "probe_media",
   description:
-    "Inspect a media file with ffprobe: duration, container, and video/audio streams. Use this before analyze_media to decide whether long media needs to be split into chunks.",
+    "Inspect a media file with ffprobe: duration, container, and video/audio streams. Use this before analyze_media to decide whether media fits inline Base64 or needs a model-reachable URL, compression, or chunking.",
   inputSchema: probeMediaArgsSchema,
   async execute(args, ctx) {
     try {

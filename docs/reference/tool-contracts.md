@@ -131,17 +131,19 @@ Rules:
 Contract:
 
 - resolves the path through read policy
-- bounds reads by `readMaxBytes`
-- reads only the requested slice
-- keeps UTF-8 boundaries intact when truncating
+- counts `offset`/`limit` in lines (1-based `offset`, default first 2000 lines)
+- prefixes each returned line with its line number and a tab (`<n>\t`), cat -n style
+- caps the bytes scanned per read by `readMaxBytes`, and individual long lines by length
+- keeps UTF-8 boundaries intact when the byte cap truncates
 
 `meta` fields:
 
 - `path`
-- `offset`
-- `limit`
+- `offset` — 1-based line number of the first returned line
+- `limit` — line limit applied
+- `lines` — number of lines returned
 - `truncated`
-- `size`
+- `size` — file size in bytes
 
 ### `write`
 

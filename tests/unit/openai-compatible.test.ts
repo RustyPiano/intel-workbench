@@ -375,6 +375,38 @@ describe("OpenAICompatibleModelAdapter", () => {
     expect(callArgs.tools[0].function.strict).toBe(true);
   });
 
+  test("omits tool_calls for assistant messages with an empty toolCalls array", async () => {
+    // Regression: a final assistant message persisted with `toolCalls: []` must
+    // not serialize to `tool_calls: []`, which the provider rejects with
+    // "Expected an array with minimum length 1" on the next turn.
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+
+    type CreateArgs = { messages: Array<Record<string, unknown>> };
+    const createSpy = vi.fn(async (_args: CreateArgs) => ({
+      id: "chatcmpl_ok",
+      object: "chat.completion",
+      choices: [{ message: { content: "ok", tool_calls: undefined }, finish_reason: "stop" }],
+    }));
+    (adapter as unknown as { client: { chat: { completions: { create: typeof createSpy } } } }).client = {
+      chat: { completions: { create: createSpy } },
+    };
+
+    await adapter.generate({
+      systemPrompt: "You are a test.",
+      tools: [],
+      messages: [
+        { role: "user", content: "hi", messageId: "msg_1" },
+        { role: "assistant", content: "prior answer", messageId: "msg_2", toolCalls: [] },
+        { role: "user", content: "follow up", messageId: "msg_3" },
+      ],
+    });
+
+    const sent = createSpy.mock.calls[0][0].messages;
+    const assistant = sent.find((message) => message.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(assistant).not.toHaveProperty("tool_calls");
+  });
+
   test("does not read process.env.OPENAI_API_KEY when constructing the adapter", () => {
     // The env fallback used to live in the adapter; it now belongs to runtime/config.ts.
     // Setting OPENAI_API_KEY here ensures the OpenAI SDK can construct (it inspects env on its own),

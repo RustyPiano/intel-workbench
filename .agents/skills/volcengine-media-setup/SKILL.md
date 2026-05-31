@@ -33,7 +33,7 @@ the user's task actually needs them.
   public-read buckets.
 - Treat TOS as optional during first startup. It is only needed for local media
   that must become reachable by a model service, especially large files and
-  audio sent to URL-only ASR.
+  audio sent to standard ASR.
 
 ## Fast Triage
 
@@ -47,16 +47,31 @@ If the user already named a goal, proceed directly.
 
 ## Setup Phases
 
+Use the smallest phase that satisfies the user's current task:
+
+| Goal | Configure |
+| --- | --- |
+| Text agent works | Primary model only. |
+| Video/image analysis | Add `MINI_AGENT_MM_MODEL`; override MM endpoint/key only if different. |
+| Fast local audio transcript | Add ASR auth; call `analyze_audio` with `engine: "turbo"`. |
+| Rich or large/original audio | Add ASR auth; call `engine: "standard"` and use URL/TOS for local files. |
+| Large local media URL | Add TOS. |
+
 ### Phase 1: Primary Model First
 
 Use this when the user is starting from zero or says "先把大模型跑起来".
 
-Provide the minimal environment variables:
+Minimal environment variables:
+
+```bash
+export MINI_AGENT_MODEL=your-model-name
+export MINI_AGENT_API_KEY=your-api-key
+```
+
+Optional when using a non-default OpenAI-compatible endpoint:
 
 ```bash
 export MINI_AGENT_PROVIDER=openai-compatible
-export MINI_AGENT_MODEL=your-model-name
-export MINI_AGENT_API_KEY=your-api-key
 export MINI_AGENT_BASE_URL=https://your-openai-compatible-endpoint/v1
 ```
 
@@ -71,10 +86,16 @@ Tell the user to check `[model_provider]` for `api_key configured`.
 ### Phase 2: Multimodal Model For Video/Image
 
 Use this when the user wants `analyze_media` for image/video understanding.
-This is separate from the primary text model.
+This is separate from the primary text model. If endpoint/key are omitted, the
+multimodal path falls back to the primary connection.
 
 ```bash
 export MINI_AGENT_MM_MODEL=qwen3.5-omni-plus
+```
+
+Optional overrides:
+
+```bash
 export MINI_AGENT_MM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 export MINI_AGENT_MM_API_KEY=your-multimodal-api-key
 export MINI_AGENT_MM_TIMEOUT_MS=180000
@@ -91,15 +112,13 @@ Tell the user to check `[multimodal_path]`.
 ### Phase 3: Doubao Recording ASR / 语音 API Key
 
 Use this when the user wants transcript, speaker separation, or emotion
-analysis from audio.
+analysis from audio. ASR auth is independent of the text and multimodal model
+connections.
 
 Preferred API-key mode:
 
 ```bash
 export MINI_AGENT_ASR_API_KEY=your-doubao-asr-api-key
-export MINI_AGENT_ASR_RESOURCE_ID=volc.seedasr.auc
-export MINI_AGENT_ASR_BASE_URL=https://openspeech.bytedance.com
-export MINI_AGENT_ASR_TIMEOUT_MS=180000
 ```
 
 Alternative app-key/access-key mode:
@@ -107,30 +126,30 @@ Alternative app-key/access-key mode:
 ```bash
 export MINI_AGENT_ASR_APP_KEY=your-doubao-app-key
 export MINI_AGENT_ASR_ACCESS_KEY=your-doubao-access-key
+```
+
+Optional advanced settings:
+
+```bash
 export MINI_AGENT_ASR_RESOURCE_ID=volc.seedasr.auc
+export MINI_AGENT_ASR_TURBO_RESOURCE_ID=volc.bigasr.auc_turbo
+export MINI_AGENT_ASR_TURBO_MAX_BYTES=20000000
 export MINI_AGENT_ASR_BASE_URL=https://openspeech.bytedance.com
 export MINI_AGENT_ASR_TIMEOUT_MS=180000
 ```
 
-Optional engine selection:
+`analyze_audio` requires a per-call `engine` (`standard` or `turbo`). Do not
+look for a global engine default.
 
-```bash
-# auto (default): prefer standard; only fall back to turbo for a local file
-#   with no TOS configured.
-# standard: 录音文件标准版 volc.seedasr.auc — needs a model-reachable URL (local
-#   files go through TOS); full features incl. emotion/gender/speech-rate/volume;
-#   handles long/large audio.
-# turbo: 录音文件极速版 — one-shot, sends a local file inline as base64 with NO
-#   TOS, lower latency, but only wav/mp3/ogg/opus, <=2h/<=100MB, and no emotion/
-#   gender/speech-rate/volume.
-export MINI_AGENT_ASR_ENGINE=auto
-export MINI_AGENT_ASR_TURBO_RESOURCE_ID=volc.bigasr.auc_turbo
-export MINI_AGENT_ASR_TURBO_MAX_BYTES=20000000
-```
+- Use `turbo` for fast local wav/mp3/ogg/opus transcription and speaker
+  separation without TOS.
+- Use `standard` for rich metadata
+  (emotion/gender/speech-rate/volume), long/large audio, or preserving the
+  original format; local standard input needs TOS or another reachable URL.
+- If local audio is not turbo-supported and rich metadata is not required, try
+  local `ffmpeg` conversion before asking the user to configure TOS.
 
-`analyze_audio` also takes a per-call `engine` ("auto" | "standard" | "turbo")
-that overrides this default, and its result reports `engineUsed` plus any
-`capabilitiesDropped` (e.g. emotion when turbo was used).
+The result reports `engineUsed` and any `capabilitiesDropped`.
 
 Then run:
 
@@ -138,30 +157,24 @@ Then run:
 npm run dev -- doctor
 ```
 
-Tell the user to check `[asr_path]` for `asr_configured yes` (and `asr_engine`
-for the active default).
-
-If ASR is configured but the user only has a local audio file, they have two
-options: use the `turbo` engine to send it inline without any TOS (within the
-turbo size/format limits), or configure TOS (Phase 4) and use `standard`.
+Tell the user to check `[asr_path]` for `asr_configured yes`.
 
 ### Phase 4: Optional TOS For Large Local Media
 
 Use this only when local media must become a model-reachable URL, or when a
 large video/image is over the inline Base64 limit.
 
-Guide the user through Volcano Engine:
+Guide the user through the minimum Volcano Engine steps:
 
 1. Open the TOS service guide:
    `https://www.volcengine.com/docs/6349/74830?lang=zh`
 2. Enable TOS if it is not already enabled.
 3. Create a bucket in the desired region.
 4. Keep bucket access private.
-5. Record the bucket name, region, and endpoint.
-6. Create or choose an access key with least privilege for the target bucket.
+5. Create or choose an access key with least privilege for the target bucket.
    For an upload-and-signed-URL workflow, it usually needs object upload and
    object read/signing permissions for the chosen prefix.
-7. Add a lifecycle rule for the upload prefix if the bucket is only used for
+6. Add a lifecycle rule for the upload prefix if the bucket is only used for
    temporary model inputs.
 
 Useful TOS API/function reference:
@@ -188,11 +201,9 @@ export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
 export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
 ```
 
-mini-agent uploads through the TOS S3-compatible protocol, so the endpoint must
-be the S3-protocol host (`tos-s3-<region>...`). `MINI_AGENT_TOS_ENDPOINT`
-defaults to `tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A
-native `tos-<region>.volces.com` value is upgraded to the S3 host automatically,
-and a leading `https://` is optional.
+mini-agent uploads through the TOS S3-compatible protocol. If an endpoint is
+provided, both native `tos-<region>...` and S3 `tos-s3-<region>...` hosts are
+accepted; uploads use the S3 host internally. A leading `https://` is optional.
 `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` defaults to `3600` seconds. After TOS is
 configured, mini-agent can upload large local media or local audio to the
 private bucket and pass a short-lived pre-signed URL to `analyze_media` or
@@ -222,7 +233,8 @@ When guiding setup, end with this compact status card:
 - `[multimodal_path] mm_configured no`: set `MINI_AGENT_MM_MODEL`.
 - `[asr_path] asr_configured no`: set `MINI_AGENT_ASR_API_KEY`, or
   `MINI_AGENT_ASR_APP_KEY` plus `MINI_AGENT_ASR_ACCESS_KEY`.
-- Local audio cannot be passed directly to `analyze_audio`: configure TOS
-  automatic upload, or provide an existing pre-signed URL.
+- Local audio fails with turbo format limits: convert locally with `ffmpeg` to
+  wav/mp3/ogg/opus and retry turbo, or configure TOS/provide a pre-signed URL
+  and use standard when rich metadata or original format preservation is needed.
 - Large local video/image exceeds inline limit: compress it, split it, or upload
   it to TOS and use a short-lived pre-signed URL.

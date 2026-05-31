@@ -1,7 +1,7 @@
 ---
 name: av-dialogue-insight
 description: Analyze dialogue-heavy video/audio such as meeting recordings, interviews, calls, surveillance or captured conversation video, 会议录音, 访谈, 电话录音, 监控对话视频, 情绪时间线, and 关键触发点. Use when the user wants timestamped events, speaker profiles, multimodal emotion, trigger-point explanation, and a structured report. Do not use for generic image/video captioning without dialogue or conversation analysis.
-compatibility: analyze_audio needs Doubao ASR config (MINI_AGENT_ASR_*) and a model-reachable audio URL; analyze_media needs MINI_AGENT_MM_MODEL. Use volcengine-media-setup when the user needs optional TOS automatic upload or Doubao ASR configuration. probe_media needs ffprobe; scripts need Python 3.11+.
+compatibility: analyze_audio needs Doubao ASR config (MINI_AGENT_ASR_*); standard ASR needs a model-reachable URL or TOS for local files, while turbo ASR can send supported local audio inline. analyze_media needs MINI_AGENT_MM_MODEL. Use volcengine-media-setup when the user needs Doubao ASR or optional TOS configuration. probe_media needs ffprobe; scripts need Python 3.11+.
 allowed-tools: read write edit bash activate_skill probe_media analyze_audio analyze_media
 metadata:
   author: mini-agent
@@ -28,8 +28,15 @@ av-tasks/<task-id>/
 
 ## Routing
 
-1. **Reachable audio URL:** call `analyze_audio({ url, format })` (audio is
-   URL-only; see "Large Or Local Media" for local files).
+1. **Audio path or URL:** call `analyze_audio` with an explicit `engine:
+   "standard"` or `engine: "turbo"`. Use `turbo` for fast transcription/speaker
+   separation when the audio is wav/mp3/ogg/opus and within the turbo limits,
+   whether it is a local file or a reachable URL. Use `standard` when the user
+   needs rich metadata (emotion, gender, speech-rate, volume), long/large audio,
+   or preservation of the original format.
+   For local m4a/aac/flac/wma/amr/3gpp without rich metadata requirements,
+   try converting with `ffmpeg` to a turbo-supported format before asking the
+   user to configure TOS.
 2. **Video or image:** call `probe_media` for local media, then
    `analyze_media({ path or url, kind, instruction, want_json: true })`. For
    reachable video URLs, provide `kind: "video"`.
@@ -64,12 +71,14 @@ av-tasks/<task-id>/
   file fits the inline limit.
 - Small local video/image (within the inline limit): pass `path` to
   `analyze_media` — it is sent inline as Base64.
-- Large media, or any local audio: it must become reachable by the model. If the
-  user has not configured object storage or ASR credentials, activate
-  `volcengine-media-setup` and guide them through Doubao ASR and optional TOS.
-  Once TOS is configured, automatic upload can publish the local file through a
-  private bucket and short-lived pre-signed URL. Pass that URL to
-  `analyze_media` (`kind: "video"`) or `analyze_audio`.
+- Local audio does not automatically require TOS. If turbo supports the format
+  (or `ffmpeg` can convert it locally) and the user does not need rich metadata,
+  use `analyze_audio({ path, engine: "turbo" })`.
+- Use standard ASR for rich metadata, long/large audio, or formats you should
+  preserve. For local files, standard ASR needs Volcano Engine TOS automatic upload
+  or an existing model-reachable pre-signed URL. Activate
+  `volcengine-media-setup` only when credentials, TOS setup, upload permission,
+  cost, or privacy need user confirmation.
 
 ## Failure Handling
 

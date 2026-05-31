@@ -56,13 +56,12 @@ export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
 export MINI_AGENT_TOS_ENDPOINT=tos-s3-cn-beijing.volces.com
 ```
 
-mini-agent talks to TOS over its S3-compatible protocol, so the endpoint must be
-the S3-protocol host (`tos-s3-<region>...`), not the native TOS host
-(`tos-<region>...`). `MINI_AGENT_TOS_ENDPOINT` defaults to
-`tos-s3-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. A native
-`tos-<region>.volces.com` value is upgraded to the S3 host automatically, and a
-leading `https://` is optional. For VPC access, set the internal S3 host
-(`tos-s3-<region>.ivolces.com`).
+mini-agent talks to TOS over its S3-compatible protocol. If
+`MINI_AGENT_TOS_ENDPOINT` is omitted, the upload client derives the S3 host from
+`MINI_AGENT_TOS_REGION`. If an endpoint is provided, both native
+`tos-<region>.volces.com` and S3 `tos-s3-<region>.volces.com` hosts are
+accepted; uploads use the S3 host internally. A leading `https://` is optional.
+For VPC access, set the internal S3 host (`tos-s3-<region>.ivolces.com`).
 `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` defaults to `3600` seconds.
 
 ## Verify
@@ -76,7 +75,7 @@ npm run dev -- doctor
 Then use local media only for the cases that need TOS:
 
 - large local video/image files that exceed inline limits
-- local audio files that need to be sent to Doubao ASR
+- local audio files that need standard ASR or another model-reachable URL
 
 For small local video/image files, mini-agent can still send inline Base64
 without TOS. For existing reachable media URLs, pass the URL directly.

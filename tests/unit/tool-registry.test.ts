@@ -296,12 +296,13 @@ describe("ToolRegistry", () => {
     const properties = schema.properties as Record<string, { type: unknown }>;
     const required = schema.required as string[];
     expect([...required].sort()).toEqual(
-      ["advanced", "emotion", "format", "hotwords", "language", "out_path", "speaker", "url"].sort(),
+      ["advanced", "emotion", "format", "hotwords", "language", "out_path", "path", "speaker", "url"].sort(),
     );
 
     const acceptsNull = (value: unknown): boolean => Array.isArray(value) && value.includes("null");
-    expect(properties.url.type).toBe("string");
-    expect(properties.format.type).toBe("string");
+    expect(acceptsNull(properties.url.type)).toBe(true);
+    expect(acceptsNull(properties.path.type)).toBe(true);
+    expect(acceptsNull(properties.format.type)).toBe(true);
     expect(acceptsNull(properties.out_path.type)).toBe(true);
     expect(acceptsNull(properties.language.type)).toBe(true);
     expect(acceptsNull(properties.hotwords.type)).toBe(true);

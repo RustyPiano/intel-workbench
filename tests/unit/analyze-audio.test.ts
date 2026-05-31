@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,13 +7,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { createPolicyEngine, type PolicyEngine } from "../../src/runtime/policy.js";
 import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
 import { ToolRegistry } from "../../src/tools/index.js";
-import type { AsrToolConfig, ToolContext } from "../../src/tools/types.js";
+import type { AsrToolConfig, ToolContext, TosStorageConfig } from "../../src/tools/types.js";
 
 const tempRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.doUnmock("../../src/model/asr.js");
+  vi.doUnmock("../../src/model/tos-storage.js");
   vi.resetModules();
 });
 
@@ -23,12 +24,19 @@ async function createWorkspace(): Promise<string> {
   return root;
 }
 
+async function createAudioFile(root: string, name = "talk.wav"): Promise<string> {
+  const filePath = path.join(root, name);
+  await writeFile(filePath, Buffer.from([0, 1, 2, 3]));
+  return filePath;
+}
+
 function createContext(
   workspaceRoot: string,
   asr?: AsrToolConfig,
   fileMutationQueue?: FileMutationQueue,
   readOnly = false,
   policy?: PolicyEngine,
+  tos?: TosStorageConfig,
 ): ToolContext {
   return {
     workspaceRoot,
@@ -45,10 +53,20 @@ function createContext(
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,
       asr,
+      tos,
     },
     fileMutationQueue,
   };
 }
+
+const tos: TosStorageConfig = {
+  accessKeyId: "ak",
+  accessKeySecret: "sk",
+  bucket: "media-bucket",
+  region: "cn-beijing",
+  prefix: "mini-agent/uploads",
+  signedUrlExpires: 3600,
+};
 
 describe("analyzeAudioTool", () => {
   test("returns transcript and utterances inline when out_path is omitted", async () => {
@@ -140,6 +158,131 @@ describe("analyzeAudioTool", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({ code: "MODEL_ERROR" });
     expect(result.content).toMatch(/MINI_AGENT_ASR_\*/u);
+  });
+
+  test("returns a MODEL_ERROR when local audio is provided without TOS config", async () => {
+    const root = await createWorkspace();
+    await createAudioFile(root);
+    const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+
+    const result = await analyzeAudioTool.execute(
+      {
+        path: "talk.wav",
+        out_path: "analysis/audio.json",
+        speaker: true,
+        emotion: true,
+      },
+      createContext(root, {
+        baseURL: "https://openspeech.bytedance.com",
+        resourceId: "volc.seedasr.auc",
+        apiKey: "k",
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "MODEL_ERROR",
+      details: { missingTosConfig: true },
+    });
+    expect(result.content).toMatch(/Local audio/u);
+    expect(result.content).toMatch(/MINI_AGENT_TOS_/u);
+    expect(result.content).toMatch(/volcengine-media-setup/u);
+  });
+
+  test("uploads local audio to TOS before calling ASR", async () => {
+    const root = await createWorkspace();
+    const mediaPath = await createAudioFile(root);
+    const asrCalls: unknown[] = [];
+    const publishCalls: unknown[] = [];
+    vi.doMock("../../src/model/asr.js", () => ({
+      callAsr: async (params: unknown) => {
+        asrCalls.push(params);
+        return {
+          text: "Local transcript.",
+          durationMs: 1000,
+          utterances: [{ startMs: 0, endMs: 1000, text: "Local transcript.", speaker: "S1" }],
+          raw: { ok: true },
+        };
+      },
+    }));
+    vi.doMock("../../src/model/tos-storage.js", () => ({
+      publishFileToTos: async (params: unknown) => {
+        publishCalls.push(params);
+        return {
+          url: "https://signed.example/talk.wav",
+          bucket: "media-bucket",
+          key: "mini-agent/uploads/run_test/call_analyze_audio_1/talk.wav",
+          expiresSeconds: 3600,
+          sizeBytes: 4,
+        };
+      },
+      toPublishedMediaMetadata: (media: { bucket: string; key: string; expiresSeconds: number; sizeBytes: number }) => ({
+        bucket: media.bucket,
+        key: media.key,
+        expiresSeconds: media.expiresSeconds,
+        sizeBytes: media.sizeBytes,
+      }),
+    }));
+    const { analyzeAudioTool } = await import("../../src/tools/analyze-audio.js");
+
+    const result = await analyzeAudioTool.execute(
+      {
+        path: "talk.wav",
+        out_path: "analysis/local-audio.json",
+        speaker: true,
+        emotion: false,
+      },
+      createContext(
+        root,
+        {
+          baseURL: "https://openspeech.bytedance.com",
+          resourceId: "volc.seedasr.auc",
+          apiKey: "k",
+        },
+        new FileMutationQueue(),
+        false,
+        undefined,
+        tos,
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(publishCalls[0]).toMatchObject({
+      config: tos,
+      filePath: mediaPath,
+      runId: "run_test",
+      toolCallId: "call_analyze_audio_1",
+      contentType: "audio/wav",
+    });
+    expect(asrCalls[0]).toMatchObject({
+      url: "https://signed.example/talk.wav",
+      format: "wav",
+      enableSpeakerInfo: true,
+      enableEmotionDetection: false,
+    });
+    expect(result.meta).toMatchObject({
+      outPath: path.join(root, "analysis/local-audio.json"),
+      source: { type: "file", path: mediaPath },
+      publishedMedia: {
+        bucket: "media-bucket",
+        key: "mini-agent/uploads/run_test/call_analyze_audio_1/talk.wav",
+        expiresSeconds: 3600,
+        sizeBytes: 4,
+      },
+    });
+    expect(JSON.stringify(result.meta)).not.toContain("https://signed.example");
+    const meta = result.meta as unknown as Record<string, unknown>;
+    expect(meta.publishedMedia).not.toHaveProperty("url");
+    const written = JSON.parse(await readFile(path.join(root, "analysis/local-audio.json"), "utf8")) as Record<string, unknown>;
+    expect(written.source).toEqual({ type: "file", path: mediaPath });
+    expect(JSON.stringify(written)).not.toContain("https://signed.example");
+    expect(written.publishedMedia).toMatchObject({
+      bucket: "media-bucket",
+      key: "mini-agent/uploads/run_test/call_analyze_audio_1/talk.wav",
+      expiresSeconds: 3600,
+      sizeBytes: 4,
+    });
+    expect(written.publishedMedia).not.toHaveProperty("url");
   });
 
   test("delegates to callAsr and writes normalized ASR envelope to out_path", async () => {

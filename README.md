@@ -216,9 +216,10 @@ requires `ffprobe` (part of `ffmpeg`) on the `PATH`.
 
 For DashScope Qwen-Omni local files, `analyze_media` sends inline Base64 content
 and enforces DashScope's requirement that the encoded payload is under 10MB.
-For larger files, upload to public object storage (e.g. Volcano Engine TOS) and
-pass the URL, or compress the file before analysis. If the user already has a public video/image
-URL, `analyze_media` can send that URL directly; URL calls require `kind`.
+For larger local files, configure optional Volcano Engine TOS automatic upload
+so mini-agent can upload to a private bucket and pass the model a short-lived
+pre-signed URL. If the user already has a reachable video/image URL,
+`analyze_media` can send that URL directly; URL calls require `kind`.
 
 `qwen3.5-omni-plus` does not provide native structured output on this path, so
 `want_json` uses prompt-plus-parse. A/V report workflows should run
@@ -227,9 +228,10 @@ so the agent can retry once or produce degraded output.
 
 ### Doubao audio ASR
 
-Pure audio uses `analyze_audio` with a public audio URL plus explicit `format`
-such as `mp3`, `wav`, `ogg`, or `pcm`. Local audio upload/publishing is a TODO;
-the repo does not upload local audio automatically.
+Pure audio uses `analyze_audio` with a model-reachable audio URL plus explicit
+`format` such as `mp3`, `wav`, `ogg`, or `pcm`. Local audio needs a URL;
+configure optional Volcano Engine TOS automatic upload when you want mini-agent
+to publish it through a private bucket and short-lived pre-signed URL.
 
 Doubao ASR auth is separate from the primary text connection and the multimodal
 connection. Configure either API-key auth or app-key/access-key auth:
@@ -253,6 +255,10 @@ Or in `mini-agent.config.json`: `asrAppId`, `asrApiKey`, `asrAccessKey`,
 The ASR client submits a recording task, then polls until completion; tune
 `asrTimeoutMs` for long recordings. Verify setup with `npm run dev -- doctor`
 and the `[asr_path]` section.
+
+TOS is not required for first startup or ordinary text use. Start with the
+primary model connection, then add multimodal, ASR, and TOS only when local
+media needs it. See [Configure Volcano Engine TOS for local media](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-volcengine-tos.md).
 
 ## CLI Surface
 
@@ -287,6 +293,7 @@ Commands:
 
 - Tutorial: [docs/tutorials/quickstart.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/tutorials/quickstart.md)
 - How-to: [docs/how-to/connect-openai-compatible-models.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/connect-openai-compatible-models.md)
+- How-to: [docs/how-to/configure-volcengine-tos.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-volcengine-tos.md)
 - Reference: [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
 - Reference: [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)
 - Explanation: [docs/explanation/runtime-architecture.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/explanation/runtime-architecture.md)

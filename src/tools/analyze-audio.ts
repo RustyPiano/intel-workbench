@@ -1,15 +1,32 @@
+import path from "node:path";
+
 import { z } from "zod";
 
 import { callAsr } from "../model/asr.js";
+import { isSupportedAudioUrlFormat, mediaMimeType } from "../model/media-source.js";
+import {
+  publishFileToTos,
+  toPublishedMediaMetadata,
+  type PublishedMediaMetadata,
+} from "../model/tos-storage.js";
 import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
-import type { RuntimeTool } from "./types.js";
+import type { RuntimeTool, ToolContext } from "./types.js";
 import { persistToolResult } from "./utils/persist-result.js";
 import { truncatePreview } from "./utils/truncate-preview.js";
 
 const analyzeAudioArgsSchema = z
   .object({
-    url: z.string().url().describe("Public URL to an audio file."),
-    format: z.string().min(1).describe("Audio format for the public URL, e.g. wav, mp3, ogg, pcm, m4a, or 3gpp."),
+    url: z.string().url().optional().describe("Model-reachable URL to an audio file."),
+    path: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Path to a local audio file in the workspace. Requires configured TOS so the ASR provider can fetch it."),
+    format: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Audio format, e.g. wav, mp3, ogg, pcm, m4a, or 3gpp. Required for URL inputs; inferred from path inputs when omitted."),
     out_path: z
       .string()
       .min(1)
@@ -32,6 +49,31 @@ const analyzeAudioArgsSchema = z
       .optional()
       .describe("Advanced escape hatch: raw JSON object string merged into the Doubao provider request."),
   })
+  .superRefine((value, ctx) => {
+    const hasUrl = value.url !== undefined;
+    const hasPath = value.path !== undefined;
+    if (hasUrl === hasPath) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["path"],
+        message: "Provide exactly one of path or url.",
+      });
+    }
+    if (hasUrl && value.format === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["format"],
+        message: "format is required for URL inputs.",
+      });
+    }
+    if (value.format !== undefined && !isSupportedAudioUrlFormat(value.format)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["format"],
+        message: "Unsupported audio format.",
+      });
+    }
+  })
   .strict();
 
 type AnalyzeAudioArgs = z.infer<typeof analyzeAudioArgsSchema>;
@@ -41,12 +83,14 @@ interface AnalyzeAudioData {
   durationMs?: number;
   utteranceCount: number;
   speakerCount: number;
+  source?: { type: "url"; url: string } | { type: "file"; path: string };
+  publishedMedia?: PublishedMediaMetadata;
 }
 
 export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> = {
   name: "analyze_audio",
   description:
-    "Transcribe & analyze a public audio URL with the Doubao recording model: word/utterance timestamps, speaker separation, per-utterance emotion, speech-rate, volume, gender. Returns the transcript and utterances inline; pass `out_path` to instead persist the full result (incl. raw provider payload) and get a short summary back — prefer that for long recordings. Use for meeting/interview/call audio; for video use `analyze_media`. ASR transcripts may contain recognition errors — correct them against the surrounding transcript context when analyzing.",
+    "Transcribe & analyze a model-reachable audio URL or local audio path with the Doubao recording model: word/utterance timestamps, speaker separation, per-utterance emotion, speech-rate, volume, gender. Local path inputs require configured TOS automatic upload. Returns the transcript and utterances inline; pass `out_path` to instead persist the full result (incl. raw provider payload) and get a short summary back — prefer that for long recordings. Use for meeting/interview/call audio; for video use `analyze_media`. ASR transcripts may contain recognition errors — correct them against the surrounding transcript context when analyzing.",
   inputSchema: analyzeAudioArgsSchema,
   async execute(args, ctx) {
     try {
@@ -60,10 +104,11 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
       }
 
       const advanced = parseAdvanced(args.advanced);
+      const audioInput = await resolveAudioInput(args, ctx);
       const result = await callAsr({
         config: asr,
-        url: args.url,
-        format: args.format,
+        url: audioInput.url,
+        format: audioInput.format,
         language: args.language,
         hotwords: args.hotwords,
         enableSpeakerInfo: args.speaker,
@@ -90,7 +135,13 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
         return {
           ok: true,
           content: JSON.stringify(inline, null, 2),
-          meta: { durationMs: result.durationMs, utteranceCount, speakerCount },
+          meta: {
+            durationMs: result.durationMs,
+            utteranceCount,
+            speakerCount,
+            ...(audioInput.source ? { source: audioInput.source } : {}),
+            ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
+          },
         };
       }
 
@@ -102,6 +153,8 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
         durationMs: result.durationMs,
         utterances: result.utterances,
         raw: result.raw,
+        ...(audioInput.source ? { source: audioInput.source } : {}),
+        ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
         ...(result.degradedNote ? { degradedNote: result.degradedNote } : {}),
       };
 
@@ -129,6 +182,8 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
           durationMs: result.durationMs,
           utteranceCount,
           speakerCount,
+          ...(audioInput.source ? { source: audioInput.source } : {}),
+          ...(audioInput.publishedMedia ? { publishedMedia: audioInput.publishedMedia } : {}),
         },
         artifacts: [
           {
@@ -147,6 +202,62 @@ export const analyzeAudioTool: RuntimeTool<AnalyzeAudioArgs, AnalyzeAudioData> =
     }
   },
 };
+
+async function resolveAudioInput(
+  args: AnalyzeAudioArgs,
+  ctx: ToolContext,
+): Promise<{
+  url: string;
+  format: string;
+  source?: { type: "url"; url: string } | { type: "file"; path: string };
+  publishedMedia?: PublishedMediaMetadata;
+}> {
+  if (args.url !== undefined && args.format !== undefined) {
+    return { url: args.url, format: args.format.toLowerCase() };
+  }
+
+  if (args.path === undefined) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: "Provide exactly one of path or url, with format for URL inputs.",
+    });
+  }
+
+  const filePath = ctx.policy.resolveReadPath(args.path);
+  const format = (args.format ?? path.extname(filePath).slice(1)).toLowerCase();
+  if (!isSupportedAudioUrlFormat(format)) {
+    throw new RuntimeError({
+      code: "INVALID_ARGS",
+      message: `Unsupported audio format: ${format || "(none)"}.`,
+    });
+  }
+
+  if (!ctx.config.tos) {
+    throw new RuntimeError({
+      code: "MODEL_ERROR",
+      message:
+        "Local audio files must be reachable by Doubao ASR. Configure Volcano Engine TOS with MINI_AGENT_TOS_* " +
+        "and use `volcengine-media-setup`, or pass an existing model-reachable audio URL.",
+      details: { category: "tos", missingTosConfig: true },
+    });
+  }
+
+  ctx.onUpdate?.("Uploading local audio to Volcano Engine TOS for a short-lived ASR URL...");
+  const publishedMedia = await publishFileToTos({
+    config: ctx.config.tos,
+    filePath,
+    runId: ctx.runId,
+    toolCallId: ctx.toolCallId,
+    contentType: mediaMimeType(filePath),
+  });
+
+  return {
+    url: publishedMedia.url,
+    format,
+    source: { type: "file", path: filePath },
+    publishedMedia: toPublishedMediaMetadata(publishedMedia),
+  };
+}
 
 function parseAdvanced(value: string | undefined): Record<string, unknown> | undefined {
   if (value === undefined) {

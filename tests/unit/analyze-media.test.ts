@@ -7,21 +7,22 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { createPolicyEngine } from "../../src/runtime/policy.js";
 import { FileMutationQueue } from "../../src/tools/file-mutation-queue.js";
 import { ToolRegistry } from "../../src/tools/index.js";
-import type { MultimodalToolConfig, ToolContext } from "../../src/tools/types.js";
+import type { MultimodalToolConfig, ToolContext, TosStorageConfig } from "../../src/tools/types.js";
 
 const tempRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.allSettled(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.doUnmock("../../src/model/multimodal.js");
+  vi.doUnmock("../../src/model/tos-storage.js");
   vi.resetModules();
 });
 
-async function createWorkspaceWithMedia(): Promise<{ root: string; mediaPath: string }> {
+async function createWorkspaceWithMedia(bytes = Buffer.from([0, 1, 2, 3])): Promise<{ root: string; mediaPath: string }> {
   const root = await mkdtemp(path.join(os.tmpdir(), "mini-agent-analyze-"));
   tempRoots.push(root);
   const mediaPath = path.join(root, "clip.mp4");
-  await writeFile(mediaPath, Buffer.from([0, 1, 2, 3]));
+  await writeFile(mediaPath, bytes);
   return { root, mediaPath };
 }
 
@@ -29,6 +30,7 @@ function createContext(
   workspaceRoot: string,
   multimodal?: MultimodalToolConfig,
   fileMutationQueue?: FileMutationQueue,
+  tos?: TosStorageConfig,
 ): ToolContext {
   return {
     workspaceRoot,
@@ -45,10 +47,20 @@ function createContext(
       maxBashOutputBytes: 64 * 1024,
       readMaxBytes: 256 * 1024,
       multimodal,
+      tos,
     },
     fileMutationQueue,
   };
 }
+
+const tos: TosStorageConfig = {
+  accessKeyId: "ak",
+  accessKeySecret: "sk",
+  bucket: "media-bucket",
+  region: "cn-beijing",
+  prefix: "mini-agent/uploads",
+  signedUrlExpires: 3600,
+};
 
 describe("analyzeMediaTool", () => {
   test("returns a MODEL_ERROR when no multimodal model is configured", async () => {
@@ -63,6 +75,36 @@ describe("analyzeMediaTool", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({ code: "MODEL_ERROR" });
     expect(result.content).toMatch(/not configured/u);
+  });
+
+  test("returns INVALID_ARGS when a local media path does not exist", async () => {
+    const { root } = await createWorkspaceWithMedia();
+    let called = false;
+    vi.doMock("../../src/model/multimodal.js", () => ({
+      callOmni: async () => {
+        called = true;
+        return { text: "unexpected", kind: "video", model: "qwen3.5-omni-plus" };
+      },
+    }));
+    const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
+
+    const result = await analyzeMediaTool.execute(
+      { path: "missing.mp4", instruction: "Describe" },
+      createContext(root, {
+        provider: "openai-compatible",
+        model: "qwen3.5-omni-plus",
+        baseURL: "https://example.com/v1",
+        apiKey: "k",
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "INVALID_ARGS",
+      details: { category: "file" },
+    });
+    expect(result.content).toMatch(/Cannot read local media file/u);
+    expect(called).toBe(false);
   });
 
   test("delegates to callOmni and writes text + parsed json to out_path", async () => {
@@ -238,6 +280,126 @@ describe("analyzeMediaTool", () => {
     });
   });
 
+  test("rejects oversized local media with TOS setup guidance when TOS is not configured", async () => {
+    const { root } = await createWorkspaceWithMedia(Buffer.alloc(8 * 1024 * 1024));
+    let called = false;
+    vi.doMock("../../src/model/multimodal.js", () => ({
+      callOmni: async () => {
+        called = true;
+        return { text: "unexpected", kind: "video", model: "qwen3.5-omni-plus" };
+      },
+    }));
+    const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
+
+    const result = await analyzeMediaTool.execute(
+      { path: "clip.mp4", instruction: "Describe" },
+      createContext(root, {
+        provider: "openai-compatible",
+        model: "qwen3.5-omni-plus",
+        baseURL: "https://example.com/v1",
+        apiKey: "k",
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "INVALID_ARGS",
+      details: { missingTosConfig: true },
+    });
+    expect(result.content).toMatch(/MINI_AGENT_TOS_/u);
+    expect(result.content).toMatch(/volcengine-media-setup/u);
+    expect(called).toBe(false);
+  });
+
+  test("uploads oversized local media to TOS, sends the signed URL, and persists redacted metadata", async () => {
+    const { root, mediaPath } = await createWorkspaceWithMedia(Buffer.alloc(8 * 1024 * 1024));
+    const omniCalls: unknown[] = [];
+    const publishCalls: unknown[] = [];
+    vi.doMock("../../src/model/multimodal.js", () => ({
+      callOmni: async (params: unknown) => {
+        omniCalls.push(params);
+        return {
+          text: "large clip summary",
+          kind: "video",
+          model: "qwen3.5-omni-plus",
+        };
+      },
+    }));
+    vi.doMock("../../src/model/tos-storage.js", () => ({
+      publishFileToTos: async (params: unknown) => {
+        publishCalls.push(params);
+        return {
+          url: "https://signed.example/clip.mp4",
+          bucket: "media-bucket",
+          key: "mini-agent/uploads/run_test/call_analyze_1/clip.mp4",
+          expiresSeconds: 3600,
+          sizeBytes: 8 * 1024 * 1024,
+        };
+      },
+      toPublishedMediaMetadata: (media: { bucket: string; key: string; expiresSeconds: number; sizeBytes: number }) => ({
+        bucket: media.bucket,
+        key: media.key,
+        expiresSeconds: media.expiresSeconds,
+        sizeBytes: media.sizeBytes,
+      }),
+    }));
+    const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
+
+    const result = await analyzeMediaTool.execute(
+      { path: "clip.mp4", instruction: "Describe", out_path: "analysis/large-clip.json" },
+      createContext(
+        root,
+        {
+          provider: "openai-compatible",
+          model: "qwen3.5-omni-plus",
+          baseURL: "https://example.com/v1",
+          apiKey: "k",
+        },
+        new FileMutationQueue(),
+        tos,
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toMatch(/wrote result to .*large-clip\.json/u);
+    expect(publishCalls[0]).toMatchObject({
+      config: tos,
+      filePath: mediaPath,
+      runId: "run_test",
+      toolCallId: "call_analyze_1",
+      contentType: "video/mp4",
+    });
+    expect(omniCalls[0]).toMatchObject({
+      source: { type: "url", url: "https://signed.example/clip.mp4", kind: "video" },
+    });
+    expect(result.meta).toMatchObject({
+      source: { type: "url", url: "(redacted TOS signed URL)", kind: "video" },
+      originalSource: { type: "file", path: mediaPath },
+      publishedMedia: {
+        bucket: "media-bucket",
+        key: "mini-agent/uploads/run_test/call_analyze_1/clip.mp4",
+        expiresSeconds: 3600,
+        sizeBytes: 8 * 1024 * 1024,
+      },
+    });
+    expect(JSON.stringify(result.meta)).not.toContain("https://signed.example");
+    const meta = result.meta as unknown as Record<string, unknown>;
+    expect(meta.publishedMedia).not.toHaveProperty("url");
+    const writtenText = await readFile(path.join(root, "analysis/large-clip.json"), "utf8");
+    expect(writtenText).not.toContain("https://signed.example");
+    const written = JSON.parse(writtenText) as Record<string, unknown>;
+    expect(written).toMatchObject({
+      source: { type: "url", url: "(redacted TOS signed URL)", kind: "video" },
+      originalSource: { type: "file", path: mediaPath },
+      publishedMedia: {
+        bucket: "media-bucket",
+        key: "mini-agent/uploads/run_test/call_analyze_1/clip.mp4",
+        expiresSeconds: 3600,
+        sizeBytes: 8 * 1024 * 1024,
+      },
+    });
+    expect(written.publishedMedia).not.toHaveProperty("url");
+  });
 
   test("accepts OpenAI strict-mode null optional fields through ToolRegistry", async () => {
     const { root, mediaPath } = await createWorkspaceWithMedia();

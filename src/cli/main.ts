@@ -201,6 +201,10 @@ function getAsrAuth(config: RuntimeConfig): "api-key" | "app-key+access-key" | "
   return "missing";
 }
 
+function isTosConfigured(config: RuntimeConfig): boolean {
+  return Boolean(config.tosAccessKeyId && config.tosAccessKeySecret && config.tosBucket && config.tosRegion);
+}
+
 async function handleSkillsCommand(config: RuntimeConfig): Promise<void> {
   const registry = await SkillRegistry.discover({
     workspaceRoot: config.workspaceRoot,
@@ -400,6 +404,15 @@ async function handleDoctorCommand(config: RuntimeConfig, command: string[] = []
         auth: getAsrAuth(config),
         timeoutMs: config.asrTimeoutMs,
       },
+      tosStorage: {
+        configured: isTosConfigured(config),
+        bucket: config.tosBucket,
+        region: config.tosRegion,
+        endpoint: config.tosEndpoint,
+        prefix: config.tosPrefix,
+        signedUrlExpires: config.tosSignedUrlExpires,
+        accessKeyConfigured: Boolean(config.tosAccessKeyId && config.tosAccessKeySecret),
+      },
       lastRun,
     }),
   );
@@ -456,6 +469,17 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
               timeoutMs: config.asrTimeoutMs,
             }
           : undefined,
+      tos: isTosConfigured(config)
+        ? {
+            accessKeyId: config.tosAccessKeyId!,
+            accessKeySecret: config.tosAccessKeySecret!,
+            bucket: config.tosBucket!,
+            region: config.tosRegion!,
+            endpoint: config.tosEndpoint,
+            prefix: config.tosPrefix ?? "mini-agent/uploads",
+            signedUrlExpires: config.tosSignedUrlExpires ?? 3600,
+          }
+        : undefined,
     },
   });
 }

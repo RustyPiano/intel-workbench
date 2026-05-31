@@ -39,6 +39,16 @@ export interface AsrToolConfig {
   timeoutMs?: number;
 }
 
+export interface TosStorageConfig {
+  accessKeyId: string;
+  accessKeySecret: string;
+  bucket: string;
+  region: string;
+  endpoint?: string;
+  prefix: string;
+  signedUrlExpires: number;
+}
+
 export interface ToolRuntimeConfig {
   toolTimeoutMs: number;
   mmTimeoutMs?: number;
@@ -52,6 +62,8 @@ export interface ToolRuntimeConfig {
   // Present only when dedicated ASR credentials are configured. Audio tools do
   // not fall back to text or multimodal connections.
   asr?: AsrToolConfig;
+  // Present only when TOS access key, secret, bucket, and region are configured.
+  tos?: TosStorageConfig;
 }
 
 export interface ToolContext {

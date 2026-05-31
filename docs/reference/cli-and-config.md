@@ -71,6 +71,13 @@ mini-agent [prompt]
 | `MINI_AGENT_HIDE_DEBUG` | Hide debug-only details in verbose output. |
 | `MINI_AGENT_JSON_EVENTS` | Enable JSON event output. |
 | `MINI_AGENT_READ_ONLY` | Enable read-only mode. |
+| `MINI_AGENT_TOS_ACCESS_KEY_ID` | Volcano Engine TOS access key ID for optional local media upload. |
+| `MINI_AGENT_TOS_ACCESS_KEY_SECRET` | Volcano Engine TOS access key secret for optional local media upload. |
+| `MINI_AGENT_TOS_BUCKET` | TOS bucket used for optional local media upload. Keep it private. |
+| `MINI_AGENT_TOS_REGION` | TOS bucket region, for example `cn-beijing`. |
+| `MINI_AGENT_TOS_ENDPOINT` | Optional TOS endpoint override. Defaults to `tos-${MINI_AGENT_TOS_REGION}.volces.com` when region is set. Do not include `https://`. |
+| `MINI_AGENT_TOS_PREFIX` | Optional object key prefix for uploaded local media. |
+| `MINI_AGENT_TOS_SIGNED_URL_EXPIRES` | Optional pre-signed URL lifetime in seconds. Defaults to `3600`. |
 
 ## `mini-agent.config.json`
 
@@ -92,6 +99,13 @@ mini-agent [prompt]
   "bashTimeoutMs": 120000,
   "maxBashOutputBytes": 65536,
   "readMaxBytes": 262144,
+  "tosAccessKeyId": "your-tos-ak",
+  "tosAccessKeySecret": "your-tos-sk",
+  "tosBucket": "your-bucket",
+  "tosRegion": "cn-beijing",
+  "tosEndpoint": "tos-cn-beijing.volces.com",
+  "tosPrefix": "mini-agent/uploads",
+  "tosSignedUrlExpires": 3600,
   "globalSkillDirs": ["~/.agents/skills"],
   "allowReadOutsideWorkspace": false,
   "allowWriteOutsideWorkspace": false,
@@ -129,6 +143,41 @@ Optional smoke-path inputs for operator diagnostics:
 
 These do not change the runtime’s active provider. They only let `doctor` report the operator’s intended known-good smoke path.
 
+## Optional Volcano Engine TOS Upload
+
+TOS is not needed for first startup. Configure the primary model first, then add
+TOS only when large local video/image files or local audio need a
+model-reachable URL.
+
+mini-agent's TOS path is designed for private buckets plus short-lived
+pre-signed GET URLs, not public-read buckets. The minimal environment variables
+are:
+
+```bash
+export MINI_AGENT_TOS_ACCESS_KEY_ID=your-tos-ak
+export MINI_AGENT_TOS_ACCESS_KEY_SECRET=your-tos-sk
+export MINI_AGENT_TOS_BUCKET=your-bucket
+export MINI_AGENT_TOS_REGION=cn-beijing
+```
+
+Optional settings:
+
+```bash
+export MINI_AGENT_TOS_PREFIX=mini-agent/uploads
+export MINI_AGENT_TOS_SIGNED_URL_EXPIRES=3600
+# Optional only when overriding the region-derived endpoint:
+export MINI_AGENT_TOS_ENDPOINT=tos-cn-beijing.volces.com
+```
+
+Use the Volcano Engine TOS service and API references when creating the bucket,
+credentials, and upload permissions:
+
+- https://www.volcengine.com/docs/6349/74830?lang=zh
+- https://www.volcengine.com/docs/6349/74837?lang=zh
+
+See [Configure Volcano Engine TOS for local media](../how-to/configure-volcengine-tos.md)
+for the full workflow.
+
 ## `doctor` Output
 
 `mini-agent doctor` prints grouped diagnostics in the following sections:
@@ -138,6 +187,9 @@ These do not change the runtime’s active provider. They only let `doctor` repo
 - `[skill_discovery]`
 - `[session_health]`
 - `[smoke_path]`
+- `[multimodal_path]`
+- `[asr_path]`
+- `[tos_storage]`
 - `[last_run]` when `--last-run` or `--run <id>` is used
 
 The session-health section is derived from strict and recover loads:
@@ -147,6 +199,10 @@ The session-health section is derived from strict and recover loads:
 - `corrupted_sessions`
 
 The smoke-path section reports whether a known-good provider/model path has been configured for operator checks.
+
+The TOS section reports whether optional local media upload is configured. It
+shows bucket, region, endpoint, prefix, pre-signed URL expiry, and whether an
+access key is present, but never prints the access key secret.
 
 The last-run section reports:
 

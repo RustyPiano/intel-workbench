@@ -27,6 +27,13 @@ export interface RuntimeConfig {
   asrAppKey?: string;
   asrResourceId?: string;
   asrBaseURL?: string;
+  tosAccessKeyId?: string;
+  tosAccessKeySecret?: string;
+  tosBucket?: string;
+  tosRegion?: string;
+  tosEndpoint?: string;
+  tosPrefix?: string;
+  tosSignedUrlExpires?: number;
   workspaceRoot: string;
   sessionDir: string;
   maxTurns: number;
@@ -63,6 +70,8 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   bashTimeoutMs: 120_000,
   maxBashOutputBytes: 64 * 1024,
   readMaxBytes: 256 * 1024,
+  tosPrefix: "mini-agent/uploads",
+  tosSignedUrlExpires: 3600,
   globalSkillDirs: [],
   explicitSkillDirs: [],
   allowReadOutsideWorkspace: false,
@@ -117,6 +126,30 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function inferTosEndpoint(region: string | undefined): string | undefined {
+  const normalizedRegion = region?.trim();
+  if (!normalizedRegion) {
+    return undefined;
+  }
+  return `tos-${normalizedRegion}.volces.com`;
+}
+
+function normalizeTosEndpoint(endpoint: string | undefined): string | undefined {
+  const trimmed = endpoint?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).host;
+  } catch {
+    return trimmed.replace(/^https?:\/\//iu, "").replace(/\/+$/u, "");
+  }
+}
+
 function parseList(value: string | undefined): string[] | undefined {
   if (!value) {
     return undefined;
@@ -161,6 +194,13 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     asrAppKey,
     asrResourceId: process.env.MINI_AGENT_ASR_RESOURCE_ID ?? (asrConfigured ? "volc.seedasr.auc" : undefined),
     asrBaseURL: process.env.MINI_AGENT_ASR_BASE_URL ?? (asrConfigured ? "https://openspeech.bytedance.com" : undefined),
+    tosAccessKeyId: process.env.MINI_AGENT_TOS_ACCESS_KEY_ID,
+    tosAccessKeySecret: process.env.MINI_AGENT_TOS_ACCESS_KEY_SECRET,
+    tosBucket: process.env.MINI_AGENT_TOS_BUCKET,
+    tosRegion: process.env.MINI_AGENT_TOS_REGION,
+    tosEndpoint: process.env.MINI_AGENT_TOS_ENDPOINT,
+    tosPrefix: process.env.MINI_AGENT_TOS_PREFIX,
+    tosSignedUrlExpires: parsePositiveInteger(process.env.MINI_AGENT_TOS_SIGNED_URL_EXPIRES),
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),
@@ -194,11 +234,14 @@ export async function resolveRuntimeConfig(options: ResolveConfigOptions = {}): 
     ...stripUndefined(options.cliOverrides ?? {}),
   } as RuntimeConfig;
   const asrConfigured = Boolean(merged.asrApiKey || (merged.asrAppKey && merged.asrAccessKey));
+  const tosEndpoint = normalizeTosEndpoint(merged.tosEndpoint) ?? inferTosEndpoint(merged.tosRegion);
 
   return {
     ...merged,
     asrResourceId: merged.asrResourceId ?? (asrConfigured ? "volc.seedasr.auc" : undefined),
     asrBaseURL: merged.asrBaseURL ?? (asrConfigured ? "https://openspeech.bytedance.com" : undefined),
+    tosEndpoint,
+    tosSignedUrlExpires: normalizePositiveInteger(merged.tosSignedUrlExpires, DEFAULT_CONFIG.tosSignedUrlExpires ?? 3600),
     workspaceRoot: path.resolve(cwd, merged.workspaceRoot),
     sessionDir: merged.sessionDir,
     globalSkillDirs: merged.globalSkillDirs ?? [],

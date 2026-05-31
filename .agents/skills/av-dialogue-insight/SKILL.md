@@ -1,7 +1,7 @@
 ---
 name: av-dialogue-insight
 description: Analyze dialogue-heavy video/audio such as meeting recordings, interviews, calls, surveillance or captured conversation video, 会议录音, 访谈, 电话录音, 监控对话视频, 情绪时间线, and 关键触发点. Use when the user wants timestamped events, speaker profiles, multimodal emotion, trigger-point explanation, and a structured report. Do not use for generic image/video captioning without dialogue or conversation analysis.
-compatibility: analyze_audio needs Doubao ASR config (MINI_AGENT_ASR_*) and a public audio URL; analyze_media needs MINI_AGENT_MM_MODEL. probe_media needs ffprobe; scripts need Python 3.11+.
+compatibility: analyze_audio needs Doubao ASR config (MINI_AGENT_ASR_*) and a public audio URL; analyze_media needs MINI_AGENT_MM_MODEL. Use volcengine-media-setup when the user needs help creating TOS URLs or configuring Doubao ASR. probe_media needs ffprobe; scripts need Python 3.11+.
 allowed-tools: read write edit bash activate_skill probe_media analyze_audio analyze_media
 metadata:
   author: mini-agent
@@ -64,15 +64,18 @@ av-tasks/<task-id>/
   file fits the inline limit.
 - Small local video/image (within the inline limit): pass `path` to
   `analyze_media` — it is sent inline as Base64.
-- Large media, or any local audio: it must be reachable as a public URL. Upload
-  it to object storage (e.g. Volcano Engine TOS) and pass that URL to
-  `analyze_media` (`kind: "video"`) or `analyze_audio`. Local files are never
-  uploaded automatically — ask the user for a public URL when none exists.
+- Large media, or any local audio: it must be reachable as a public URL. If the
+  user has not configured object storage or ASR credentials, activate
+  `volcengine-media-setup` and guide them through Doubao ASR and optional TOS.
+  After the user provides a public or pre-signed URL, pass it to
+  `analyze_media` (`kind: "video"`) or `analyze_audio`. Local files are not
+  uploaded automatically in branches without TOS integration.
 
 ## Failure Handling
 
-- Missing ASR configuration: ask for `MINI_AGENT_ASR_*`; Doubao ASR auth is
-  separate from text and multimodal connections.
+- Missing ASR configuration: activate `volcengine-media-setup` or ask for
+  `MINI_AGENT_ASR_*`; Doubao ASR auth is separate from text and multimodal
+  connections.
 - Missing multimodal configuration: ask for `MINI_AGENT_MM_MODEL` and related
   connection settings.
 - Invalid JSON: validate, retry once with the specific validation error, then

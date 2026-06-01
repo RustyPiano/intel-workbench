@@ -257,7 +257,7 @@ function buildSubmitBody(params: CallAsrParams): JsonObject {
   request.show_utterances = true;
 
   return {
-    user: params.user ?? params.config.appId ?? "mini-agent",
+    user: buildUser(params),
     audio: {
       url: params.url,
       format: params.format,
@@ -295,10 +295,14 @@ function buildFlashBody(params: CallAsrParams): JsonObject {
   Object.assign(audio, params.audio ?? {});
 
   return {
-    user: params.user ?? params.config.appId ?? "mini-agent",
+    user: buildUser(params),
     audio,
     request,
   };
+}
+
+function buildUser(params: CallAsrParams): JsonObject {
+  return { uid: params.user ?? params.config.appId ?? "mini-agent" };
 }
 
 async function postJson(

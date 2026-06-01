@@ -1,6 +1,6 @@
 # Spec Author Handoff: v1.1 Completion Report
 
-This document is the completion handoff for the engineer who wrote [docs/mini-agent-runtime-v1.1-spec.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/mini-agent-runtime-v1.1-spec.md).
+This document is the completion handoff for the engineer who wrote [docs/mini-agent-runtime-v1.1-spec.md](docs/mini-agent-runtime-v1.1-spec.md).
 
 It answers one question directly:
 
@@ -181,11 +181,11 @@ Primary code:
 
 Delivered:
 
-- [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)
-- [docs/reference/tool-contracts.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/tool-contracts.md)
-- [docs/reference/model-adapter.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/model-adapter.md)
-- [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
-- [docs/how-to/write-a-skill.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/write-a-skill.md)
+- [docs/reference/session-format.md](docs/reference/session-format.md)
+- [docs/reference/tool-contracts.md](docs/reference/tool-contracts.md)
+- [docs/reference/model-adapter.md](docs/reference/model-adapter.md)
+- [docs/reference/cli-and-config.md](docs/reference/cli-and-config.md)
+- [docs/how-to/write-a-skill.md](docs/how-to/write-a-skill.md)
 
 The `v1.1` spec now points to these docs instead of carrying all field-level reference detail itself.
 

@@ -1,6 +1,6 @@
 # Spec Author Handoff: Runtime v1 Status
 
-This document is a handoff for the engineer who wrote [docs/mini-agent-runtime-spec.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/mini-agent-runtime-spec.md). It summarizes what is now implemented, what was corrected during review, what the current runtime behavior is, and what should be planned next.
+This document is a handoff for the engineer who wrote [docs/mini-agent-runtime-spec.md](docs/mini-agent-runtime-spec.md). It summarizes what is now implemented, what was corrected during review, what the current runtime behavior is, and what should be planned next.
 
 ## Executive summary
 
@@ -55,9 +55,9 @@ Fixed:
 
 Relevant code:
 
-- [src/runtime/session.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/session.ts)
-- [src/runtime/agent.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/agent.ts)
-- [src/runtime/loop.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/loop.ts)
+- [src/runtime/session.ts](src/runtime/session.ts)
+- [src/runtime/agent.ts](src/runtime/agent.ts)
+- [src/runtime/loop.ts](src/runtime/loop.ts)
 
 ### Tool execution contract
 
@@ -76,9 +76,9 @@ Fixed:
 
 Relevant code:
 
-- [src/tools/index.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/tools/index.ts)
-- [src/tools/bash.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/tools/bash.ts)
-- [src/tools/read.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/tools/read.ts)
+- [src/tools/index.ts](src/tools/index.ts)
+- [src/tools/bash.ts](src/tools/bash.ts)
+- [src/tools/read.ts](src/tools/read.ts)
 
 ### Skill progressive disclosure
 
@@ -92,8 +92,8 @@ Current behavior:
 
 Relevant code:
 
-- [src/skills/discover.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/skills/discover.ts)
-- [src/skills/registry.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/skills/registry.ts)
+- [src/skills/discover.ts](src/skills/discover.ts)
+- [src/skills/registry.ts](src/skills/registry.ts)
 
 ### OpenAI-compatible provider behavior
 
@@ -110,7 +110,7 @@ It now also surfaces provider-side failure detail instead of flattening everythi
 
 Relevant code:
 
-- [src/model/openai-compatible.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/model/openai-compatible.ts)
+- [src/model/openai-compatible.ts](src/model/openai-compatible.ts)
 
 ## Current operational status
 

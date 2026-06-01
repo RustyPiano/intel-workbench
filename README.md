@@ -1,6 +1,6 @@
 # mini-agent
 
-`mini-agent` is a local-first agent runtime implemented from the project spec in [docs/mini-agent-runtime-spec.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/mini-agent-runtime-spec.md).
+`mini-agent` is a local-first agent runtime implemented from the project spec in [docs/mini-agent-runtime-spec.md](docs/mini-agent-runtime-spec.md).
 
 It provides:
 
@@ -12,7 +12,7 @@ It provides:
 - per-run trace capture with timeline rendering
 - a small CLI with one-shot and REPL execution modes
 
-## What v1.2 adds
+## Runtime Trace Highlights
 
 - Run-scoped trace storage under `.mini-agent/runs/<run-id>/`
 - Compact and verbose timeline output in one-shot and REPL execution
@@ -22,7 +22,10 @@ It provides:
 - Safe planning/progress summaries instead of raw private reasoning
 - Run-level artifact visibility for file writes, edits, and bash logs/output
 
-## What v1.3 adds (next release, breaking)
+## API Compatibility Notes
+
+Compared with earlier internal builds, the current TypeScript API and runtime
+contracts include these compatibility-sensitive changes:
 
 - **`RuntimeAgent.create(options)`** is the only supported construction
   path; the previous `new RuntimeAgent(...)` two-phase initialization is
@@ -274,7 +277,7 @@ Verify setup with `npm run dev -- doctor` and the `[asr_path]` section.
 
 TOS is not required for first startup or ordinary text use. Start with the
 primary model connection, then add multimodal, ASR, and TOS only when local
-media needs it. See [Configure Volcano Engine TOS for local media](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-volcengine-tos.md).
+media needs it. See [Configure Volcano Engine TOS for local media](docs/how-to/configure-volcengine-tos.md).
 
 ## CLI Surface
 
@@ -307,14 +310,14 @@ Commands:
 
 ## Documentation Map
 
-- Tutorial: [docs/tutorials/quickstart.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/tutorials/quickstart.md)
-- How-to: [docs/how-to/connect-openai-compatible-models.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/connect-openai-compatible-models.md)
-- How-to: [docs/how-to/configure-alibaba-bailian.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-alibaba-bailian.md)
-- How-to: [docs/how-to/configure-volcengine-tos.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/how-to/configure-volcengine-tos.md)
-- Reference: [docs/reference/cli-and-config.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/cli-and-config.md)
-- Reference: [docs/reference/session-format.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/reference/session-format.md)
-- Explanation: [docs/explanation/runtime-architecture.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/explanation/runtime-architecture.md)
-- Example skill (text): [.agents/skills/intel-bulletin](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/intel-bulletin)
-- Example skill (multimodal): [.agents/skills/av-dialogue-insight](/Users/wangsiyuan/编程/小项目/mini-agent/.agents/skills/av-dialogue-insight)
-- App specs: [docs/specs/](/Users/wangsiyuan/编程/小项目/mini-agent/docs/specs)
-- Practice report: [docs/report/practice-report.md](/Users/wangsiyuan/编程/小项目/mini-agent/docs/report/practice-report.md)
+- Tutorial: [docs/tutorials/quickstart.md](docs/tutorials/quickstart.md)
+- How-to: [docs/how-to/connect-openai-compatible-models.md](docs/how-to/connect-openai-compatible-models.md)
+- How-to: [docs/how-to/configure-alibaba-bailian.md](docs/how-to/configure-alibaba-bailian.md)
+- How-to: [docs/how-to/configure-volcengine-tos.md](docs/how-to/configure-volcengine-tos.md)
+- Reference: [docs/reference/cli-and-config.md](docs/reference/cli-and-config.md)
+- Reference: [docs/reference/session-format.md](docs/reference/session-format.md)
+- Explanation: [docs/explanation/runtime-architecture.md](docs/explanation/runtime-architecture.md)
+- Example skill (text): [.agents/skills/intel-bulletin](.agents/skills/intel-bulletin)
+- Example skill (multimodal): [.agents/skills/av-dialogue-insight](.agents/skills/av-dialogue-insight)
+- App specs: [docs/specs/](docs/specs)
+- Practice report: [docs/report/practice-report.md](docs/report/practice-report.md)

@@ -14,7 +14,7 @@ The runtime agent coordinates one conversation:
 - runs the agent loop
 - provides tool context
 
-Implementation: [src/runtime/agent.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/agent.ts)
+Implementation: [src/runtime/agent.ts](src/runtime/agent.ts)
 
 ### Agent loop
 
@@ -28,7 +28,7 @@ The loop is deterministic:
 6. append tool results
 7. repeat until there are no tool calls or the max turn limit is reached
 
-Implementation: [src/runtime/loop.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/loop.ts)
+Implementation: [src/runtime/loop.ts](src/runtime/loop.ts)
 
 ### Model adapter layer
 
@@ -38,9 +38,9 @@ In v1, the shipped provider is `openai-compatible`. It uses the OpenAI SDK, but 
 
 Implementation:
 
-- [src/model/types.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/model/types.ts)
-- [src/model/factory.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/model/factory.ts)
-- [src/model/openai-compatible.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/model/openai-compatible.ts)
+- [src/model/types.ts](src/model/types.ts)
+- [src/model/factory.ts](src/model/factory.ts)
+- [src/model/openai-compatible.ts](src/model/openai-compatible.ts)
 
 ### Tool layer
 
@@ -54,7 +54,7 @@ The built-in tools provide the runtime’s side effects:
 
 The file mutation queue serializes writes per path, which keeps concurrent writes from silently stomping each other.
 
-Implementation: [src/tools/index.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/tools/index.ts)
+Implementation: [src/tools/index.ts](src/tools/index.ts)
 
 ### Skill layer
 
@@ -64,9 +64,9 @@ That keeps prompt growth under control and matches the progressive-disclosure ru
 
 Implementation:
 
-- [src/skills/discover.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/skills/discover.ts)
-- [src/skills/parse-skill.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/skills/parse-skill.ts)
-- [src/skills/registry.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/skills/registry.ts)
+- [src/skills/discover.ts](src/skills/discover.ts)
+- [src/skills/parse-skill.ts](src/skills/parse-skill.ts)
+- [src/skills/registry.ts](src/skills/registry.ts)
 
 ### Session store
 
@@ -77,7 +77,7 @@ Sessions are plain JSONL files. That choice is deliberate:
 - easy to present in a course demo
 - easy to recover partially if corruption happens
 
-Implementation: [src/runtime/session.ts](/Users/wangsiyuan/编程/小项目/mini-agent/src/runtime/session.ts)
+Implementation: [src/runtime/session.ts](src/runtime/session.ts)
 
 ## Why the provider config looks this way
 

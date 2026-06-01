@@ -287,6 +287,19 @@ export class RunManager {
     });
   }
 
+  async recordTurnLimitReached(maxTurns: number, message: string): Promise<void> {
+    await this.emit({
+      type: "turn_limit_reached",
+      phase: "finalize",
+      level: "warn",
+      summary: createTraceSummary(`Turn limit reached (${maxTurns}); waiting for user confirmation.`),
+      data: {
+        max_turns: maxTurns,
+        user_message: createTraceSummary(message, 240),
+      },
+    });
+  }
+
   async complete(): Promise<void> {
     if (this.finished) {
       return;

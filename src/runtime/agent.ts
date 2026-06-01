@@ -166,7 +166,7 @@ export class RuntimeAgent {
     this.runStore = new RunStore({
       workspaceRoot: this.workspaceRoot,
     });
-    this.maxTurns = options.maxTurns ?? 12;
+    this.maxTurns = options.maxTurns ?? 30;
     this.toolConfig = options.toolConfig ?? {
       toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,

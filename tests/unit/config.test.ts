@@ -13,6 +13,7 @@ const ENV_KEYS = [
   "MINI_AGENT_BASE_URL",
   "MINI_AGENT_API_KEY",
   "MINI_AGENT_SESSION_DIR",
+  "MINI_AGENT_MAX_TURNS",
   "MINI_AGENT_MM_TIMEOUT_MS",
   "MINI_AGENT_ASR_APP_ID",
   "MINI_AGENT_ASR_API_KEY",
@@ -61,6 +62,7 @@ describe("resolveRuntimeConfig", () => {
     expect(config.model).toBe("gpt-4.1-mini");
     expect(config.baseURL).toBe("https://example.com/v1");
     expect(config.apiKey).toBe("env-key");
+    expect(config.maxTurns).toBe(30);
   });
 
   test("lets CLI overrides win over config file and env", async () => {

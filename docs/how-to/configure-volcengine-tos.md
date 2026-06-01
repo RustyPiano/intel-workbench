@@ -22,6 +22,7 @@ not make the bucket public-read for this workflow.
 
 Volcano Engine references:
 
+- Access Key management: https://www.volcengine.com/docs/6291/65568?lang=zh
 - TOS service guide: https://www.volcengine.com/docs/6349/74830?lang=zh
 - TOS API/function reference: https://www.volcengine.com/docs/6349/74837?lang=zh
 

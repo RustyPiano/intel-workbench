@@ -115,6 +115,20 @@ Use this when the user wants transcript, speaker separation, or emotion
 analysis from audio. ASR auth is independent of the text and multimodal model
 connections.
 
+When the user needs to create or find the API Key, use these official pages
+exactly; do not invent product-specific console paths such as `/audioasr`:
+
+```text
+API Key console:
+https://console.volcengine.com/speech/new/setting/apikeys?projectName=default
+
+API Key documentation:
+https://www.volcengine.com/docs/6561/1816214?lang=zh
+```
+
+If the console URL redirects to sign-in, tell the user to log in and continue
+to the same redirected API Key page.
+
 Preferred API-key mode:
 
 ```bash

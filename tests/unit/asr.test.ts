@@ -133,7 +133,7 @@ describe("callAsr", () => {
     );
 
     expect(parseCallBody(calls[0]!)).toEqual({
-      user: "user-1",
+      user: { uid: "user-1" },
       audio: { url: "https://example.com/talk.wav", format: "wav", codec: "pcm" },
       request: {
         model_name: "bigmodel",
@@ -301,6 +301,7 @@ describe("callAsr", () => {
     expect((calls[0]!.init.headers as Record<string, string>)["X-Api-Resource-Id"]).toBe("volc.bigasr.auc_turbo");
 
     const body = parseCallBody(calls[0]!);
+    expect(body.user).toEqual({ uid: "app-1" });
     expect(body.audio).toEqual({ data: "BASE64AUDIO", format: "wav" });
     const request = body.request as Record<string, unknown>;
     expect(request).not.toHaveProperty("enable_emotion_detection");
@@ -345,6 +346,7 @@ describe("callAsr", () => {
     await callAsr({ config, engine: "turbo", url: "https://example.com/a.mp3", format: "mp3", fetch });
 
     expect((calls[0]!.init.headers as Record<string, string>)["X-Api-Resource-Id"]).toBe("volc.bigasr.auc_turbo");
+    expect(parseCallBody(calls[0]!).user).toEqual({ uid: "app-1" });
     expect(parseCallBody(calls[0]!).audio).toEqual({ url: "https://example.com/a.mp3", format: "mp3" });
   });
 

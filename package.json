@@ -6,8 +6,19 @@
   "bin": {
     "mini-agent": "./dist/src/cli/bin.js"
   },
+  "files": [
+    "dist/src/",
+    ".agents/skills/",
+    "docs/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check",
     "dev": "tsx src/cli/bin.ts",
     "test": "vitest",
     "test:run": "vitest run",

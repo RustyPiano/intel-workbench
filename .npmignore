@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+dist/tests/
+dist/vitest.config.*
+src/
+tests/
+fixtures/
+.mini-agent/
+.claude/
+.DS_Store
+*.tsbuildinfo
+__pycache__/
+*.pyc

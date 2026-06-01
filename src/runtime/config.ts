@@ -67,7 +67,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   model: "gpt-4.1",
   workspaceRoot: ".",
   sessionDir: ".mini-agent/sessions",
-  maxTurns: 12,
+  maxTurns: 30,
   toolTimeoutMs: 60_000,
   bashTimeoutMs: 120_000,
   maxBashOutputBytes: 64 * 1024,

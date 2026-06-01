@@ -53,6 +53,18 @@ describe("RuntimeAgent.create (static factory)", () => {
     expect(() => agent.policy.resolveWritePath("/etc/passwd")).toThrow();
   });
 
+  test("defaults the agent turn budget to 30", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+    });
+
+    expect(agent.maxTurns).toBe(30);
+  });
+
   test("createConversation() without sessionId creates a fresh session", async () => {
     const workspaceRoot = await createWorkspace();
     const agent = await RuntimeAgent.create({

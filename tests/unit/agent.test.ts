@@ -298,7 +298,7 @@ describe("formatToolMessageContent (live <-> replay parity)", () => {
 });
 
 describe("loop maxTurns handling", () => {
-  test("emits MAX_TURNS_EXCEEDED via RunManager.fail when the limit is reached", async () => {
+  test("returns a user-confirmation handoff instead of failing when the limit is reached", async () => {
     const workspaceRoot = await createWorkspace();
     // Each model response keeps requesting a tool call so the loop never finds
     // a natural stopping point and must bail on the turn budget. We use the
@@ -323,24 +323,27 @@ describe("loop maxTurns handling", () => {
       maxTurns: 3,
     });
 
-    await expect(agent.run("loop forever")).rejects.toMatchObject({
-      code: "MAX_TURNS_EXCEEDED",
-    });
+    const result = await agent.run("loop forever");
+
+    expect(result.finalMessage.content).toContain("已达到本次运行的最大轮数");
+    expect(result.finalMessage.content).toContain("继续");
 
     const sessions = await agent.sessionStore.listSessions();
     expect(sessions).toHaveLength(1);
     const loaded = await agent.sessionStore.loadSession(sessions[0]!.sessionId);
-    const errorEntry = loaded.entries.find((entry) => entry.type === "error");
-    expect(errorEntry).toMatchObject({
-      type: "error",
-      error: { code: "MAX_TURNS_EXCEEDED" },
+    expect(loaded.entries.some((entry) => entry.type === "error")).toBe(false);
+    expect(loaded.entries.at(-1)).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: expect.stringContaining("已达到本次运行的最大轮数"),
     });
 
-    // The terminal meta should reflect the failure with the dedicated error
-    // code.
     const runs = await agent.runStore.listRuns();
     expect(runs).toHaveLength(1);
-    expect(runs[0]!.status).toBe("failed");
-    expect(runs[0]!.first_error_code).toBe("max_turns_exceeded");
+    expect(runs[0]!.status).toBe("completed");
+    expect(runs[0]!.first_error_code).toBeUndefined();
+
+    const trace = await agent.runStore.loadTrace(result.runId);
+    expect(trace.events.some((event) => event.type === "turn_limit_reached")).toBe(true);
   });
 });

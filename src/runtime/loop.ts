@@ -80,6 +80,10 @@ function computeSkillSignature(names: string[]): string {
   return [...names].sort().join(",");
 }
 
+function createMaxTurnsHandoffMessage(maxTurns: number): string {
+  return `已达到本次运行的最大轮数（${maxTurns}）。我先停在这里，等待你确认是否继续；如果要继续，请直接回复“继续”，或下次用 --max-turns 提高限制。`;
+}
+
 export async function runAgentLoop(
   prompt: string,
   sessionId: string,
@@ -260,20 +264,22 @@ export async function runAgentLoop(
   }
 
   if (!finalMessage) {
-    const maxTurnsError = new RuntimeError({
-      code: "MAX_TURNS_EXCEEDED",
-      message: `Stopped after reaching the maximum turn limit (${dependencies.maxTurns}).`,
-      details: { reason: "max_turns_exceeded", max_turns: dependencies.maxTurns },
-    });
-    const runtimeErrorShape = maxTurnsError.toJSON();
+    const assistantMessageId = createId("msg");
+    finalMessage = {
+      role: "assistant",
+      content: createMaxTurnsHandoffMessage(dependencies.maxTurns),
+      messageId: assistantMessageId,
+    };
+    messages.push(finalMessage);
     await dependencies.sessionStore.appendEntry(sessionId, {
-      type: "error",
+      type: "message",
+      role: "assistant",
+      messageId: assistantMessageId,
       timestamp: new Date().toISOString(),
+      content: finalMessage.content,
       runId: dependencies.runManager.runId,
-      error: runtimeErrorShape,
     });
-    await dependencies.runManager.fail(runtimeErrorShape);
-    throw maxTurnsError;
+    await dependencies.runManager.recordTurnLimitReached(dependencies.maxTurns, finalMessage.content);
   }
 
   await dependencies.runManager.recordAssistantCompleted(finalMessage);

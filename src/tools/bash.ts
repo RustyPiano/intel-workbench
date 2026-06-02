@@ -128,6 +128,76 @@ function terminateProcessTree(pid: number | undefined): void {
   }
 }
 
+// Read-only mode: best-effort refusal of bash commands that mutate the
+// filesystem. This is a heuristic, NOT a sandbox. Commands that write through
+// less obvious channels (e.g. `python -c "open('f','w')"`, an editor, or a
+// program that writes to a hard-coded path) can still slip through; for a hard
+// guarantee run the agent inside a read-only container. The common cases —
+// output redirection and well-known mutating commands — are blocked.
+const READ_ONLY_MUTATING_COMMANDS = [
+  "rm",
+  "rmdir",
+  "unlink",
+  "mv",
+  "cp",
+  "touch",
+  "mkdir",
+  "tee",
+  "dd",
+  "truncate",
+  "install",
+  "ln",
+  "chmod",
+  "chown",
+  "chgrp",
+  "shred",
+  "mkfifo",
+  "mknod",
+  "rsync",
+];
+// A mutating command at a command position: line start, or after a separator
+// (`;`, `|`, `&`, `(`, `{`, newline, `&&`, `||`).
+const READ_ONLY_MUTATING_COMMAND_PATTERN = new RegExp(
+  String.raw`(?:^|[\n;&|(){])\s*(${READ_ONLY_MUTATING_COMMANDS.join("|")})\b`,
+  "u",
+);
+// `sed -i` / `perl -i` / `gsed --in-place` edit files in place.
+const READ_ONLY_INPLACE_EDIT_PATTERN = /\b(?:sed|gsed|perl)\b[^\n;|&]*?\s(?:-i\b|--in-place\b)/u;
+// File-writing redirection: `>`, `>>`, `&>`, `&>>` (optionally fd-prefixed)
+// whose target is a real file. Excludes fd dups (`2>&1`, `>&2`) via the `(?!&)`
+// lookahead and the /dev/null|stdout|stderr|tty|fd family which never touch the
+// workspace.
+const READ_ONLY_WRITE_REDIRECT_PATTERN =
+  /\d*&?>>?\s*(?!&)(?!\/dev\/(?:null|stdout|stderr|tty)\b)(?!\/dev\/fd\/)("[^"]+"|'[^']+'|[^\s;|&)<>]+)/u;
+
+// Replace single/double-quoted spans with same-length blanks so a literal `>`
+// or command name inside an echo string is not mistaken for a real operation.
+function blankQuotedSpans(command: string): string {
+  return command.replace(/'[^']*'|"[^"]*"/gu, (match) => " ".repeat(match.length));
+}
+
+function assertReadOnlyCommandAllowed(command: string): void {
+  const scrubbed = blankQuotedSpans(command);
+  let reason: string | undefined;
+  const mutating = READ_ONLY_MUTATING_COMMAND_PATTERN.exec(scrubbed);
+  if (READ_ONLY_WRITE_REDIRECT_PATTERN.test(scrubbed)) {
+    reason = "writes through output redirection";
+  } else if (READ_ONLY_INPLACE_EDIT_PATTERN.test(scrubbed)) {
+    reason = "edits a file in place";
+  } else if (mutating) {
+    reason = `runs a filesystem-mutating command (\`${mutating[1]}\`)`;
+  }
+
+  if (reason) {
+    throw new RuntimeError({
+      code: "PATH_NOT_ALLOWED",
+      message:
+        `Command ${reason}, which is not allowed in read-only mode. ` +
+        "Use a read-only command, or re-run without --read-only to allow changes.",
+    });
+  }
+}
+
 function assertCommandDoesNotExposeSecrets(command: string): void {
   const dumpsEnvironment = ENV_DUMP_COMMAND_PATTERN.test(command);
   const readsSecretFile = SECRET_ENV_FILE_PATTERN.test(command) && SECRET_FILE_READER_PATTERN.test(command);
@@ -148,6 +218,9 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
   async execute(args, ctx) {
     try {
       assertCommandDoesNotExposeSecrets(args.command);
+      if (ctx.policy.readOnly) {
+        assertReadOnlyCommandAllowed(args.command);
+      }
     } catch (error) {
       return {
         ok: false,

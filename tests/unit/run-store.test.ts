@@ -38,6 +38,20 @@ function makeEvent(
 }
 
 describe("RunStore", () => {
+  test("throws a friendly RUN_NOT_FOUND for an unknown run id", async () => {
+    const workspaceRoot = await createWorkspace();
+    const store = new RunStore({ workspaceRoot });
+
+    await expect(store.loadMeta("run_does_not_exist")).rejects.toMatchObject({
+      code: "RUN_NOT_FOUND",
+      message: "Run not found: run_does_not_exist",
+    });
+    // loadTrace reads meta first, so it surfaces the same friendly error.
+    await expect(store.loadTrace("run_does_not_exist")).rejects.toMatchObject({
+      code: "RUN_NOT_FOUND",
+    });
+  });
+
   test("writes run traces and recovers the longest valid prefix", async () => {
     const workspaceRoot = await createWorkspace();
     const store = new RunStore({ workspaceRoot });

@@ -17,13 +17,13 @@ mini-agent [prompt]
 | `--model <name>` | Select the model name passed to the provider. |
 | `--base-url <url>` | Override the provider base URL. |
 | `--api-key <token>` | Override the provider API key. |
-| `--session <id>` | Resume an existing session ID if present. |
+| `--session <id>` | Resume the session with this ID if it exists, otherwise start a new session with that ID. The session ID is printed to stderr after each run so you can resume it. |
 | `--skill-dir <path>` | Add a skill directory. Repeatable. |
 | `--trace compact|verbose|json` | Choose compact timeline, verbose timeline, or raw JSON event output. |
 | `--show-plan` | Keep planning/progress summaries visible. |
 | `--hide-debug` | Hide debug-only details in verbose output. |
 | `--json-events` | Emit runtime events as JSON lines. |
-| `--read-only` | Disallow writes through the runtime. |
+| `--read-only` | Disallow writes through the runtime. The `write`/`edit` tools and media `out_path` are refused; `bash` additionally refuses commands that appear to mutate the filesystem (output redirection, in-place edits, and mutating commands like `rm`/`mv`/`cp`). The bash check is a heuristic, not a sandbox — see the read-only note under Tool Contracts. |
 | `--max-turns <n>` | Set the loop turn cap. |
 | `--help` | Show usage. |
 

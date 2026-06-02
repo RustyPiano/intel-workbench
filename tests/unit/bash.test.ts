@@ -148,6 +148,58 @@ describe("bashTool", () => {
     expect(remove.ok).toBe(true);
   });
 
+  test("read-only mode blocks bash commands that mutate the filesystem", async () => {
+    const workspaceRoot = await createWorkspace();
+    const readOnlyContext = (toolCallId: string): ToolContext => ({
+      ...createContext(workspaceRoot, toolCallId),
+      policy: createPolicyEngine({ workspaceRoot, readOnly: true }),
+    });
+
+    const mutating = [
+      'echo hi > out.txt',
+      'echo more >> out.txt',
+      'printf x &> both.log',
+      'rm out.txt',
+      'mv a b',
+      'mkdir newdir',
+      'cp a b',
+      'touch t',
+      "sed -i 's/a/b/' file",
+      'ls 2>err.log',
+    ];
+    for (const command of mutating) {
+      const result = await bashTool.execute({ command }, readOnlyContext("call_ro_block"));
+      expect(result.ok, `expected "${command}" to be blocked in read-only mode`).toBe(false);
+      expect(result.error).toMatchObject({ code: "PATH_NOT_ALLOWED" });
+    }
+
+    // The mutating command must not have run.
+    const { access } = await import("node:fs/promises");
+    await expect(access(path.join(workspaceRoot, "out.txt"))).rejects.toBeTruthy();
+  });
+
+  test("read-only mode still allows read-only bash commands", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "notes.txt"), "alpha\nbeta\n", "utf8");
+    const readOnlyContext = (toolCallId: string): ToolContext => ({
+      ...createContext(workspaceRoot, toolCallId),
+      policy: createPolicyEngine({ workspaceRoot, readOnly: true }),
+    });
+
+    // Reads, pipes, fd-dups, and /dev/null redirection are not workspace writes.
+    const allowed = [
+      "ls -a",
+      "cat notes.txt",
+      "grep alpha notes.txt",
+      "cat notes.txt 2>/dev/null",
+      "grep missing notes.txt 2>&1 || true",
+    ];
+    for (const command of allowed) {
+      const result = await bashTool.execute({ command }, readOnlyContext("call_ro_allow"));
+      expect(result.ok, `expected "${command}" to be allowed in read-only mode`).toBe(true);
+    }
+  });
+
   test("returns TOOL_TIMEOUT when the command exceeds the timeout", async () => {
     const workspaceRoot = await createWorkspace();
     const result = await bashTool.execute(

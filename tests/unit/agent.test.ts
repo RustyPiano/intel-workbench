@@ -94,6 +94,28 @@ describe("RuntimeAgent.create (static factory)", () => {
       code: "SESSION_NOT_FOUND",
     });
   });
+
+  test("createConversation(unknownId, { createIfMissing: true }) creates a session with that id", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+    });
+
+    const conversation = await agent.createConversation("my-named-session", { createIfMissing: true });
+    expect(conversation.sessionId).toBe("my-named-session");
+
+    const sessions = await agent.sessionStore.listSessions();
+    expect(sessions.some((session) => session.sessionId === "my-named-session")).toBe(true);
+
+    // Resuming the same id reuses the existing session rather than forking.
+    const resumed = await agent.createConversation("my-named-session", { createIfMissing: true });
+    expect(resumed.sessionId).toBe("my-named-session");
+    const afterResume = await agent.sessionStore.listSessions();
+    expect(afterResume.filter((session) => session.sessionId === "my-named-session")).toHaveLength(1);
+  });
 });
 
 describe("RuntimeConversation.send concurrency", () => {

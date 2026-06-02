@@ -539,7 +539,7 @@ export async function main(): Promise<void> {
   }
 
   if (parsed.prompt) {
-    const conversation = await agent.createConversation(config.sessionId);
+    const conversation = await agent.createConversation(config.sessionId, { createIfMissing: true });
     const result = await conversation.send(parsed.prompt);
     const summary = createTraceSummary(result.finalMessage.content);
     if (
@@ -549,6 +549,11 @@ export async function main(): Promise<void> {
     ) {
       console.log("");
       console.log(result.finalMessage.content);
+    }
+    // Surface the session id (to stderr so piped stdout stays clean) so users
+    // can resume this conversation. JSON event mode stays machine-clean.
+    if (config.traceMode !== "json") {
+      console.error(`\n[session] ${result.sessionId} — resume with: --session ${result.sessionId}`);
     }
     return;
   }

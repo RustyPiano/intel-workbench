@@ -101,7 +101,18 @@ By default, writes are limited to the workspace root only.
 
 `allowWriteOutsideWorkspace` removes that boundary.
 
-`readOnly` blocks writes entirely.
+`readOnly` blocks writes through the path-based tools entirely: `resolveWritePath`
+throws `PATH_NOT_ALLOWED`, so `write`, `edit`, and media `out_path` persistence
+fail.
+
+`bash` cannot be resolved through a path, so in `readOnly` mode it applies a
+best-effort heuristic: it refuses commands that write via output redirection
+(`>`, `>>`, `&>`, excluding the `/dev/null` family and fd dups like `2>&1`),
+in-place edits (`sed -i`, `perl -i`), or known mutating commands (`rm`, `rmdir`,
+`mv`, `cp`, `touch`, `mkdir`, `tee`, `dd`, `ln`, `chmod`, …). This is a
+heuristic, **not** a sandbox: a command that writes through a less obvious
+channel (e.g. `python -c "open('f','w')"`) can still mutate the workspace. For a
+hard guarantee, run the agent inside a read-only container.
 
 ### Exec
 

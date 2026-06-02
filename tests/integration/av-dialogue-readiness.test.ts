@@ -35,6 +35,9 @@ describe("av-dialogue-insight readiness", () => {
     expect(skill).toContain("analyze_audio");
     expect(skill).toMatch(/Audio path or URL:[\s\S]*analyze_audio/u);
     expect(skill).toMatch(/engine:[\s\S]*standard[\s\S]*turbo/u);
+    expect(skill).toMatch(/under-specified[\s\S]*short clarifying question/u);
+    expect(skill).toMatch(/basic transcript[\s\S]*emotion \/ tone/u);
+    expect(skill).toMatch(/context already makes the user's goal\s+clear[\s\S]*proceed without asking/u);
     expect(skill).toMatch(/Video or image:[\s\S]*probe_media[\s\S]*analyze_media/u);
     expect(skill).toMatch(/inline by default/u);
     expect(skill).toMatch(/out_path[\s\S]*read that file/u);

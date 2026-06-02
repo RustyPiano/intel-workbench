@@ -18,7 +18,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     output: process.stdout,
   });
 
-  const conversation = await options.agent.createConversation(options.sessionId);
+  const conversation = await options.agent.createConversation(options.sessionId, { createIfMissing: true });
+  if (options.traceMode !== "json") {
+    console.error(`[session] ${conversation.sessionId} — resume with: --session ${conversation.sessionId}`);
+  }
 
   try {
     while (true) {

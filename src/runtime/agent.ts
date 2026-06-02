@@ -199,9 +199,28 @@ export class RuntimeAgent {
     return conversation.send(prompt, signal);
   }
 
-  async createConversation(sessionId?: string): Promise<RuntimeConversation> {
+  async createConversation(
+    sessionId?: string,
+    options: { createIfMissing?: boolean } = {},
+  ): Promise<RuntimeConversation> {
     if (sessionId) {
-      return this.loadConversation(sessionId);
+      const knownSessionIds = new Set((await this.sessionStore.listSessions()).map((session) => session.sessionId));
+      if (knownSessionIds.has(sessionId)) {
+        return this.loadConversation(sessionId);
+      }
+
+      // Default: resuming an unknown id is an error (a typo should not silently
+      // fork a new history). The CLI opts into create-or-resume so a user can
+      // name a fresh session with `--session <id>`.
+      if (!options.createIfMissing) {
+        throw new RuntimeError({
+          code: "SESSION_NOT_FOUND",
+          message: `Session not found: ${sessionId}`,
+        });
+      }
+
+      const created = await this.sessionStore.createSession(sessionId);
+      return new RuntimeConversation(this, created.sessionId, created.path, []);
     }
 
     const session = await this.sessionStore.createSession();

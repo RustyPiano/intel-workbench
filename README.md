@@ -57,9 +57,12 @@ contracts include these compatibility-sensitive changes:
   exposed via `getBufferedEvents()`; the old unbounded `events` field is
   removed.
 - **New error codes** with friendly user messages:
-  `SESSION_NOT_FOUND`, `MAX_TURNS_EXCEEDED`, `PATH_NOT_ALLOWED`
-  (replaces ad-hoc `Error` throws from `PolicyEngine`). Reaching the
-  turn limit now ends the run as `failed`, not `completed`.
+  `SESSION_NOT_FOUND`, `RUN_NOT_FOUND`, `PATH_NOT_ALLOWED`
+  (replaces ad-hoc `Error` throws from `PolicyEngine` and raw `ENOENT`
+  from `run show <missing-id>`). Reaching the turn limit no longer fails
+  the run: the loop emits a `turn_limit_reached` event, returns a
+  user-confirmation hand-off message, and the run completes normally so
+  the conversation can be resumed (reply "继续" or raise `--max-turns`).
 - **CLI argv hardening.** Missing values, unknown flags
   (`--frobnicate`), bad `--trace` enum values, and non-positive
   `--max-turns` all exit non-zero with a clear `CliError` message.

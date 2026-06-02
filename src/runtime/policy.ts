@@ -14,6 +14,10 @@ export interface PolicyOptions {
 export interface PolicyEngine {
   readonly workspaceRoot: string;
   readonly skillRoots: string[];
+  // Whether the runtime is in read-only mode. Path-based tools (write/edit)
+  // enforce this through `resolveWritePath`; `bash` cannot be resolved through a
+  // path, so it reads this flag to apply its own best-effort write heuristic.
+  readonly readOnly: boolean;
   resolveReadPath(inputPath: string): string;
   resolveWritePath(inputPath: string): string;
   resolveExecCwd(inputPath?: string): string;
@@ -96,6 +100,7 @@ export function createPolicyEngine(options: PolicyOptions): PolicyEngine {
   return {
     workspaceRoot,
     skillRoots,
+    readOnly: options.readOnly ?? false,
     resolveReadPath(inputPath: string) {
       return resolveAllowedPath(inputPath, readableRoots, "read");
     },

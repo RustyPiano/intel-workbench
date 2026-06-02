@@ -10,6 +10,7 @@ export type RuntimeErrorCode =
   | "MODEL_ERROR"
   | "SESSION_CORRUPTED"
   | "SESSION_NOT_FOUND"
+  | "RUN_NOT_FOUND"
   | "SKILL_NOT_FOUND"
   | "SKILL_INVALID"
   | "MAX_TURNS_EXCEEDED"

@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { RuntimeError } from "./errors.js";
 import { createId } from "../utils/ids.js";
 import { readJsonlFile, writeJsonlLine } from "../utils/jsonl.js";
 import type { LoadedRunTrace, RunEvent, RunHealth, RunLoadMode, RunMeta, RunStatus } from "./trace.js";
@@ -124,7 +125,17 @@ export class RunStore {
 
   async loadMeta(runId: string): Promise<RunMeta> {
     const created = await this.resolveRunPaths(runId);
-    return JSON.parse(await readFile(created.metaPath, "utf8")) as RunMeta;
+    try {
+      return JSON.parse(await readFile(created.metaPath, "utf8")) as RunMeta;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        throw new RuntimeError({
+          code: "RUN_NOT_FOUND",
+          message: `Run not found: ${runId}`,
+        });
+      }
+      throw error;
+    }
   }
 
   async updateMeta(runId: string, patch: RunMetaPatch): Promise<RunMeta> {

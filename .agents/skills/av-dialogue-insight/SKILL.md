@@ -26,13 +26,32 @@ av-tasks/<task-id>/
   report/     rendered report (.md, optional .docx)
 ```
 
+## Intent Calibration
+
+When the user gives a broad request such as "分析这个音频", "分析这段录音",
+"看一下这段对话", or only provides a media path, treat the analysis goal as
+under-specified. Before choosing an ASR engine or producing a full report, it is
+often better to ask a short clarifying question about the desired depth:
+
+- basic transcript and summary
+- speaker separation and timeline
+- emotion / tone / conflict or trigger-point analysis
+- evidence-style report with timestamps
+- saved structured report
+
+Keep the question lightweight. If the context already makes the user's goal
+clear, proceed without asking. If the user seems to want a quick first pass,
+turbo can be a reasonable choice for transcript and speaker separation; note
+that rich emotion metadata may require standard ASR.
+
 ## Routing
 
-1. **Audio path or URL:** call `analyze_audio` with an explicit `engine:
-   "standard"` or `engine: "turbo"`. Use `turbo` for fast transcription/speaker
-   separation when the audio is wav/mp3/ogg/opus and within the turbo limits,
-   whether it is a local file or a reachable URL. Use `standard` when the user
-   needs rich metadata (emotion, gender, speech-rate, volume), long/large audio,
+1. **Audio path or URL:** choose `analyze_audio` after considering the user's
+   requested depth, with an explicit `engine: "standard"` or `engine: "turbo"`.
+   `turbo` is a good fit for quick transcription and speaker separation when
+   the audio is wav/mp3/ogg/opus and within the turbo limits, whether it is a
+   local file or a reachable URL. `standard` is a better fit when the user asks
+   for rich metadata (emotion, gender, speech-rate, volume), long/large audio,
    or preservation of the original format.
    For local m4a/aac/flac/wma/amr/3gpp without rich metadata requirements,
    try converting with `ffmpeg` to a turbo-supported format before asking the
@@ -72,8 +91,9 @@ av-tasks/<task-id>/
 - Small local video/image (within the inline limit): pass `path` to
   `analyze_media` — it is sent inline as Base64.
 - Local audio does not automatically require TOS. If turbo supports the format
-  (or `ffmpeg` can convert it locally) and the user does not need rich metadata,
-  use `analyze_audio({ path, engine: "turbo" })`.
+  (or `ffmpeg` can convert it locally), it is usually a reasonable first-pass
+  option for transcript and speaker separation, especially when the user did
+  not ask for rich metadata.
 - Use standard ASR for rich metadata, long/large audio, or formats you should
   preserve. For local files, standard ASR needs Volcano Engine TOS automatic upload
   or an existing model-reachable pre-signed URL. Activate

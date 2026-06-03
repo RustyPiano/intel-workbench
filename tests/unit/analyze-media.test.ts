@@ -31,6 +31,7 @@ function createContext(
   multimodal?: MultimodalToolConfig,
   fileMutationQueue?: FileMutationQueue,
   tos?: TosStorageConfig,
+  updates?: string[],
 ): ToolContext {
   return {
     workspaceRoot,
@@ -50,6 +51,7 @@ function createContext(
       tos,
     },
     fileMutationQueue,
+    onUpdate: updates ? (partial) => updates.push(partial) : undefined,
   };
 }
 
@@ -315,6 +317,7 @@ describe("analyzeMediaTool", () => {
     const { root, mediaPath } = await createWorkspaceWithMedia(Buffer.alloc(8 * 1024 * 1024));
     const omniCalls: unknown[] = [];
     const publishCalls: unknown[] = [];
+    const updates: string[] = [];
     vi.doMock("../../src/model/multimodal.js", () => ({
       callOmni: async (params: unknown) => {
         omniCalls.push(params);
@@ -357,6 +360,7 @@ describe("analyzeMediaTool", () => {
         },
         new FileMutationQueue(),
         tos,
+        updates,
       ),
     );
 
@@ -383,6 +387,11 @@ describe("analyzeMediaTool", () => {
       },
     });
     expect(JSON.stringify(result.meta)).not.toContain("https://signed.example");
+    expect(updates).toEqual([
+      "Uploading oversized local media to Volcano Engine TOS for a short-lived model URL...",
+      "Upload completed; calling multimodal model with the published media URL...",
+      "Multimodal model response completed.",
+    ]);
     const meta = result.meta as unknown as Record<string, unknown>;
     expect(meta.publishedMedia).not.toHaveProperty("url");
     const writtenText = await readFile(path.join(root, "analysis/large-clip.json"), "utf8");
@@ -399,6 +408,18 @@ describe("analyzeMediaTool", () => {
       },
     });
     expect(written.publishedMedia).not.toHaveProperty("url");
+  });
+
+  test("estimates a longer timeout for oversized local video", async () => {
+    const { root } = await createWorkspaceWithMedia(Buffer.alloc(8 * 1024 * 1024));
+    const { analyzeMediaTool } = await import("../../src/tools/analyze-media.js");
+
+    const timeoutMs = await analyzeMediaTool.getTimeoutMs?.(
+      { path: "clip.mp4", instruction: "Describe" },
+      createContext(root, undefined, undefined, tos),
+    );
+
+    expect(timeoutMs).toBe(300_000);
   });
 
   test("accepts OpenAI strict-mode null optional fields through ToolRegistry", async () => {

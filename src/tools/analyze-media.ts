@@ -90,6 +90,12 @@ const analyzeMediaArgsSchema = z
 type AnalyzeMediaArgs = z.infer<typeof analyzeMediaArgsSchema>;
 
 const TOS_SIGNED_URL_REDACTION = "(redacted TOS signed URL)";
+const IMAGE_TIMEOUT_MS = 60_000;
+const INLINE_AUDIO_VIDEO_TIMEOUT_MS = 120_000;
+const URL_VIDEO_TIMEOUT_MS = 300_000;
+const OVERSIZED_AUDIO_TIMEOUT_MS = 180_000;
+const OVERSIZED_VIDEO_TIMEOUT_MS = 300_000;
+const MAX_AUTO_TIMEOUT_MS = 600_000;
 
 interface AnalyzeMediaData {
   source: MediaSource;
@@ -113,6 +119,7 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
   description:
     "Analyze a video/audio/image file or model-reachable URL with a multimodal model. Local files are sent inline when small; oversized local media uses configured TOS automatic upload. Use for event detection with timestamps, speaker analysis, emotion recognition, and multimodal summaries. Returns the model's analysis inline by default; pass `out_path` to persist the full result (text + parsed JSON) and get a short summary back instead — prefer that for long transcripts.",
   inputSchema: analyzeMediaArgsSchema,
+  getTimeoutMs: estimateAnalyzeMediaTimeoutMs,
   async execute(args, ctx) {
     try {
       const multimodal = ctx.config.multimodal;
@@ -125,6 +132,9 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
       }
 
       const prepared = await prepareMediaSource(args, ctx);
+      if (!prepared.publishedMedia) {
+        ctx.onUpdate?.("Calling multimodal model...");
+      }
       const result = await callOmni({
         config: multimodal,
         source: prepared.modelSource,
@@ -132,6 +142,7 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
         jsonMode: args.want_json === true,
         signal: ctx.signal,
       });
+      ctx.onUpdate?.("Multimodal model response completed.");
       if (args.out_path === undefined) {
         return {
           ok: true,
@@ -204,6 +215,32 @@ export const analyzeMediaTool: RuntimeTool<AnalyzeMediaArgs, AnalyzeMediaData> =
   },
 };
 
+async function estimateAnalyzeMediaTimeoutMs(args: AnalyzeMediaArgs, ctx: ToolContext): Promise<number | undefined> {
+  const source = toMediaSource(args, ctx.policy.resolveReadPath.bind(ctx.policy));
+  if (source.type === "url") {
+    return source.kind === "video" ? URL_VIDEO_TIMEOUT_MS : source.kind === "audio" ? INLINE_AUDIO_VIDEO_TIMEOUT_MS : IMAGE_TIMEOUT_MS;
+  }
+
+  const kind = detectMediaKind(source.path);
+  if (kind === "image") {
+    return IMAGE_TIMEOUT_MS;
+  }
+
+  const fileInfo = await statLocalMedia(source.path);
+  const encodedLength = base64EncodedLength(fileInfo.size);
+  if (encodedLength < MAX_INLINE_BASE64_BYTES) {
+    return INLINE_AUDIO_VIDEO_TIMEOUT_MS;
+  }
+
+  if (kind === "audio") {
+    return OVERSIZED_AUDIO_TIMEOUT_MS;
+  }
+
+  const extraBytes = Math.max(0, fileInfo.size - MAX_INLINE_BASE64_BYTES);
+  const extraTimeoutMs = Math.ceil(extraBytes / 50_000_000) * 60_000;
+  return Math.min(OVERSIZED_VIDEO_TIMEOUT_MS + extraTimeoutMs, MAX_AUTO_TIMEOUT_MS);
+}
+
 async function prepareMediaSource(
   args: AnalyzeMediaArgs,
   ctx: ToolContext,
@@ -245,6 +282,7 @@ async function prepareMediaSource(
     toolCallId: ctx.toolCallId,
     contentType: mediaMimeType(source.path),
   });
+  ctx.onUpdate?.("Upload completed; calling multimodal model with the published media URL...");
 
   const modelSource = toPublishedUrlSource(kind, publishedMedia.url, source.path);
   return {

@@ -90,6 +90,7 @@ export interface RuntimeTool<TArgs = unknown, TResult = unknown> {
   name: string;
   description: string;
   inputSchema: z.ZodTypeAny;
+  getTimeoutMs?(args: TArgs, ctx: ToolContext): number | undefined | Promise<number | undefined>;
   execute(args: TArgs, ctx: ToolContext): Promise<ToolExecutionResult<TResult>>;
 }
 

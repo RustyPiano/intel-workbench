@@ -44,6 +44,10 @@ function normalizeStrictModeNulls(value: unknown): unknown {
   return value;
 }
 
+function normalizeTimeoutMs(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, RuntimeTool>();
 
@@ -110,7 +114,15 @@ export class ToolRegistry {
       analyze_media: ctx.config.mmTimeoutMs,
       analyze_audio: ctx.config.asrTimeoutMs,
     };
-    const timeoutMs = perToolTimeouts[tool.name] ?? ctx.config.toolTimeoutMs;
+    const configuredTimeoutMs = perToolTimeouts[tool.name];
+    let timeoutMs = configuredTimeoutMs ?? ctx.config.toolTimeoutMs;
+    if (configuredTimeoutMs === undefined && tool.getTimeoutMs) {
+      try {
+        timeoutMs = normalizeTimeoutMs(await tool.getTimeoutMs(parsedArgs, ctx), ctx.config.toolTimeoutMs);
+      } catch {
+        timeoutMs = ctx.config.toolTimeoutMs;
+      }
+    }
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<ToolExecutionResult>((resolve) => {
       timeoutHandle = setTimeout(() => {

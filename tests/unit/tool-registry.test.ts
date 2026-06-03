@@ -176,6 +176,88 @@ describe("ToolRegistry", () => {
     expect(aborted).toBe(true);
   });
 
+  test("uses a tool-provided timeout budget when no configured budget exists", async () => {
+    let aborted = false;
+    const registry = new ToolRegistry([
+      {
+        name: "adaptive",
+        description: "adaptive timeout fixture",
+        inputSchema: z.object({}).strict(),
+        getTimeoutMs() {
+          return 75;
+        },
+        async execute(_args, ctx) {
+          return new Promise((resolve) => {
+            ctx.signal.addEventListener("abort", () => {
+              aborted = true;
+              resolve({
+                ok: false,
+                content: "aborted",
+              });
+            });
+          });
+        },
+      } satisfies RuntimeTool,
+    ]);
+
+    const result = await registry.execute(
+      {
+        id: "call_adaptive",
+        name: "adaptive",
+        arguments: {},
+      },
+      createContext({ toolTimeoutMs: 25 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "TOOL_TIMEOUT",
+      message: "Tool adaptive timed out after 75ms",
+    });
+    expect(aborted).toBe(true);
+  });
+
+  test("prefers a configured multimodal timeout over a tool-provided analyze_media budget", async () => {
+    let aborted = false;
+    const registry = new ToolRegistry([
+      {
+        name: "analyze_media",
+        description: "adaptive multimodal fixture",
+        inputSchema: z.object({}).strict(),
+        getTimeoutMs() {
+          return 150;
+        },
+        async execute(_args, ctx) {
+          return new Promise((resolve) => {
+            ctx.signal.addEventListener("abort", () => {
+              aborted = true;
+              resolve({
+                ok: false,
+                content: "aborted",
+              });
+            });
+          });
+        },
+      } satisfies RuntimeTool,
+    ]);
+
+    const result = await registry.execute(
+      {
+        id: "call_configured_mm",
+        name: "analyze_media",
+        arguments: {},
+      },
+      createContext({ toolTimeoutMs: 25, mmTimeoutMs: 75 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({
+      code: "TOOL_TIMEOUT",
+      message: "Tool analyze_media timed out after 75ms",
+    });
+    expect(aborted).toBe(true);
+  });
+
   test("uses the ASR timeout budget for analyze_audio", async () => {
     let aborted = false;
     const registry = new ToolRegistry([

@@ -1,13 +1,17 @@
 import { Router, type Request, type Response } from "express";
 
+import type { AdminService } from "../admin/admin-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { MaterialService } from "../materials/material-service.js";
+import type { ReportService } from "../report/report-service.js";
+import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createCasesRouter } from "./cases.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
+import { createReportsRouter } from "./reports.js";
 
 /**
  * API 装配（工程方案 §5）。
@@ -29,15 +33,6 @@ interface StubRoute {
 const STUB_ROUTES: readonly StubRoute[] = [
   { method: "post", path: "/auth/login", summary: "登录，返回会话与角色/密级", disposition: "实" },
   { method: "get", path: "/cases/:id/elements", summary: "要素/关系/时间线", disposition: "占" },
-  { method: "post", path: "/cases/:id/report/draft", summary: "生成报告草稿（调 intel-bulletin 渲染脚本）", disposition: "实" },
-  { method: "post", path: "/cases/:id/report/submit", summary: "提交复核", disposition: "实" },
-  { method: "post", path: "/cases/:id/report/approve", summary: "复核核准（保密员/管理员）", disposition: "实" },
-  { method: "post", path: "/cases/:id/report/export", summary: "导出（未复核态拒绝）", disposition: "实" },
-  { method: "get", path: "/admin/prompts", summary: "提示词模板（内置基线只读）", disposition: "占" },
-  { method: "get", path: "/admin/skills", summary: "Skill 列表 + 启停 + 自检", disposition: "实" },
-  { method: "get", path: "/admin/models", summary: "模型配置 + 自检（doctor）", disposition: "实" },
-  { method: "get", path: "/admin/users", summary: "用户管理", disposition: "实" },
-  { method: "post", path: "/audit/export", summary: "导出留存（导出本身入审计）", disposition: "实" },
 ] as const;
 
 function notImplemented(route: StubRoute) {
@@ -56,6 +51,8 @@ export interface ApiServices {
   audit: AuditService;
   materials: MaterialService;
   inquiries: InquiryService;
+  reports: ReportService;
+  admin: AdminService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -69,19 +66,20 @@ export function createApiRouter(services: ApiServices): Router {
   router.get("/_routes", (_req, res) => {
     res.json({
       ok: true,
-      note: "M1–M3：专题 CRUD、素材汇入/列表/内容、问答带溯源、审计 verify 已做实；其余按 §5 占位（HTTP 501），不返回假数据。",
+      note: "M1–M5：专题 CRUD、素材汇入/内容、问答带溯源、报告复核闸门、管理后台、审计 verify/导出 已做实；其余按 §5 占位（HTTP 501）。",
       implemented: [
-        "GET /api/cases",
-        "POST /api/cases",
-        "GET /api/cases/:id",
-        "PATCH /api/cases/:id",
-        "GET /api/cases/:id/materials",
-        "POST /api/cases/:id/materials",
+        "GET/POST /api/cases",
+        "GET/PATCH /api/cases/:id",
+        "GET/POST /api/cases/:id/materials",
         "GET /api/materials/:mid",
-        "POST /api/cases/:id/inquiries",
-        "GET /api/cases/:id/inquiries",
+        "GET/POST /api/cases/:id/inquiries",
+        "GET /api/cases/:id/report",
+        "POST /api/cases/:id/report/{draft,submit,approve,export}",
+        "GET /api/admin/{skills,models,users,prompts}",
+        "POST /api/admin/skills/:name",
         "GET /api/audit",
         "GET /api/audit/verify",
+        "POST /api/audit/export",
       ],
       stubs: STUB_ROUTES.map((r) => ({
         method: r.method.toUpperCase(),
@@ -95,7 +93,9 @@ export function createApiRouter(services: ApiServices): Router {
   // 做实路由（挂在 stub 之前，未匹配的子路径回落到 stub）。
   router.use("/cases", createCasesRouter(services.cases, services.materials));
   router.use("/cases", createInquiriesRouter(services.inquiries));
+  router.use("/cases", createReportsRouter(services.reports));
   router.use("/materials", createMaterialsRouter(services.materials));
+  router.use("/admin", createAdminRouter(services.admin));
   router.use("/audit", createAuditRouter(services.audit));
 
   for (const route of STUB_ROUTES) {

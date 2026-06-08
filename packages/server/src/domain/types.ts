@@ -19,6 +19,13 @@ export function clearanceRank(c: Clearance): number {
   return CLEARANCES.indexOf(c);
 }
 
+export const CLEARANCE_LABELS: Record<Clearance, string> = {
+  internal: "内部",
+  secret: "秘密",
+  confidential: "机密",
+  topsecret: "绝密",
+};
+
 /** 当前操作者身份（M1 为开发期身份，见 identity.ts）。 */
 export interface Identity {
   id: string;
@@ -88,6 +95,43 @@ export interface Inquiry {
   status: "answered" | "insufficient" | "error";
   answer: string;
   claims: InquiryClaim[];
+}
+
+/** 报告复核状态机（工程方案 §7.4）：草稿 → 待复核 → 已复核 → 已导出。 */
+export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
+
+export interface BulletinSection {
+  heading: string;
+  body: string;
+}
+
+/** 通报 spec（喂 intel-bulletin render_report.py，§3）。 */
+export interface BulletinSpec {
+  title: string;
+  doc_number?: string;
+  classification?: string;
+  recipient?: string;
+  summary?: string;
+  sections: BulletinSection[];
+  conclusion?: string;
+  issuer?: string;
+  date?: string;
+}
+
+/** `cases/<id>/report/report.json`：报告状态机 + spec + 复核痕迹（§7.4）。 */
+export interface ReportRecord {
+  status: ReportStatus;
+  spec: BulletinSpec;
+  drafted_by: string;
+  drafted_at: string;
+  submitted_by?: string;
+  submitted_at?: string;
+  reviewed_by?: string;
+  approved_at?: string;
+  exported_by?: string;
+  exported_at?: string;
+  /** bulletin.md 是否已渲染。 */
+  rendered: boolean;
 }
 
 /** `cases/<id>/manifest.json`（工程方案 §4.2）。 */

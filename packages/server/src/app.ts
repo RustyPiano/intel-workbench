@@ -5,6 +5,7 @@ import path from "node:path";
 import { createModelAdapter, type ModelAdapter } from "mini-agent";
 import express, { type ErrorRequestHandler, type Express } from "express";
 
+import { AdminService } from "./admin/admin-service.js";
 import { AuditService } from "./audit/audit-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
@@ -12,6 +13,7 @@ import { AppError, identityMiddleware } from "./domain/identity.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
 import { MaterialService } from "./materials/material-service.js";
 import { readModelConfig } from "./model/model-config.js";
+import { ReportService } from "./report/report-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
 import { createApiRouter } from "./routes/api.js";
 
@@ -36,6 +38,8 @@ export interface AppServices {
   cases: CaseService;
   materials: MaterialService;
   inquiries: InquiryService;
+  reports: ReportService;
+  admin: AdminService;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
   modelConfigured: boolean;
   /** OfflineGuard 当前白名单（启动日志展示）。 */
@@ -81,6 +85,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     guard,
     modelEndpoint: model.configured ? model.baseURL : "",
   });
+  const reports = new ReportService(paths, audit, cases);
+  const admin = new AdminService(paths, audit, model, guard.allowlist);
 
   const services: AppServices = {
     paths,
@@ -88,13 +94,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
     cases,
     materials,
     inquiries,
+    reports,
+    admin,
     modelConfigured: model.configured,
     egressAllowlist: guard.allowlist,
   };
   app.locals.services = services;
 
   // API surface：身份注入（开发期）→ 路由（实 + §5 占位）。
-  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries }));
+  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries, reports, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

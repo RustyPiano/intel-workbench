@@ -10,6 +10,7 @@ export interface DataPaths {
   readonly root: string;
   readonly casesDir: string;
   readonly auditFile: string;
+  readonly configDir: string;
   readonly usersFile: string;
   caseDir(id: string): string;
   caseManifest(id: string): string;
@@ -18,11 +19,13 @@ export interface DataPaths {
 
 export function resolveDataPaths(root: string): DataPaths {
   const casesDir = path.join(root, "cases");
+  const configDir = path.join(root, "config");
   return {
     root,
     casesDir,
     auditFile: path.join(root, "audit", "audit.jsonl"),
-    usersFile: path.join(root, "config", "users.json"),
+    configDir,
+    usersFile: path.join(configDir, "users.json"),
     caseDir: (id) => path.join(casesDir, id),
     caseManifest: (id) => path.join(casesDir, id, "manifest.json"),
     caseAuditLog: (id) => path.join(casesDir, id, "audit.log"),

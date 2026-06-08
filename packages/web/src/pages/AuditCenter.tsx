@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { listAudit, verifyAudit, type AuditEvent, type VerifyResult } from "../api";
+import { exportAudit, listAudit, verifyAudit, type AuditEvent, type VerifyResult } from "../api";
 import { useSession } from "../state/session";
 
 /**
@@ -62,6 +62,22 @@ export function AuditCenterPage() {
   const rows = (events ?? []).filter((e) => (filter === "alert" ? isAlert(e) : true)).slice().reverse();
   const lastHash = events && events.length > 0 ? events[events.length - 1].event_hash : null;
 
+  const handleExport = async () => {
+    if (!user) return;
+    try {
+      const out = await exportAudit(user);
+      const blob = new Blob([JSON.stringify(out.events, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-export-${out.exportedAt.slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page__head">
@@ -106,8 +122,8 @@ export function AuditCenterPage() {
           仅看拒止/异常 ({alertCount})
         </button>
         <div style={{ flex: 1 }} />
-        <button type="button" className="btn" disabled style={{ padding: "6px 14px", fontSize: "12px" }}>
-          📥 导出留存（M5）
+        <button type="button" className="btn" onClick={() => void handleExport()} style={{ padding: "6px 14px", fontSize: "12px" }}>
+          📥 导出全量留存
         </button>
       </div>
 

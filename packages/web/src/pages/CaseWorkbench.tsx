@@ -2,17 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import {
+  approveReport,
   askInquiry,
+  draftReport,
+  exportReport,
   getCase,
   getMaterialContent,
+  getReport,
   ingestMaterials,
   listInquiries,
   listMaterials,
   readFileForUpload,
+  submitReport,
   type ApiCase,
   type ApiClaim,
   type ApiInquiry,
   type ApiMaterial,
+  type ApiReport,
   type MaterialContent,
 } from "../api";
 import { useSession } from "../state/session";
@@ -476,82 +482,161 @@ export function InquiryPanel() {
 }
 
 // ==================== 4. Report Sub-panel ====================
-export function ReportPanel() {
-  const [reportTitle, setReportTitle] = useState("关于境外特定组织针对我单位基础设施网络入侵的分析通报");
-  const [reportContent, setReportContent] = useState(
-    `【机密 ★ 专题情况通报】\n\n一、事件概述\n2026-06-03 23:12 起，我安全保障中心监测到针对局域网主机的恶意渗透事件。经多源线索分析，基本确认为境外特定攻击组织（APT-29）所为。\n\n二、研判细节\n1. 诱饵来源：攻击者在前期通过高管邮箱钓鱼注入恶意宏，以突破防边界网关。\n2. 控制链路：发现本地IP 192.168.12.4 与远程可疑域名 update.microsoft-sys.org 存在高频加密HTTPS通信。\n3. 横向转移：检测到局域网域控主机（192.168.12.10）正遭到基于 SMB 共享的爆破嗅探。\n\n三、处置建议\n- 立即切断 192.168.12.4 主机的网络物理链接。\n- 封禁目标恶意解析域名 update.microsoft-sys.org。\n- 启动全网域控制器口令强制变更。`
-  );
-  const [status, setStatus] = useState<"draft" | "reviewing">("draft");
 
-  const handleToggleStatus = () => {
-    setStatus((prev) => (prev === "draft" ? "reviewing" : "draft"));
+const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: string }[] = [
+  { status: "draft", label: "草稿起草", hint: "编辑标题与正文，保存即落盘并渲染公文" },
+  { status: "in_review", label: "待保密员复核", hint: "提交后由保密员/管理员核对密级与完整性" },
+  { status: "approved", label: "已复核", hint: "复核通过，方可导出" },
+  { status: "exported", label: "已导出", hint: "导出留存（动作入审计）" },
+];
+
+function specToBody(report: ApiReport | null): string {
+  if (!report) return "";
+  return report.spec.sections.map((s) => (s.heading ? `${s.heading}\n${s.body}` : s.body)).join("\n\n");
+}
+
+export function ReportPanel() {
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const canReview = user?.role === "security" || user?.role === "admin";
+
+  const [report, setReport] = useState<ApiReport | null>(null);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!user || !caseId) return;
+    let alive = true;
+    getReport(user, caseId)
+      .then((r) => {
+        if (!alive) return;
+        setReport(r);
+        if (r) {
+          setTitle(r.spec.title);
+          setBody(specToBody(r));
+        }
+        setLoaded(true);
+      })
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [user, caseId]);
+
+  const run = async (fn: () => Promise<ApiReport>) => {
+    if (!user || !caseId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setReport(await fn());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const handleSaveDraft = () => {
+    if (!title.trim()) {
+      setError("报告标题为必填项");
+      return;
+    }
+    void run(() => draftReport(user!, caseId!, { title: title.trim(), body }));
+  };
+
+  const handleExport = async () => {
+    if (!user || !caseId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await exportReport(user, caseId);
+      const blob = new Blob([out.content], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = out.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setReport((prev) => (prev ? { ...prev, status: out.status } : prev));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = report?.status ?? "draft";
+  const stepIndex = REPORT_STEPS.findIndex((s) => s.status === status);
 
   return (
     <div className="report-layout">
-      {/* Editor Main */}
       <div className="report-editor">
         <div className="report-toolbar">
-          <button type="button" className="btn btn--ghost" style={{ padding: "4px 8px", fontSize: "12px" }}><strong>B</strong></button>
-          <button type="button" className="btn btn--ghost" style={{ padding: "4px 8px", fontSize: "12px" }}><em>I</em></button>
-          <button type="button" className="btn btn--ghost" style={{ padding: "4px 8px", fontSize: "12px" }}>🔗 链接</button>
-          <button type="button" className="btn btn--ghost" style={{ padding: "4px 8px", fontSize: "12px" }}>➕ 插入引文</button>
+          <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+            状态：<strong style={{ color: "var(--accent-light)" }}>{REPORT_STEPS[stepIndex]?.label ?? "草稿起草"}</strong>
+            {report?.spec.classification ? ` · 密级 ${report.spec.classification}` : ""}
+            {report && !report.rendered ? " · ⚠️ 公文渲染未完成（缺 python3?）" : ""}
+          </span>
           <div style={{ flex: 1 }} />
-          <button type="button" className="btn" disabled style={{ padding: "4px 10px", fontSize: "11px" }}>套用公文模板</button>
+          <button type="button" className="btn btn--primary" style={{ padding: "4px 12px", fontSize: "12px" }} onClick={handleSaveDraft} disabled={busy}>
+            {busy ? "处理中…" : report ? "保存修改（回草稿）" : "生成草稿"}
+          </button>
         </div>
-        
-        <input
-          type="text"
-          className="report-title-input"
-          value={reportTitle}
-          onChange={(e) => setReportTitle(e.target.value)}
-        />
-        
+
+        <input type="text" className="report-title-input" placeholder="报告标题，例如：关于某网络入侵事件的情况通报" value={title} onChange={(e) => setTitle(e.target.value)} />
+
         <textarea
           className="report-textarea"
-          value={reportContent}
-          onChange={(e) => setReportContent(e.target.value)}
+          placeholder="正文：可分多段填写基本情况、分析研判、处置建议……保存后由 intel-bulletin 渲染为公文格式。"
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
         />
+        {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px 0" }}>{error}</div> : null}
       </div>
 
-      {/* Report Workflow Sidebar */}
       <div className="report-sidebar">
         <div className="report-sidebar__title">报告复核状态</div>
-        
+
         <div className="workflow-steps">
-          <div className={`workflow-step ${status === "draft" ? "workflow-step--active" : "workflow-step--done"}`}>
-            <span className="workflow-dot">{status !== "draft" && "✓"}</span>
-            <div>
-              <div style={{ fontWeight: "700" }}>草稿起草中</div>
-              <span style={{ fontSize: "11px", opacity: 0.7 }}>编写人: 演示作业员</span>
+          {REPORT_STEPS.map((step, i) => (
+            <div key={step.status} className={`workflow-step ${i === stepIndex ? "workflow-step--active" : i < stepIndex ? "workflow-step--done" : ""}`}>
+              <span className="workflow-dot">{i < stepIndex ? "✓" : ""}</span>
+              <div>
+                <div style={{ fontWeight: i === stepIndex ? "700" : "600" }}>{step.label}</div>
+                <span style={{ fontSize: "11px", opacity: 0.7 }}>{step.hint}</span>
+              </div>
             </div>
-          </div>
-
-          <div className={`workflow-step ${status === "reviewing" ? "workflow-step--active" : ""}`}>
-            <span className="workflow-dot"></span>
-            <div>
-              <div style={{ fontWeight: "600" }}>待保密员复核</div>
-              <span style={{ fontSize: "11px", opacity: 0.7 }}>核对密级及完整性审计</span>
-            </div>
-          </div>
-
-          <div className="workflow-step">
-            <span className="workflow-dot"></span>
-            <div>
-              <div style={{ fontWeight: "600" }}>导出留存</div>
-              <span style={{ fontSize: "11px", opacity: 0.7 }}>PDF / Word 本地物理隔离导出</span>
-            </div>
-          </div>
+          ))}
         </div>
 
         <div style={{ marginTop: "auto", borderTop: "1px solid var(--border)", paddingTop: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
-          <button type="button" className="btn btn--primary" onClick={handleToggleStatus} style={{ width: "100%" }}>
-            {status === "draft" ? "🚀 提交审核人复核" : "↩️ 撤回为草稿状态"}
-          </button>
-          
-          <button type="button" className="btn btn--danger" disabled style={{ width: "100%" }} title="必须完成保密复核后方可导出文件 (M4 闸门控制)">
-            📥 导出报告 (未授权)
-          </button>
+          {!loaded ? (
+            <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>加载报告状态…</span>
+          ) : (
+            <>
+              <button type="button" className="btn btn--primary" style={{ width: "100%" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(user!, caseId!))}>
+                🚀 提交保密员复核
+              </button>
+              {canReview ? (
+                <button type="button" className="btn" style={{ width: "100%" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(user!, caseId!))}>
+                  ✅ 复核核准
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={status === "approved" || status === "exported" ? "btn btn--primary" : "btn btn--danger"}
+                style={{ width: "100%" }}
+                disabled={busy || (status !== "approved" && status !== "exported")}
+                title={status === "approved" || status === "exported" ? "导出公文 .md" : "必须完成保密复核后方可导出（闸门）"}
+                onClick={handleExport}
+              >
+                📥 {status === "approved" || status === "exported" ? "导出报告 (.md)" : "导出报告 (未授权)"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

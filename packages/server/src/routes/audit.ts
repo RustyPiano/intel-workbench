@@ -21,6 +21,14 @@ export function createAuditRouter(audit: AuditService): Router {
     res.json({ ok: true, result: await audit.verify() });
   });
 
+  // 导出留存（M5）：导出动作本身入审计（§5）。
+  router.post("/export", async (req, res) => {
+    assertAuditor(req.identity);
+    const events = await audit.readAll();
+    await audit.append({ user: req.identity.id, action: "audit.export", object: "audit:all", detail: { count: events.length } });
+    res.json({ ok: true, exportedAt: new Date().toISOString(), count: events.length, events });
+  });
+
   return router;
 }
 

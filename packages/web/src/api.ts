@@ -68,6 +68,33 @@ export interface IngestFile {
   encoding: "utf8" | "base64";
 }
 
+export interface ApiCitation {
+  material_id: string;
+  material_name: string;
+  modality: Modality;
+  locator: { page?: number; paragraph?: number; timecode?: string; bbox?: [number, number, number, number] };
+  snippet: string;
+  confidence: number;
+  content_hash: string;
+}
+
+export interface ApiClaim {
+  text: string;
+  type: "fact" | "inference";
+  status: "verified" | "unverified";
+  citations: ApiCitation[];
+}
+
+export interface ApiInquiry {
+  id: string;
+  ts: string;
+  user: string;
+  question: string;
+  status: "answered" | "insufficient" | "error";
+  answer: string;
+  claims: ApiClaim[];
+}
+
 function headers(user: SessionUser, json = false): Record<string, string> {
   const h: Record<string, string> = {
     "x-user-id": user.id,
@@ -114,6 +141,20 @@ export function ingestMaterials(user: SessionUser, caseId: string, files: Ingest
     headers: headers(user, true),
     body: JSON.stringify({ files }),
   }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
+}
+
+export function listInquiries(user: SessionUser, caseId: string): Promise<ApiInquiry[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { headers: headers(user) }).then((r) =>
+    unwrap<ApiInquiry[]>(r, "inquiries"),
+  );
+}
+
+export function askInquiry(user: SessionUser, caseId: string, question: string): Promise<ApiInquiry> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
+    method: "POST",
+    headers: headers(user, true),
+    body: JSON.stringify({ question }),
+  }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
 }
 
 export function getMaterialContent(user: SessionUser, materialId: string): Promise<MaterialContent> {

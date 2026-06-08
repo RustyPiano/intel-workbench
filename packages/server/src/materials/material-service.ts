@@ -190,6 +190,25 @@ export class MaterialService {
     return { material, note: material.note ?? "该素材尚未加工完成" };
   }
 
+  /** 读取专题下所有已加工文档的切块（供问答检索，§7.3）。 */
+  async loadCaseChunks(caseId: string): Promise<Chunk[]> {
+    const manifest = await this.cases.loadManifest(caseId);
+    if (!manifest) return [];
+    const chunks: Chunk[] = [];
+    for (const material of manifest.materials) {
+      if (material.status !== "done") continue;
+      try {
+        const raw = await readFile(path.join(this.paths.caseDir(caseId), "processed", `${material.id}.chunks.jsonl`), "utf8");
+        for (const line of raw.split("\n")) {
+          if (line.length > 0) chunks.push(JSON.parse(line) as Chunk);
+        }
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      }
+    }
+    return chunks;
+  }
+
   private async locate(materialId: string): Promise<{ caseId: string; material: Material } | null> {
     for (const caseId of await this.cases.listIds()) {
       const manifest = await this.cases.loadManifest(caseId);

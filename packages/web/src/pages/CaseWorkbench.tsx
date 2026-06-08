@@ -2,12 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import {
+  askInquiry,
   getCase,
   getMaterialContent,
   ingestMaterials,
+  listInquiries,
   listMaterials,
   readFileForUpload,
   type ApiCase,
+  type ApiClaim,
+  type ApiInquiry,
   type ApiMaterial,
   type MaterialContent,
 } from "../api";
@@ -54,7 +58,7 @@ export function CaseWorkbench() {
             </span>
           ) : null}
         </div>
-        <span className="workbench__hint">素材汇入与加工已接通（M2）；要素/问答/报告为后续里程碑。</span>
+        <span className="workbench__hint">素材汇入加工（M2）与问答带溯源（M3）已接通；要素/报告为后续里程碑。</span>
       </div>
 
       <nav className="tabs">
@@ -334,121 +338,124 @@ export function ElementsPanel() {
 }
 
 // ==================== 3. Inquiry Sub-panel ====================
-interface Message {
-  id: string;
-  sender: "user" | "ai";
-  text: string;
-  citations?: { id: number; tooltip: string }[];
+
+function CitationChips({ claim }: { claim: ApiClaim }) {
+  if (claim.citations.length === 0) return null;
+  return (
+    <span style={{ marginLeft: "6px" }}>
+      {claim.citations.map((c, i) => (
+        <span
+          key={i}
+          className="citation"
+          title={`${c.material_name}${c.locator.paragraph ? ` · 第${c.locator.paragraph}段` : ""}\n${c.snippet}`}
+        >
+          {i + 1}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function InquiryAnswer({ inquiry }: { inquiry: ApiInquiry }) {
+  if (inquiry.status !== "answered") {
+    const unverified = inquiry.claims.filter((c) => c.status === "unverified");
+    return (
+      <div style={{ color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
+        ⚠️ {inquiry.answer}
+        {unverified.length > 0 ? (
+          <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
+            （以下为无有效出处的待核提示，不作为事实）
+            {unverified.map((c, i) => (
+              <div key={i} style={{ marginTop: "4px" }}>· {c.text}</div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  const verified = inquiry.claims.filter((c) => c.status === "verified");
+  return (
+    <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
+      {verified.map((c, i) => (
+        <div key={i} style={{ marginBottom: "6px" }}>
+          {i + 1}. {c.text}
+          {c.type === "inference" ? <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>（推断）</span> : null}
+          <CitationChips claim={c} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function InquiryPanel() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "m1",
-      sender: "ai",
-      text: "您好！我是专题智能助手。已为您分析本专题下的所有就绪素材，自动提取了人物、组织和网络入侵链路。请问需要我为您解答什么？",
-    },
-    {
-      id: "m2",
-      sender: "user",
-      text: "分析此专题下所有素材，总结主要攻击链路。",
-    },
-    {
-      id: "m3",
-      sender: "ai",
-      text: "根据本专题中提取的线索素材，APT-29 组织的主要攻击链路如下：\n\n1. 初始渗透：攻击者在 2026-06-03 23:12 分左右，通过鱼叉式钓鱼邮件 [1] 投递了诱饵文档并诱导运行宏。\n2. C2 回连：宏脚本执行后运行了恶意 Beacon 载荷，通过 HTTPS 协议回连外部 C2 服务器 [2]。\n3. 横向渗透：获取局域网主机控制权后，正通过 SMB 共享协议在受害网络进行横向移动 [3]，以索取更高特权。\n\n需要我将以上攻击链大纲填充至通报草稿中吗？",
-      citations: [
-        { id: 1, tooltip: "来源: intercepted_radio_audio_transcript.txt 第 4 行" },
-        { id: 2, tooltip: "来源: APT29_attack_pattern_log.csv 第 4 行" },
-        { id: 3, tooltip: "来源: intercepted_radio_audio_transcript.txt 第 8 行" },
-      ],
-    },
-  ]);
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [history, setHistory] = useState<ApiInquiry[]>([]);
   const [input, setInput] = useState("");
-  const [activeTooltip, setActiveTooltip] = useState<{ id: number; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSend = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    const userMsg: Message = {
-      id: `m-u-${Date.now()}`,
-      sender: "user",
-      text: input.trim(),
+  useEffect(() => {
+    if (!user || !caseId) return;
+    let alive = true;
+    listInquiries(user, caseId)
+      .then((list) => alive && setHistory(list))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
     };
-    
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
+  }, [user, caseId]);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiMsg: Message = {
-        id: `m-a-${Date.now()}`,
-        sender: "ai",
-        text: `收到关于「${userMsg.text}」的研判请求。在 M3 阶段，此处将接通 RAG（检索增强生成）管线，分析本地关联库以进行可信回答。当前展示离线模拟，未发现其他冲突的证据要素。`,
-      };
-      setMessages((prev) => [...prev, aiMsg]);
-    }, 800);
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = input.trim();
+    if (!q || !user || !caseId || busy) return;
+    setBusy(true);
+    setError(null);
+    setInput("");
+    try {
+      const inquiry = await askInquiry(user, caseId, q);
+      setHistory((prev) => [...prev, inquiry]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="inquiry-layout">
       <div className="chat-messages">
-        {messages.map((m) => (
-          <div key={m.id} className={`chat-bubble chat-bubble--${m.sender}`}>
-            <div className="chat-avatar">
-              {m.sender === "user" ? "👤" : "🤖"}
+        {history.length === 0 && !busy ? (
+          <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7", padding: "8px" }}>
+            向 AI 提问本专题已加工素材中的关联线索。每条结论都会绑定到素材出处；无支撑时系统回「现有材料不足以判断」，不臆造。
+          </div>
+        ) : null}
+        {history.map((inq) => (
+          <div key={inq.id}>
+            <div className="chat-bubble chat-bubble--user">
+              <div className="chat-avatar">👤</div>
+              <div className="chat-content">
+                <p>{inq.question}</p>
+              </div>
             </div>
-            <div className="chat-content">
-              <p style={{ whiteSpace: "pre-line" }}>
-                {m.text.split(/(\[\d+\])/).map((part, pIdx) => {
-                  const match = part.match(/\[(\d+)\]/);
-                  if (match && m.citations) {
-                    const citeNum = parseInt(match[1], 10);
-                    const cite = m.citations.find((c) => c.id === citeNum);
-                    return (
-                      <span
-                        key={pIdx}
-                        className="citation"
-                        onMouseEnter={() => {
-                          if (cite) setActiveTooltip({ id: citeNum, text: cite.tooltip });
-                        }}
-                        onMouseLeave={() => setActiveTooltip(null)}
-                        title={cite?.tooltip}
-                      >
-                        {citeNum}
-                      </span>
-                    );
-                  }
-                  return part;
-                })}
-              </p>
+            <div className="chat-bubble chat-bubble--ai">
+              <div className="chat-avatar">🤖</div>
+              <div className="chat-content">
+                <InquiryAnswer inquiry={inq} />
+              </div>
             </div>
           </div>
         ))}
-        {activeTooltip && (
-          <div style={{
-            position: "absolute",
-            bottom: "80px",
-            left: "24px",
-            background: "var(--accent)",
-            color: "#fff",
-            padding: "8px 12px",
-            borderRadius: "var(--radius)",
-            fontSize: "12px",
-            boxShadow: "var(--shadow-lg)",
-            border: "1px solid var(--accent-light)",
-            zIndex: 10
-          }}>
-            🔍 <strong>溯源引文 [{activeTooltip.id}]：</strong>{activeTooltip.text}
+        {busy ? (
+          <div className="chat-bubble chat-bubble--ai">
+            <div className="chat-avatar">🤖</div>
+            <div className="chat-content">
+              <p style={{ color: "var(--text-dim)" }}>检索素材并研判中…</p>
+            </div>
           </div>
-        )}
-      </div>
-
-      <div className="chat-suggestions">
-        <button type="button" className="chat-suggestion-btn" onClick={() => setInput("总结受害资产列表")}>总结受害资产列表</button>
-        <button type="button" className="chat-suggestion-btn" onClick={() => setInput("是否有外发高敏感数据迹象？")}>是否有外发高敏感数据迹象？</button>
-        <button type="button" className="chat-suggestion-btn" onClick={() => setInput("导出攻击时间线要素")}>导出攻击时间线要素</button>
+        ) : null}
+        {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px" }}>{error}</div> : null}
       </div>
 
       <form onSubmit={handleSend} className="chat-input-area">
@@ -458,8 +465,11 @@ export function InquiryPanel() {
           placeholder="🎯 向 AI 助手提问有关本专题的关联线索…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          disabled={busy}
         />
-        <button type="submit" className="btn btn--primary">发送</button>
+        <button type="submit" className="btn btn--primary" disabled={busy}>
+          发送
+        </button>
       </form>
     </div>
   );

@@ -58,6 +58,38 @@ export interface Chunk {
   content_hash: string;
 }
 
+/** 溯源引用（工程方案 §4.3）。指向被检索出的素材片段。 */
+export interface Citation {
+  material_id: string;
+  material_name: string;
+  modality: Modality;
+  locator: { page?: number; paragraph?: number; timecode?: string; bbox?: [number, number, number, number] };
+  snippet: string;
+  confidence: number;
+  /** 指向素材内容（≠ 审计 event_hash，§7.2）。 */
+  content_hash: string;
+}
+
+/** 单条结论。校验不通过降级为"待核"（unverified，§7.3 step 4）。 */
+export interface InquiryClaim {
+  text: string;
+  type: "fact" | "inference";
+  status: "verified" | "unverified";
+  citations: Citation[];
+}
+
+/** 问答记录（落 `cases/<id>/inquiries.jsonl`，§7.3 step 5）。 */
+export interface Inquiry {
+  id: string;
+  ts: string;
+  user: string;
+  question: string;
+  /** answered=有据回答；insufficient=材料不足；error=模型调用失败/降级。 */
+  status: "answered" | "insufficient" | "error";
+  answer: string;
+  claims: InquiryClaim[];
+}
+
 /** `cases/<id>/manifest.json`（工程方案 §4.2）。 */
 export interface CaseManifest {
   id: string;

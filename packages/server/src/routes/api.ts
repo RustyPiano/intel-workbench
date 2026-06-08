@@ -2,9 +2,11 @@ import { Router, type Request, type Response } from "express";
 
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
+import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { createAuditRouter } from "./audit.js";
 import { createCasesRouter } from "./cases.js";
+import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
 
 /**
@@ -26,8 +28,6 @@ interface StubRoute {
 /** 仍未接通的 §5 路由（已做实的专题/素材/审计路由不在此列）。 */
 const STUB_ROUTES: readonly StubRoute[] = [
   { method: "post", path: "/auth/login", summary: "登录，返回会话与角色/密级", disposition: "实" },
-  { method: "post", path: "/cases/:id/inquiries", summary: "问答 → 检索+结构化生成+校验管线", disposition: "实" },
-  { method: "get", path: "/cases/:id/inquiries", summary: "问答记录", disposition: "实" },
   { method: "get", path: "/cases/:id/elements", summary: "要素/关系/时间线", disposition: "占" },
   { method: "post", path: "/cases/:id/report/draft", summary: "生成报告草稿（调 intel-bulletin 渲染脚本）", disposition: "实" },
   { method: "post", path: "/cases/:id/report/submit", summary: "提交复核", disposition: "实" },
@@ -55,6 +55,7 @@ export interface ApiServices {
   cases: CaseService;
   audit: AuditService;
   materials: MaterialService;
+  inquiries: InquiryService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -68,7 +69,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.get("/_routes", (_req, res) => {
     res.json({
       ok: true,
-      note: "M1–M2：专题 CRUD、素材汇入/列表/内容、审计 verify 已做实；其余按 §5 占位（HTTP 501），不返回假数据。",
+      note: "M1–M3：专题 CRUD、素材汇入/列表/内容、问答带溯源、审计 verify 已做实；其余按 §5 占位（HTTP 501），不返回假数据。",
       implemented: [
         "GET /api/cases",
         "POST /api/cases",
@@ -77,6 +78,8 @@ export function createApiRouter(services: ApiServices): Router {
         "GET /api/cases/:id/materials",
         "POST /api/cases/:id/materials",
         "GET /api/materials/:mid",
+        "POST /api/cases/:id/inquiries",
+        "GET /api/cases/:id/inquiries",
         "GET /api/audit",
         "GET /api/audit/verify",
       ],
@@ -91,6 +94,7 @@ export function createApiRouter(services: ApiServices): Router {
 
   // 做实路由（挂在 stub 之前，未匹配的子路径回落到 stub）。
   router.use("/cases", createCasesRouter(services.cases, services.materials));
+  router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/materials", createMaterialsRouter(services.materials));
   router.use("/audit", createAuditRouter(services.audit));
 

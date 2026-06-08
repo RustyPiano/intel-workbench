@@ -42,11 +42,13 @@ function main(): void {
       // eslint-disable-next-line no-console
       console.log(
         [
-          `情报分析工作台 server (M1) 已启动`,
+          `情报分析工作台 server (M3) 已启动`,
           `  runtime core: mini-agent v${RUNTIME_VERSION}（RuntimeAgent 接线 OK）`,
           `  health:       http://${HOST}:${PORT}/api/health`,
           `  routes index: http://${HOST}:${PORT}/api/_routes`,
           `  数据根:       ${services.paths.root}`,
+          `  文本模型:     ${services.modelConfigured ? "已配置" : "未配置（问答降级）"}`,
+          `  外发白名单:   ${services.egressAllowlist.length ? services.egressAllowlist.join(", ") : "（空，全断）"}`,
           reconcileLine,
           `  绑定:         ${HOST}（仅 loopback，无对外监听）`,
         ].join("\n"),

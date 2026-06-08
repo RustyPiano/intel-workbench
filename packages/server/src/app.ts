@@ -2,13 +2,17 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { createModelAdapter, type ModelAdapter } from "mini-agent";
 import express, { type ErrorRequestHandler, type Express } from "express";
 
 import { AuditService } from "./audit/audit-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
 import { AppError, identityMiddleware } from "./domain/identity.js";
+import { InquiryService } from "./inquiry/inquiry-service.js";
 import { MaterialService } from "./materials/material-service.js";
+import { readModelConfig } from "./model/model-config.js";
+import { OfflineGuard } from "./security/offline-guard.js";
 import { createApiRouter } from "./routes/api.js";
 
 export interface CreateAppOptions {
@@ -31,6 +35,11 @@ export interface AppServices {
   audit: AuditService;
   cases: CaseService;
   materials: MaterialService;
+  inquiries: InquiryService;
+  /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
+  modelConfigured: boolean;
+  /** OfflineGuard 当前白名单（启动日志展示）。 */
+  egressAllowlist: string[];
 }
 
 /**
@@ -59,11 +68,33 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const audit = new AuditService(paths);
   const cases = new CaseService(paths, audit, devMode);
   const materials = new MaterialService(paths, audit, cases);
-  const services: AppServices = { paths, audit, cases, materials };
+
+  // 文本 LLM + 零外发闸门（M3）。开发期白名单仅模型端点 host；未配置则白名单为空
+  // → 任何出站皆被拒并落审计（生产置空即一键全断，§7.1）。
+  const model = readModelConfig();
+  const adapter: ModelAdapter | null = model.configured
+    ? createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey })
+    : null;
+  const guard = new OfflineGuard(model.configured ? [model.host] : [], audit);
+  const inquiries = new InquiryService(paths, audit, cases, materials, {
+    adapter,
+    guard,
+    modelEndpoint: model.configured ? model.baseURL : "",
+  });
+
+  const services: AppServices = {
+    paths,
+    audit,
+    cases,
+    materials,
+    inquiries,
+    modelConfigured: model.configured,
+    egressAllowlist: guard.allowlist,
+  };
   app.locals.services = services;
 
   // API surface：身份注入（开发期）→ 路由（实 + §5 占位）。
-  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials }));
+  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

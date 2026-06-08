@@ -27,7 +27,38 @@ export interface Identity {
   clearance: Clearance;
 }
 
-/** `cases/<id>/manifest.json`（工程方案 §4.2）。一期 materials 为空，M2 填充。 */
+/** 素材模态（产品 spec §5.2）。一期仅文档可加工，其余降级占位。 */
+export type Modality = "doc" | "audio" | "video" | "image";
+/** 加工状态机：待加工 / 加工中 / 已完成 / 失败（产品 spec §5.2）。 */
+export type MaterialStatus = "pending" | "processing" | "done" | "failed";
+
+/** 素材元数据（产品 spec §5.2，记入 manifest.materials）。 */
+export interface Material {
+  id: string;
+  case_id: string;
+  filename: string;
+  modality: Modality;
+  format: string;
+  size: number;
+  ingested_at: string;
+  status: MaterialStatus;
+  language?: string;
+  /** 文档加工完成后的切块数（§7.3）。 */
+  chunk_count?: number;
+  /** 降级 / 失败原因（产品 spec §10）。 */
+  note?: string;
+}
+
+/** 切块（汇入时，工程方案 §7.3 step 1）。存 `processed/<mid>.chunks.jsonl`。 */
+export interface Chunk {
+  chunk_id: string;
+  material_id: string;
+  locator: { page?: number; paragraph?: number };
+  text: string;
+  content_hash: string;
+}
+
+/** `cases/<id>/manifest.json`（工程方案 §4.2）。 */
 export interface CaseManifest {
   id: string;
   name: string;
@@ -36,7 +67,7 @@ export interface CaseManifest {
   owner: string;
   created_at: string;
   updated_at: string;
-  materials: unknown[];
+  materials: Material[];
 }
 
 export type AuditResult = "ok" | "deny" | "error";

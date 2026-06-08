@@ -8,6 +8,7 @@ import { AuditService } from "./audit/audit-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
 import { AppError, identityMiddleware } from "./domain/identity.js";
+import { MaterialService } from "./materials/material-service.js";
 import { createApiRouter } from "./routes/api.js";
 
 export interface CreateAppOptions {
@@ -29,6 +30,7 @@ export interface AppServices {
   paths: DataPaths;
   audit: AuditService;
   cases: CaseService;
+  materials: MaterialService;
 }
 
 /**
@@ -48,18 +50,20 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // advertised externally (it only ever binds 127.0.0.1).
   app.disable("x-powered-by");
 
-  app.use(express.json({ limit: "1mb" }));
+  // 素材以 base64 内联上传，放宽 JSON 体积上限（本地单机应用）。
+  app.use(express.json({ limit: "25mb" }));
 
-  // 数据底座与用例服务（M1）。
+  // 数据底座与用例服务（M1–M2）。
   const paths = resolveDataPaths(options.dataDir ?? defaultDataDir());
   const devMode = options.devMode ?? process.env.WORKBENCH_DEV_MODE !== "false";
   const audit = new AuditService(paths);
   const cases = new CaseService(paths, audit, devMode);
-  const services: AppServices = { paths, audit, cases };
+  const materials = new MaterialService(paths, audit, cases);
+  const services: AppServices = { paths, audit, cases, materials };
   app.locals.services = services;
 
   // API surface：身份注入（开发期）→ 路由（实 + §5 占位）。
-  app.use("/api", identityMiddleware, createApiRouter({ cases, audit }));
+  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

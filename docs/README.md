@@ -29,6 +29,8 @@ as the code evolves.
 
 ## App specs
 
+- [情报分析工作台 — 产品设计 + 界面规格](./specs/intel-workbench-product-spec.md)
+- [情报分析工作台 — 一期工程实现方案](./specs/intel-workbench-phase1-engineering-plan.md)
 - [av-dialogue-insight spec](./specs/av-dialogue-insight-spec.md)
 - [intel-bulletin spec](./specs/intel-bulletin-spec.md)
 

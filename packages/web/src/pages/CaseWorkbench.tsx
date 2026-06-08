@@ -1,5 +1,18 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
+
+import {
+  getCase,
+  getMaterialContent,
+  ingestMaterials,
+  listMaterials,
+  readFileForUpload,
+  type ApiCase,
+  type ApiMaterial,
+  type MaterialContent,
+} from "../api";
+import { useSession } from "../state/session";
+import { CLEARANCE_LABELS } from "../types";
 
 const TABS: { to: string; label: string }[] = [
   { to: "materials", label: "线索素材" },
@@ -11,23 +24,37 @@ const TABS: { to: string; label: string }[] = [
 
 /**
  * 专题工作台外壳（产品 spec §8.4）：顶部标签页 + 子路由内容区。
+ * M2：标题/密级取自真实专题 manifest。
  */
 export function CaseWorkbench() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [caseInfo, setCaseInfo] = useState<ApiCase | null>(null);
+
+  useEffect(() => {
+    if (!user || !id) return;
+    let alive = true;
+    getCase(user, id)
+      .then((c) => alive && setCaseInfo(c))
+      .catch(() => alive && setCaseInfo(null));
+    return () => {
+      alive = false;
+    };
+  }, [user, id]);
 
   return (
     <div className="workbench">
       <div className="workbench__head">
         <div className="workbench__title-area">
-          <h1 className="workbench__title">专题工作台: {id?.toUpperCase()}</h1>
+          <h1 className="workbench__title">专题工作台: {caseInfo?.name ?? id}</h1>
           <span className="workbench__status-dot" title="活跃研判中" />
-          <span className={`badge badge--clearance tone-topsecret`} style={{ padding: "2px 8px", fontSize: "11px" }}>
-            绝密级研判
-          </span>
+          {caseInfo ? (
+            <span className={`badge badge--clearance tone-${caseInfo.clearance}`} style={{ padding: "2px 8px", fontSize: "11px" }}>
+              {CLEARANCE_LABELS[caseInfo.clearance]}级
+            </span>
+          ) : null}
         </div>
-        <span className="workbench__hint">
-          M0 运行中：当前使用客户端模拟状态。
-        </span>
+        <span className="workbench__hint">素材汇入与加工已接通（M2）；要素/问答/报告为后续里程碑。</span>
       </div>
 
       <nav className="tabs">
@@ -37,9 +64,9 @@ export function CaseWorkbench() {
           </NavLink>
         ))}
         <span className="tabs__spacer" />
-        <button type="button" className="btn btn--primary" style={{ padding: "6px 14px", fontSize: "12px" }}>
+        <NavLink to="materials" className="btn btn--primary" style={{ padding: "6px 14px", fontSize: "12px" }}>
           + 汇入线索
-        </button>
+        </NavLink>
       </nav>
 
       <div className="workbench__body">
@@ -50,180 +77,162 @@ export function CaseWorkbench() {
 }
 
 // ==================== 1. Materials Sub-panel ====================
-interface LineObject {
-  text: string;
-  isLowConfidence?: boolean;
-  confidence?: number;
-}
 
-interface MockFile {
-  id: string;
-  name: string;
-  type: string;
-  size: string;
-  time: string;
-  status: string;
-  confidence: string;
-  content: LineObject[];
-}
+const MODALITY_LABELS: Record<ApiMaterial["modality"], string> = {
+  doc: "文档",
+  audio: "音频",
+  video: "视频",
+  image: "图片",
+};
 
-const MOCK_FILES: MockFile[] = [
-  {
-    id: "f1",
-    name: "intercepted_radio_audio_transcript.txt",
-    type: "语音转写",
-    size: "12.4 KB",
-    time: "2026-06-04 10:15",
-    status: "已就绪",
-    confidence: "78%",
-    content: [
-      { text: "[时间: 2026-06-03 23:12:44]" },
-      { text: "[通话发起人: 代号 'Siberia_01']" },
-      { text: "[通话接收人: 未知方]" },
-      { text: "Siberia_01: 我们已经完成了第一阶段的边界测试。诱饵宏文件已通过加密通道分发。" },
-      { text: "未知方: 很好，接收方的邮件网关是否有拦截迹象？" },
-      { text: "Siberia_01: 没有。他们使用的是过时的安全策略。我们成功向宿主主机注入了载荷。", isLowConfidence: true, confidence: 45 },
-      { text: "未知方: 注意掩盖你的来源。Moscow HQ 要求我们在 24 小时内获得内网域控控制权限。" },
-      { text: "Siberia_01: 正在尝试通过 SMB 共享协议在受害网络进行横向渗透。", isLowConfidence: true, confidence: 52 },
-    ]
-  },
-  {
-    id: "f2",
-    name: "APT29_attack_pattern_log.csv",
-    type: "系统日志",
-    size: "45.1 KB",
-    time: "2026-06-04 09:30",
-    status: "已就绪",
-    confidence: "98%",
-    content: [
-      { text: "Timestamp,Source_IP,Dest_IP,Protocol,Event_Type,Details" },
-      { text: "2026-06-03 23:15:02,192.168.12.4,192.168.12.10,SMB,Connection,Intrusion Attempt" },
-      { text: "2026-06-03 23:15:10,192.168.12.4,192.168.12.10,SMB,Privilege Escalation,Mimikatz Dump Run" },
-      { text: "2026-06-03 23:16:32,192.168.12.4,10.0.1.25,HTTPS,C2 Call,Beacon to domains 'update.microsoft-sys.org'" },
-      { text: "2026-06-03 23:18:00,192.168.12.10,10.0.1.25,HTTPS,Data Exfiltration,50MB archive transmitted" }
-    ]
-  },
-  {
-    id: "f3",
-    name: "satellite_imagery_analysis.pdf",
-    type: "图像分析报告",
-    size: "2.1 MB",
-    time: "2026-06-03 16:40",
-    status: "已就绪",
-    confidence: "91%",
-    content: [
-      { text: "【卫星过境图像解译通报】" },
-      { text: "解译机构: 南海前哨分析组" },
-      { text: "观测目标: X号岛礁周边海域" },
-      { text: "解译详情: 发现有中型护卫舰 1 艘及雷达巡逻艇 2 艘在特定经纬度海域徘徊。" },
-      { text: "评估: 该活动与此前拦截到的无线电呼号频段变更事件具有时间强关联性。" }
-    ]
-  },
-  {
-    id: "f4",
-    name: "firewall_alerts_weekly_report.xlsx",
-    type: "安全报告",
-    size: "1.2 MB",
-    time: "2026-06-04 11:00",
-    status: "解析中",
-    confidence: "--",
-    content: [
-      { text: "【正在后台解析数据流...】" },
-      { text: "M2 阶段将接入大模型分布式预处理 Skill，请耐心等待。" }
-    ]
-  }
-];
+const STATUS_LABELS: Record<ApiMaterial["status"], { text: string; color: string }> = {
+  pending: { text: "待加工", color: "var(--warn-light)" },
+  processing: { text: "加工中", color: "var(--warn-light)" },
+  done: { text: "已完成", color: "var(--ok-light)" },
+  failed: { text: "失败", color: "var(--danger-light)" },
+};
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function MaterialsPanel() {
-  const [activeFileId, setActiveFileId] = useState("f1");
-  const activeFile = MOCK_FILES.find((f) => f.id === activeFileId) ?? MOCK_FILES[0];
-  const [editLineIdx, setEditLineIdx] = useState<number | null>(null);
-  const [editText, setEditText] = useState("");
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleEditClick = (idx: number, currentText: string) => {
-    setEditLineIdx(idx);
-    setEditText(currentText);
+  const [materials, setMaterials] = useState<ApiMaterial[] | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [content, setContent] = useState<MaterialContent | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () => {
+    if (!user || !caseId) return;
+    listMaterials(user, caseId)
+      .then((list) => {
+        setMaterials(list);
+        setActiveId((prev) => prev ?? list[0]?.id ?? null);
+      })
+      .catch((e: Error) => setError(e.message));
   };
 
-  const handleSaveEdit = (idx: number) => {
-    activeFile.content[idx].text = editText;
-    activeFile.content[idx].isLowConfidence = false;
-    setEditLineIdx(null);
+  useEffect(refresh, [user, caseId]);
+
+  useEffect(() => {
+    if (!user || !activeId) {
+      setContent(null);
+      return;
+    }
+    let alive = true;
+    getMaterialContent(user, activeId)
+      .then((c) => alive && setContent(c))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [user, activeId]);
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!user || !caseId || !fileList || fileList.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const payload = await Promise.all(Array.from(fileList).map(readFileForUpload));
+      const ingested = await ingestMaterials(user, caseId, payload);
+      refresh();
+      if (ingested[0]) setActiveId(ingested[0].id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   return (
     <div className="materials-layout">
-      {/* File Sidebar */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => void handleFiles(e.target.files)}
+      />
+
+      {/* 素材侧栏 */}
       <div className="materials-sidebar">
-        <div style={{ padding: "12px", borderBottom: "1px solid var(--border)", fontSize: "12px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>线索素材列表</div>
-        {MOCK_FILES.map((f) => (
-          <div
-            key={f.id}
-            className={`materials-item ${activeFileId === f.id ? "active" : ""}`}
-            onClick={() => {
-              setActiveFileId(f.id);
-              setEditLineIdx(null);
-            }}
-          >
-            <div className="materials-item__title">{f.name}</div>
-            <div className="materials-item__meta">
-              <span>{f.type}</span>
-              <span style={{ color: f.status === "已就绪" ? "var(--ok-light)" : "var(--warn-light)" }}>
-                {f.status} (置信度: {f.confidence})
-              </span>
-            </div>
+        <div style={{ padding: "12px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>
+            线索素材 ({materials?.length ?? 0})
+          </span>
+          <button type="button" className="btn btn--primary" style={{ padding: "4px 10px", fontSize: "11px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+            {busy ? "汇入中…" : "+ 汇入"}
+          </button>
+        </div>
+
+        {error ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--danger-light)" }}>{error}</div> : null}
+
+        {materials === null ? (
+          <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
+        ) : materials.length === 0 ? (
+          <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
+            还没有素材。点击「+ 汇入」上传文档（TXT/MD/CSV/JSON/LOG 等可直接加工；PDF/Office/音视频/图片暂降级占位）。
           </div>
-        ))}
+        ) : (
+          materials.map((m) => {
+            const s = STATUS_LABELS[m.status];
+            return (
+              <div key={m.id} className={`materials-item ${activeId === m.id ? "active" : ""}`} onClick={() => setActiveId(m.id)}>
+                <div className="materials-item__title">{m.filename}</div>
+                <div className="materials-item__meta">
+                  <span>{MODALITY_LABELS[m.modality]} · {formatSize(m.size)}</span>
+                  <span style={{ color: s.color }}>
+                    {s.text}
+                    {m.status === "done" && m.chunk_count !== undefined ? ` · ${m.chunk_count} 块` : ""}
+                  </span>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
-      {/* Content Viewer */}
+      {/* 内容阅读区 */}
       <div className="materials-viewer">
-        <div className="materials-viewer__header">
-          <div className="materials-viewer__title">
-            📄 {activeFile.name}
+        {!content ? (
+          <div style={{ padding: "32px", color: "var(--text-dim)", fontSize: "14px" }}>
+            {materials && materials.length === 0 ? "汇入素材后在此阅读归一化原文与切块结果。" : "选择左侧素材查看内容。"}
           </div>
-          <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
-            类别: <strong style={{ color: "#fff" }}>{activeFile.type}</strong> | 大小: {activeFile.size} | 导入时间: {activeFile.time}
-          </div>
-        </div>
-        
-        <div className="materials-viewer__body">
-          {activeFile.content.map((line, idx) => (
-            <div key={idx} style={{ marginBottom: "10px", display: "flex", gap: "10px", alignItems: "flex-start" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "monospace", width: "24px", textAlign: "right", marginTop: "4px" }}>
-                {idx + 1}
-              </span>
-              
-              {editLineIdx === idx ? (
-                <div style={{ display: "flex", gap: "8px", flex: 1 }}>
-                  <input
-                    type="text"
-                    className="input-text"
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    style={{ padding: "4px 8px", fontSize: "13px" }}
-                  />
-                  <button type="button" className="btn btn--primary" onClick={() => handleSaveEdit(idx)} style={{ padding: "4px 10px", fontSize: "11px" }}>保存</button>
-                  <button type="button" className="btn btn--ghost" onClick={() => setEditLineIdx(null)} style={{ padding: "4px 10px", fontSize: "11px" }}>取消</button>
-                </div>
+        ) : (
+          <>
+            <div className="materials-viewer__header">
+              <div className="materials-viewer__title">📄 {content.material.filename}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+                模态: <strong style={{ color: "#fff" }}>{MODALITY_LABELS[content.material.modality]}</strong> | 格式: {content.material.format} | 大小:{" "}
+                {formatSize(content.material.size)} | 汇入: {content.material.ingested_at.replace("T", " ").slice(0, 19)}
+                {content.chunkCount !== undefined ? ` | 切块: ${content.chunkCount}` : ""}
+              </div>
+            </div>
+
+            <div className="materials-viewer__body">
+              {content.text !== undefined ? (
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: "13px", lineHeight: "1.7", color: "var(--text)", margin: 0 }}>
+                  {content.text}
+                </pre>
               ) : (
-                <p style={{ flex: 1, color: line.isLowConfidence ? "inherit" : "var(--text)" }}>
-                  {line.isLowConfidence ? (
-                    <span
-                      className="highlight-low"
-                      title={`语音识别置信度偏低 (${line.confidence}%)，双击可人工校对修正`}
-                      onDoubleClick={() => handleEditClick(idx, line.text)}
-                    >
-                      {line.text} ✏️
-                    </span>
-                  ) : (
-                    line.text
-                  )}
-                </p>
+                <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
+                  ⚠️ {content.note ?? "该素材尚未加工完成。"}
+                  <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
+                    （一期仅文本文档做实加工；该模态待接入本地模型后接通。）
+                  </div>
+                </div>
               )}
             </div>
-          ))}
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

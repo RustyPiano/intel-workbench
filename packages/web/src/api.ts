@@ -38,6 +38,36 @@ export interface VerifyResult {
   reason?: string;
 }
 
+export type Modality = "doc" | "audio" | "video" | "image";
+export type MaterialStatus = "pending" | "processing" | "done" | "failed";
+
+export interface ApiMaterial {
+  id: string;
+  case_id: string;
+  filename: string;
+  modality: Modality;
+  format: string;
+  size: number;
+  ingested_at: string;
+  status: MaterialStatus;
+  language?: string;
+  chunk_count?: number;
+  note?: string;
+}
+
+export interface MaterialContent {
+  material: ApiMaterial;
+  text?: string;
+  chunkCount?: number;
+  note?: string;
+}
+
+export interface IngestFile {
+  filename: string;
+  content: string;
+  encoding: "utf8" | "base64";
+}
+
 function headers(user: SessionUser, json = false): Record<string, string> {
   const h: Record<string, string> = {
     "x-user-id": user.id,
@@ -66,6 +96,51 @@ export function createCase(user: SessionUser, input: { name: string; clearance: 
     headers: headers(user, true),
     body: JSON.stringify(input),
   }).then((r) => unwrap<ApiCase>(r, "case"));
+}
+
+export function getCase(user: SessionUser, id: string): Promise<ApiCase> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, { headers: headers(user) }).then((r) => unwrap<ApiCase>(r, "case"));
+}
+
+export function listMaterials(user: SessionUser, caseId: string): Promise<ApiMaterial[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, { headers: headers(user) }).then((r) =>
+    unwrap<ApiMaterial[]>(r, "materials"),
+  );
+}
+
+export function ingestMaterials(user: SessionUser, caseId: string, files: IngestFile[]): Promise<ApiMaterial[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, {
+    method: "POST",
+    headers: headers(user, true),
+    body: JSON.stringify({ files }),
+  }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
+}
+
+export function getMaterialContent(user: SessionUser, materialId: string): Promise<MaterialContent> {
+  return fetch(`${BASE}/materials/${encodeURIComponent(materialId)}`, { headers: headers(user) }).then(async (r) => {
+    const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
+    if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
+  });
+}
+
+/** 浏览器侧读取文件：文本走 utf8，其余走 base64（媒体在服务端降级）。 */
+const TEXT_EXTS = new Set(["txt", "md", "markdown", "text", "csv", "tsv", "log", "json", "yaml", "yml", "htm", "html"]);
+
+export function readFileForUpload(file: File): Promise<IngestFile> {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const isText = TEXT_EXTS.has(ext);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    if (isText) {
+      reader.onload = () => resolve({ filename: file.name, content: String(reader.result), encoding: "utf8" });
+      reader.readAsText(file);
+    } else {
+      reader.onload = () => resolve({ filename: file.name, content: String(reader.result).split(",")[1] ?? "", encoding: "base64" });
+      reader.readAsDataURL(file);
+    }
+  });
 }
 
 export function listAudit(user: SessionUser): Promise<AuditEvent[]> {

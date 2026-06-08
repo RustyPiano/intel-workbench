@@ -95,6 +95,18 @@ export interface ApiInquiry {
   claims: ApiClaim[];
 }
 
+export type ElementType = "person" | "org" | "location" | "event" | "equipment" | "time";
+
+export interface ApiElement {
+  id: string;
+  type: ElementType;
+  name: string;
+  aliases: string[];
+  mentions: ApiCitation[];
+  freq: number;
+  note?: string;
+}
+
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
 
 export interface ApiReport {
@@ -221,6 +233,20 @@ export function getMaterialContent(user: SessionUser, materialId: string): Promi
     if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
   });
+}
+
+// ---- 要素抽取 ----
+
+export function listElements(user: SessionUser, caseId: string): Promise<ApiElement[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { headers: headers(user) }).then((r) =>
+    unwrap<ApiElement[]>(r, "elements"),
+  );
+}
+
+export function extractElements(user: SessionUser, caseId: string): Promise<ApiElement[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { method: "POST", headers: headers(user) }).then((r) =>
+    unwrap<ApiElement[]>(r, "elements"),
+  );
 }
 
 // ---- 报告（M4，复核闸门） ----

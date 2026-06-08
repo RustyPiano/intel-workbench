@@ -6,19 +6,23 @@ import {
   askInquiry,
   draftReport,
   exportReport,
+  extractElements,
   getCase,
   getMaterialContent,
   getReport,
   ingestMaterials,
+  listElements,
   listInquiries,
   listMaterials,
   readFileForUpload,
   submitReport,
   type ApiCase,
   type ApiClaim,
+  type ApiElement,
   type ApiInquiry,
   type ApiMaterial,
   type ApiReport,
+  type ElementType,
   type MaterialContent,
 } from "../api";
 import { useSession } from "../state/session";
@@ -64,7 +68,7 @@ export function CaseWorkbench() {
             </span>
           ) : null}
         </div>
-        <span className="workbench__hint">素材汇入加工（M2）与问答带溯源（M3）已接通；要素/报告为后续里程碑。</span>
+        <span className="workbench__hint">素材加工 · 要素抽取 · 问答带溯源 · 报告复核闸门 均已接通（结论均绑定素材出处）。</span>
       </div>
 
       <nav className="tabs">
@@ -249,69 +253,112 @@ export function MaterialsPanel() {
 }
 
 // ==================== 2. Elements Sub-panel ====================
-interface ExtractedElement {
-  id: string;
-  name: string;
-  category: "person" | "org" | "loc" | "event";
-  categoryText: string;
-  freq: number;
-  desc: string;
-  source: string;
+
+const ELEMENT_TYPE_LABELS: Record<ElementType, string> = {
+  person: "人物",
+  org: "组织",
+  location: "地点",
+  event: "事件",
+  equipment: "装备",
+  time: "时间",
+};
+
+const ELEMENT_TYPE_ICONS: Record<ElementType, string> = {
+  person: "👤",
+  org: "🏢",
+  location: "📍",
+  event: "⚡",
+  equipment: "🛠️",
+  time: "🕐",
+};
+
+const ELEMENT_TYPES: ElementType[] = ["person", "org", "location", "event", "equipment", "time"];
+
+function mentionSources(el: ApiElement): string {
+  return [...new Set(el.mentions.map((m) => m.material_name))].join("、");
 }
 
-const EXTRACTED_ELEMENTS: ExtractedElement[] = [
-  { id: "e1", name: "Siberia_01", category: "person", categoryText: "人物", freq: 4, desc: "通话发起端特工代号，疑似外军网络战分队成员", source: "intercepted_radio_audio_transcript.txt" },
-  { id: "e2", name: "APT-29 (Cozy Bear)", category: "org", categoryText: "组织", freq: 12, desc: "受某国政府资助的网络入侵组织，擅长鱼叉式钓鱼及隐蔽渗透", source: "APT29_attack_pattern_log.csv" },
-  { id: "e3", name: "Moscow HQ", category: "org", categoryText: "组织", freq: 2, desc: "通话提及指令下达源头中心", source: "intercepted_radio_audio_transcript.txt" },
-  { id: "e4", name: "南海X号岛礁周边", category: "loc", categoryText: "地点", freq: 3, desc: "卫星过境解译发生雷达静默的地理坐标区间", source: "satellite_imagery_analysis.pdf" },
-  { id: "e5", name: "鱼叉式钓鱼宏注入", category: "event", categoryText: "事件", freq: 5, desc: "本次针对受害者边界防御绕过的初始渗透事件", source: "APT29_attack_pattern_log.csv" },
-  { id: "e6", name: "SMB内网横向渗透", category: "event", categoryText: "事件", freq: 3, desc: "攻击者获取初步主机控制后在内网进行的扩散嗅探", source: "intercepted_radio_audio_transcript.txt" },
-];
-
 export function ElementsPanel() {
-  const [activeCat, setActiveCat] = useState<string>("all");
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [elements, setElements] = useState<ApiElement[] | null>(null);
+  const [activeCat, setActiveCat] = useState<ElementType | "all">("all");
   const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = EXTRACTED_ELEMENTS.filter((e) => {
-    const matchCat = activeCat === "all" || e.category === activeCat;
-    const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.desc.toLowerCase().includes(search.toLowerCase());
+  useEffect(() => {
+    if (!user || !caseId) return;
+    let alive = true;
+    listElements(user, caseId)
+      .then((els) => alive && setElements(els))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [user, caseId]);
+
+  const handleExtract = async () => {
+    if (!user || !caseId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setElements(await extractElements(user, caseId));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const all = elements ?? [];
+  const filtered = all.filter((e) => {
+    const matchCat = activeCat === "all" || e.type === activeCat;
+    const q = search.toLowerCase();
+    const matchSearch = !q || e.name.toLowerCase().includes(q) || e.aliases.some((a) => a.toLowerCase().includes(q));
     return matchCat && matchSearch;
   });
 
   return (
     <div className="elements-layout">
-      {/* Categories */}
       <div className="elements-categories">
         <div style={{ padding: "8px 12px", fontSize: "11px", fontWeight: "700", color: "var(--text-muted)" }}>分类过滤器</div>
-        <button type="button" className={`elements-cat-btn ${activeCat === "all" ? "active" : ""}`} onClick={() => setActiveCat("all")}>全部 ({EXTRACTED_ELEMENTS.length})</button>
-        <button type="button" className={`elements-cat-btn ${activeCat === "person" ? "active" : ""}`} onClick={() => setActiveCat("person")}>👤 人物</button>
-        <button type="button" className={`elements-cat-btn ${activeCat === "org" ? "active" : ""}`} onClick={() => setActiveCat("org")}>🏢 机构</button>
-        <button type="button" className={`elements-cat-btn ${activeCat === "loc" ? "active" : ""}`} onClick={() => setActiveCat("loc")}>📍 地点</button>
-        <button type="button" className={`elements-cat-btn ${activeCat === "event" ? "active" : ""}`} onClick={() => setActiveCat("event")}>⚡ 事件</button>
+        <button type="button" className={`elements-cat-btn ${activeCat === "all" ? "active" : ""}`} onClick={() => setActiveCat("all")}>
+          全部 ({all.length})
+        </button>
+        {ELEMENT_TYPES.map((t) => (
+          <button key={t} type="button" className={`elements-cat-btn ${activeCat === t ? "active" : ""}`} onClick={() => setActiveCat(t)}>
+            {ELEMENT_TYPE_ICONS[t]} {ELEMENT_TYPE_LABELS[t]} ({all.filter((e) => e.type === t).length})
+          </button>
+        ))}
       </div>
 
-      {/* Main Elements Grid */}
       <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
-        <div style={{ display: "flex", gap: "12px" }}>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
           <input
             type="text"
             className="input-text"
-            placeholder="🔍 过滤提取出的要素代号或说明…"
+            placeholder="🔍 过滤要素名称 / 别名…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ padding: "8px 12px", fontSize: "13px" }}
           />
+          <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleExtract} disabled={busy}>
+            {busy ? "抽取中…" : elements && elements.length > 0 ? "重新抽取" : "提取要素"}
+          </button>
         </div>
+
+        {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
 
         <div className="elements-main">
           <table className="elements-table">
             <thead>
               <tr>
-                <th>要素代号 / 名称</th>
+                <th>要素名称</th>
                 <th>类型</th>
                 <th>提及频次</th>
                 <th>出处关联</th>
-                <th>要素上下文解译背景</th>
+                <th>别名</th>
               </tr>
             </thead>
             <tbody>
@@ -319,22 +366,29 @@ export function ElementsPanel() {
                 <tr key={item.id}>
                   <td style={{ fontWeight: "700" }}>{item.name}</td>
                   <td>
-                    <span className={`entity-tag entity-tag--${item.category}`}>
-                      {item.categoryText}
-                    </span>
+                    <span className={`entity-tag entity-tag--${item.type}`}>{ELEMENT_TYPE_LABELS[item.type]}</span>
                   </td>
                   <td style={{ fontFamily: "monospace", fontSize: "14px", fontWeight: "600" }}>{item.freq}</td>
-                  <td style={{ fontSize: "11px", color: "var(--accent-light)", textDecoration: "underline", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.source}>
-                    {item.source}
+                  <td
+                    style={{ fontSize: "12px", color: "var(--accent-light)", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={item.mentions.map((m) => `${m.material_name}${m.locator.paragraph ? ` 第${m.locator.paragraph}段` : ""}：${m.snippet}`).join("\n")}
+                  >
+                    {mentionSources(item)}
                   </td>
-                  <td style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.4" }}>{item.desc}</td>
+                  <td style={{ color: "var(--text-dim)", fontSize: "13px" }}>{item.aliases.join("、") || "—"}</td>
                 </tr>
               ))}
-              {filtered.length === 0 && (
+              {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: "center", color: "var(--text-muted)", padding: "40px" }}>无匹配的要素结果。M3 阶段将接入大模型批量知识图谱关联。</td>
+                  <td colSpan={5} style={{ textAlign: "center", color: "var(--text-muted)", padding: "40px", lineHeight: "1.7" }}>
+                    {elements === null
+                      ? "加载中…"
+                      : all.length === 0
+                        ? "尚未抽取要素。点击「提取要素」从已加工文档中抽取人物/组织/地点/事件等（需文本模型已配置）。每个要素都会绑定到素材出处。"
+                        : "无匹配的要素。"}
+                  </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>

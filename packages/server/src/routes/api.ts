@@ -3,12 +3,14 @@ import { Router, type Request, type Response } from "express";
 import type { AdminService } from "../admin/admin-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
+import type { ElementService } from "../elements/element-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { MaterialService } from "../materials/material-service.js";
 import type { ReportService } from "../report/report-service.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createCasesRouter } from "./cases.js";
+import { createElementsRouter } from "./elements.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
 import { createReportsRouter } from "./reports.js";
@@ -32,7 +34,6 @@ interface StubRoute {
 /** 仍未接通的 §5 路由（已做实的专题/素材/审计路由不在此列）。 */
 const STUB_ROUTES: readonly StubRoute[] = [
   { method: "post", path: "/auth/login", summary: "登录，返回会话与角色/密级", disposition: "实" },
-  { method: "get", path: "/cases/:id/elements", summary: "要素/关系/时间线", disposition: "占" },
 ] as const;
 
 function notImplemented(route: StubRoute) {
@@ -51,6 +52,7 @@ export interface ApiServices {
   audit: AuditService;
   materials: MaterialService;
   inquiries: InquiryService;
+  elements: ElementService;
   reports: ReportService;
   admin: AdminService;
 }
@@ -73,6 +75,7 @@ export function createApiRouter(services: ApiServices): Router {
         "GET/POST /api/cases/:id/materials",
         "GET /api/materials/:mid",
         "GET/POST /api/cases/:id/inquiries",
+        "GET/POST /api/cases/:id/elements",
         "GET /api/cases/:id/report",
         "POST /api/cases/:id/report/{draft,submit,approve,export}",
         "GET /api/admin/{skills,models,users,prompts}",
@@ -93,6 +96,7 @@ export function createApiRouter(services: ApiServices): Router {
   // 做实路由（挂在 stub 之前，未匹配的子路径回落到 stub）。
   router.use("/cases", createCasesRouter(services.cases, services.materials));
   router.use("/cases", createInquiriesRouter(services.inquiries));
+  router.use("/cases", createElementsRouter(services.elements));
   router.use("/cases", createReportsRouter(services.reports));
   router.use("/materials", createMaterialsRouter(services.materials));
   router.use("/admin", createAdminRouter(services.admin));

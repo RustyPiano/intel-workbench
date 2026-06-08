@@ -1,16 +1,15 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { ModelAdapter } from "mini-agent";
-
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Citation, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
+import type { Chunk, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
-import type { OfflineGuard } from "../security/offline-guard.js";
-import { sha256, shortId } from "../util/hash.js";
+import { generateJson, type LlmDeps } from "../model/structured.js";
+import { shortId } from "../util/hash.js";
+import { resolveValidCitations } from "./citation.js";
 import { retrieve } from "./retrieval.js";
 
 /**
@@ -24,14 +23,6 @@ const INSUFFICIENT = "现有材料不足以判断";
 const TIMEOUT_MS = 60_000;
 const TOP_K = 6;
 
-export interface InquiryDeps {
-  /** 文本 LLM 适配器；未配置为 null。 */
-  adapter: ModelAdapter | null;
-  guard: OfflineGuard;
-  /** 模型出站端点（baseURL），交 OfflineGuard 授权；未配置为 ""。 */
-  modelEndpoint: string;
-}
-
 interface RawClaim {
   text?: unknown;
   type?: unknown;
@@ -42,24 +33,13 @@ interface RawOutput {
   insufficient?: boolean;
 }
 
-/** 从模型输出中稳健地抽出 JSON（容忍 ```json 围栏 / 前后缀文字）。 */
-export function parseJsonOutput(content: string): RawOutput {
-  let text = content.trim();
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) text = fence[1].trim();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("模型未返回可解析的 JSON");
-  return JSON.parse(text.slice(start, end + 1)) as RawOutput;
-}
-
 export class InquiryService {
   constructor(
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
     private readonly cases: CaseService,
     private readonly materials: MaterialService,
-    private readonly deps: InquiryDeps,
+    private readonly deps: LlmDeps,
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
@@ -139,32 +119,17 @@ export class InquiryService {
     return this.make(actor, question, "answered", answer, claims);
   }
 
-  /** CitationService 校验（§7.3 step 4）：引用必须命中检索集且 content_hash 一致。 */
+  /** CitationService 校验（§7.3 step 4）：每条引用须命中检索集且 content_hash 一致。 */
   private validateClaim(rc: RawClaim, retrievedById: Map<string, Chunk>, nameById: Map<string, string>): InquiryClaim {
     const type = rc.type === "inference" ? "inference" : "fact";
     const ids = Array.isArray(rc.citations) ? rc.citations.filter((x): x is string => typeof x === "string") : [];
-    const citations: Citation[] = [];
-    let valid = ids.length > 0;
-    for (const id of ids) {
-      const chunk = retrievedById.get(id);
-      if (!chunk || sha256(chunk.text) !== chunk.content_hash) {
-        valid = false;
-        continue;
-      }
-      citations.push({
-        material_id: chunk.material_id,
-        material_name: nameById.get(chunk.material_id) ?? chunk.material_id,
-        modality: "doc",
-        locator: chunk.locator,
-        snippet: chunk.text.slice(0, 200),
-        confidence: 0.6,
-        content_hash: chunk.content_hash,
-      });
-    }
+    const citations = resolveValidCitations(ids, retrievedById, nameById);
+    // 结论须被完全支撑：所有引用都有效且至少一条。
+    const verified = ids.length > 0 && citations.length === ids.length;
     return {
       text: String(rc.text ?? "").trim(),
       type,
-      status: valid && citations.length > 0 ? "verified" : "unverified",
+      status: verified ? "verified" : "unverified",
       citations,
     };
   }
@@ -179,22 +144,7 @@ export class InquiryService {
       '{"claims":[{"text":"结论文本","type":"fact|inference","citations":["chunk_id"]}],"insufficient":false}',
     ].join("\n");
     const userContent = `素材片段：\n${context}\n\n问题：${question}\n\n请只输出 JSON。`;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    try {
-      const result = await this.deps.adapter!.generate({
-        systemPrompt,
-        messages: [{ role: "user", content: userContent }],
-        tools: [],
-        temperature: 0,
-        maxTokens: 1500,
-        signal: controller.signal,
-      });
-      return parseJsonOutput(result.message.content);
-    } finally {
-      clearTimeout(timer);
-    }
+    return (await generateJson(this.deps.adapter!, systemPrompt, userContent, { timeoutMs: TIMEOUT_MS })) as RawOutput;
   }
 
   private make(actor: Identity, question: string, status: Inquiry["status"], answer: string, claims: InquiryClaim[]): Inquiry {

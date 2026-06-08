@@ -10,8 +10,10 @@ import { AuditService } from "./audit/audit-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
 import { AppError, identityMiddleware } from "./domain/identity.js";
+import { ElementService } from "./elements/element-service.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
 import { MaterialService } from "./materials/material-service.js";
+import type { LlmDeps } from "./model/structured.js";
 import { readModelConfig } from "./model/model-config.js";
 import { ReportService } from "./report/report-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
@@ -38,6 +40,7 @@ export interface AppServices {
   cases: CaseService;
   materials: MaterialService;
   inquiries: InquiryService;
+  elements: ElementService;
   reports: ReportService;
   admin: AdminService;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
@@ -80,11 +83,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
     ? createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey })
     : null;
   const guard = new OfflineGuard(model.configured ? [model.host] : [], audit);
-  const inquiries = new InquiryService(paths, audit, cases, materials, {
-    adapter,
-    guard,
-    modelEndpoint: model.configured ? model.baseURL : "",
-  });
+  const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
+  const inquiries = new InquiryService(paths, audit, cases, materials, llm);
+  const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist);
 
@@ -94,6 +95,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     cases,
     materials,
     inquiries,
+    elements,
     reports,
     admin,
     modelConfigured: model.configured,
@@ -102,7 +104,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：身份注入（开发期）→ 路由（实 + §5 占位）。
-  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries, reports, admin }));
+  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries, elements, reports, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

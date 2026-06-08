@@ -97,6 +97,21 @@ export interface Inquiry {
   claims: InquiryClaim[];
 }
 
+/** 要素类型（产品 spec §5.2）。 */
+export type ElementType = "person" | "org" | "location" | "event" | "equipment" | "time";
+
+/** 情报要素（产品 spec §5.2）。mentions = 提及，每条指回素材出处（即 Citation）。 */
+export interface Element {
+  id: string;
+  type: ElementType;
+  name: string;
+  aliases: string[];
+  mentions: Citation[];
+  /** 出现次数 = 有效提及数。 */
+  freq: number;
+  note?: string;
+}
+
 /** 报告复核状态机（工程方案 §7.4）：草稿 → 待复核 → 已复核 → 已导出。 */
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
 

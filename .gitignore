@@ -11,12 +11,13 @@ packages/web/dist/
 packages/web/node_modules/.vite/
 
 # runtime data (落盘产物，不入库)：专题、审计链、用户配置、媒体任务
-cases/
-audit/
-config/
-.cache/
-tasks/
-av-tasks/
+# 注意：用根锚定（前导 /），避免误伤同名的源码目录（如 packages/server/src/audit）。
+/cases/
+/audit/
+/config/
+/.cache/
+/tasks/
+/av-tasks/
 
 __pycache__/
 *.pyc

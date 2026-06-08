@@ -1,0 +1,24 @@
+{
+  "name": "@intel-workbench/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "情报分析工作台 — 本地 HTTP API 服务（M0 脚手架：健康检查 + §5 路由占位）。",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "mini-agent": "file:../.."
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

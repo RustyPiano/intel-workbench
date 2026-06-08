@@ -1,0 +1,25 @@
+{
+  "name": "@intel-workbench/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "情报分析工作台 — React + Vite 前端（M0 脚手架：全局外壳 + 双面分离 + §8 全路由占位）。",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.0"
+  }
+}

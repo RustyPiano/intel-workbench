@@ -3,8 +3,20 @@
   "version": "1.1.0",
   "description": "A minimal local-first agent runtime with skills, tools, sessions, and a model adapter interface.",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "mini-agent": "./dist/src/cli/bin.js"
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist/src/",
@@ -23,7 +35,13 @@
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check": "npm run typecheck && npm run test:run"
+    "check": "npm run typecheck && npm run test:run",
+    "dev:server": "npm run dev --workspace @intel-workbench/server",
+    "dev:web": "npm run dev --workspace @intel-workbench/web",
+    "build:server": "npm run build --workspace @intel-workbench/server",
+    "build:web": "npm run build --workspace @intel-workbench/web",
+    "typecheck:server": "npm run typecheck --workspace @intel-workbench/server",
+    "typecheck:web": "npm run typecheck --workspace @intel-workbench/web"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1057.0",

@@ -1,4 +1,4 @@
-import type { Clearance, SessionUser } from "./types";
+import type { Clearance, Role, SessionUser } from "./types";
 
 /**
  * 本地 HTTP API 客户端（M1）。开发期身份经请求头注入（仅 ASCII），
@@ -95,6 +95,64 @@ export interface ApiInquiry {
   claims: ApiClaim[];
 }
 
+export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
+
+export interface ApiReport {
+  status: ReportStatus;
+  spec: {
+    title: string;
+    classification?: string;
+    summary?: string;
+    sections: { heading: string; body: string }[];
+    conclusion?: string;
+    issuer?: string;
+    date?: string;
+  };
+  drafted_by: string;
+  drafted_at: string;
+  submitted_by?: string;
+  reviewed_by?: string;
+  exported_by?: string;
+  rendered: boolean;
+}
+
+export interface DraftReportInput {
+  title: string;
+  body?: string;
+  summary?: string;
+  conclusion?: string;
+}
+
+export interface ApiSkill {
+  name: string;
+  description: string;
+  enabled: boolean;
+  healthy: boolean;
+}
+
+export interface ApiModelDoctor {
+  configured: boolean;
+  provider: string;
+  model: string;
+  host: string;
+  allowlisted: boolean;
+}
+
+export interface ApiUser {
+  id: string;
+  name: string;
+  role: Role;
+  clearance: Clearance;
+  enabled: boolean;
+}
+
+export interface ApiPrompt {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+}
+
 function headers(user: SessionUser, json = false): Record<string, string> {
   const h: Record<string, string> = {
     "x-user-id": user.id,
@@ -162,6 +220,71 @@ export function getMaterialContent(user: SessionUser, materialId: string): Promi
     const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
     if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
+  });
+}
+
+// ---- 报告（M4，复核闸门） ----
+
+export function getReport(user: SessionUser, caseId: string): Promise<ApiReport | null> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report`, { headers: headers(user) }).then((r) =>
+    unwrap<ApiReport | null>(r, "report"),
+  );
+}
+
+export function draftReport(user: SessionUser, caseId: string, input: DraftReportInput): Promise<ApiReport> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/draft`, {
+    method: "POST",
+    headers: headers(user, true),
+    body: JSON.stringify(input),
+  }).then((r) => unwrap<ApiReport>(r, "report"));
+}
+
+function reportAction(user: SessionUser, caseId: string, action: "submit" | "approve"): Promise<ApiReport> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/${action}`, { method: "POST", headers: headers(user) }).then(
+    (r) => unwrap<ApiReport>(r, "report"),
+  );
+}
+
+export const submitReport = (user: SessionUser, caseId: string) => reportAction(user, caseId, "submit");
+export const approveReport = (user: SessionUser, caseId: string) => reportAction(user, caseId, "approve");
+
+export function exportReport(user: SessionUser, caseId: string): Promise<{ filename: string; content: string; status: ReportStatus }> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers(user) }).then((r) =>
+    unwrap<{ filename: string; content: string; status: ReportStatus }>(r, "export"),
+  );
+}
+
+// ---- 管理后台（M5） ----
+
+export function listSkills(user: SessionUser): Promise<ApiSkill[]> {
+  return fetch(`${BASE}/admin/skills`, { headers: headers(user) }).then((r) => unwrap<ApiSkill[]>(r, "skills"));
+}
+
+export function setSkillEnabled(user: SessionUser, name: string, enabled: boolean): Promise<ApiSkill[]> {
+  return fetch(`${BASE}/admin/skills/${encodeURIComponent(name)}`, {
+    method: "POST",
+    headers: headers(user, true),
+    body: JSON.stringify({ enabled }),
+  }).then((r) => unwrap<ApiSkill[]>(r, "skills"));
+}
+
+export function modelDoctor(user: SessionUser): Promise<ApiModelDoctor> {
+  return fetch(`${BASE}/admin/models`, { headers: headers(user) }).then((r) => unwrap<ApiModelDoctor>(r, "model"));
+}
+
+export function listAdminUsers(user: SessionUser): Promise<ApiUser[]> {
+  return fetch(`${BASE}/admin/users`, { headers: headers(user) }).then((r) => unwrap<ApiUser[]>(r, "users"));
+}
+
+export function listPrompts(user: SessionUser): Promise<ApiPrompt[]> {
+  return fetch(`${BASE}/admin/prompts`, { headers: headers(user) }).then((r) => unwrap<ApiPrompt[]>(r, "prompts"));
+}
+
+export function exportAudit(user: SessionUser): Promise<{ exportedAt: string; count: number; events: AuditEvent[] }> {
+  return fetch(`${BASE}/audit/export`, { method: "POST", headers: headers(user) }).then(async (r) => {
+    const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
+    if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    return { exportedAt: body.exportedAt, count: body.count, events: body.events } as { exportedAt: string; count: number; events: AuditEvent[] };
   });
 }
 

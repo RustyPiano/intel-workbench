@@ -59,7 +59,7 @@ describe("API 接线（M1）", () => {
   });
 
   it("未接通能力仍占位 501", async () => {
-    const res = await fetch(`${base}/api/admin/users`, { headers: operatorHeaders });
+    const res = await fetch(`${base}/api/auth/login`, { method: "POST", headers: operatorHeaders, body: "{}" });
     expect(res.status).toBe(501);
   });
 });

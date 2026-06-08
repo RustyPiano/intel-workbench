@@ -52,6 +52,14 @@ describe("AuditService 哈希链（§7.2）", () => {
     expect(verdict.brokenAt).toBe(0);
   });
 
+  it("并发 append 仍保持链接完整（单写者串行）", async () => {
+    await Promise.all(
+      Array.from({ length: 20 }, (_unused, i) => audit.append({ user: "u", action: "x", object: `o${i}` })),
+    );
+    const verdict = await audit.verify();
+    expect(verdict).toEqual({ ok: true, count: 20 });
+  });
+
   it("reconcile 找出有产物却缺 case.create 审计的孤儿专题", async () => {
     await audit.append({ user: "u1", action: "case.create", object: "case:has", caseId: "has", detail: { caseId: "has" } });
     const result = await audit.reconcile(["has", "orphan"]);

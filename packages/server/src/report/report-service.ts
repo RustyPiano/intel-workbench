@@ -75,7 +75,7 @@ export class ReportService {
       rendered: false,
     };
     await this.writeSpec(caseId, spec);
-    record.rendered = await this.render(caseId, spec);
+    record.rendered = await this.render(caseId);
     await this.write(caseId, record);
     await this.audit.append({
       user: actor.id,
@@ -168,8 +168,8 @@ export class ReportService {
     };
   }
 
-  /** 调 render_report.py 渲染 .md；失败不阻塞草稿（仅记 rendered=false）。 */
-  private async render(caseId: string, _spec: BulletinSpec): Promise<boolean> {
+  /** 调 render_report.py 渲染 .md（读已落盘的 spec）；失败不阻塞草稿。 */
+  private async render(caseId: string): Promise<boolean> {
     const outBase = path.join(this.reportDir(caseId), "bulletin");
     try {
       await execFileAsync("python3", [bulletinScriptPath(), this.specPath(caseId), outBase], { timeout: 20_000 });

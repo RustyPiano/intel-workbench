@@ -91,4 +91,11 @@ describe("CaseService（M1 数据底座）", () => {
     const cases = service(false);
     await expect(cases.get(OPERATOR, "nope")).rejects.toMatchObject({ status: 404 });
   });
+
+  it("拒绝路径穿越的 caseId（红线，不落到文件系统外）", async () => {
+    const cases = service(false);
+    for (const evil of ["../../etc", "..", "a/b", "x\\y"]) {
+      await expect(cases.get(OPERATOR, evil)).rejects.toMatchObject({ status: 400 });
+    }
+  });
 });

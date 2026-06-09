@@ -22,7 +22,7 @@ export function CaseListPage() {
   useEffect(() => {
     if (!user) return;
     let alive = true;
-    listCases(user)
+    listCases()
       .then((list) => alive && setCases(list))
       .catch((e: Error) => alive && setError(e.message));
     return () => {

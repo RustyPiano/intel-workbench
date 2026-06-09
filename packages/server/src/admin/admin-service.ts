@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AuditService } from "../audit/audit-service.js";
+import type { UserStore } from "../auth/user-store.js";
 import type { DataPaths } from "../data/paths.js";
-import { AppError } from "../domain/identity.js";
 import type { Clearance, Identity, Role } from "../domain/types.js";
 import type { ModelConfig } from "../model/model-config.js";
 
@@ -45,17 +45,6 @@ export interface PromptInfo {
   description: string;
 }
 
-interface StoredUser extends UserInfo {
-  /** 口令哈希（登录在后续接通；此处不回前端）。 */
-  pwd_hash: string;
-}
-
-const SEED_USERS: StoredUser[] = [
-  { id: "admin", name: "管理员", role: "admin", clearance: "topsecret", enabled: true, pwd_hash: "" },
-  { id: "operator", name: "作业员", role: "operator", clearance: "confidential", enabled: true, pwd_hash: "" },
-  { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true, pwd_hash: "" },
-];
-
 const BUILTIN_PROMPTS: PromptInfo[] = [
   { id: "inquiry.system", name: "问答系统基座（溯源约束）", role: "system", description: "只依据检索片段作答、每条结论须引用 chunk_id、无支撑则拒答（§7.3）。" },
   { id: "report.format", name: "公文通报排版", role: "report", description: "intel-bulletin render_report.py 的公文结构（标题/密级/分节/落款）。" },
@@ -80,6 +69,7 @@ export class AdminService {
     private readonly audit: AuditService,
     private readonly model: ModelConfig,
     private readonly egressAllowlist: readonly string[],
+    private readonly users: UserStore,
   ) {}
 
   async listSkills(): Promise<SkillInfo[]> {
@@ -137,8 +127,7 @@ export class AdminService {
   }
 
   async listUsers(): Promise<UserInfo[]> {
-    const users = await this.readUsers();
-    return users.map(({ pwd_hash: _pwd, ...u }) => u);
+    return this.users.list();
   }
 
   listPrompts(): PromptInfo[] {
@@ -156,18 +145,6 @@ export class AdminService {
       return JSON.parse(await readFile(this.skillsConfigPath(), "utf8")) as Record<string, boolean>;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw e;
-    }
-  }
-
-  private async readUsers(): Promise<StoredUser[]> {
-    try {
-      return JSON.parse(await readFile(this.paths.usersFile, "utf8")) as StoredUser[];
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        await this.writeJson(this.paths.usersFile, SEED_USERS); // 首次访问预置三角色
-        return SEED_USERS;
-      }
       throw e;
     }
   }

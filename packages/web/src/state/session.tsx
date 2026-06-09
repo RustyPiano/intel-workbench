@@ -1,59 +1,92 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { fetchMe, login as apiLogin, logout as apiLogout, setSessionToken } from "../api";
 import type { Role, SessionUser } from "../types";
 
 /**
- * Client-side session state for M0.
- *
- * There is NO real auth in M0 — the login screen just lets you pick a role and
- * we keep the chosen identity in React state (also mirrored to sessionStorage
- * so a refresh during dev doesn't bounce you to /login). M1 replaces this with
- * `POST /api/auth/login` against the local server.
+ * 客户端会话状态。身份由服务端会话决定：登录（`POST /api/auth/login`）拿到
+ * 令牌后存入 sessionStorage 并注入 API 客户端；刷新时凭存储令牌向 `/auth/me`
+ * 校验恢复，失效即清理并回登录页。
  */
 
 interface SessionContextValue {
   user: SessionUser | null;
-  signIn: (user: SessionUser) => void;
+  /** 启动期凭存储令牌恢复会话中——守卫据此避免误跳登录页。 */
+  loading: boolean;
+  signIn: (username: string, password: string) => Promise<SessionUser>;
   signOut: () => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-const STORAGE_KEY = "intel-workbench.session.v0";
+const TOKEN_KEY = "intel-workbench.token.v1";
 
-function loadInitial(): SessionUser | null {
+function readToken(): string | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as SessionUser) : null;
+    return sessionStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
 }
 
+function persistToken(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* sessionStorage 不可用 — 仅内存态 */
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<SessionUser | null>(loadInitial);
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // 启动恢复：有存储令牌则向服务端校验，失效则清理。
+  useEffect(() => {
+    const token = readToken();
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    setSessionToken(token);
+    let alive = true;
+    fetchMe()
+      .then((u) => {
+        if (alive) setUser(u);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSessionToken(null);
+        persistToken(null);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const value = useMemo<SessionContextValue>(
     () => ({
       user,
-      signIn: (next) => {
-        setUser(next);
-        try {
-          sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-        } catch {
-          /* sessionStorage unavailable — keep in-memory only */
-        }
+      loading,
+      signIn: async (username, password) => {
+        const { token, user: signedIn } = await apiLogin(username, password);
+        setSessionToken(token);
+        persistToken(token);
+        setUser(signedIn);
+        return signedIn;
       },
       signOut: () => {
+        void apiLogout();
+        setSessionToken(null);
+        persistToken(null);
         setUser(null);
-        try {
-          sessionStorage.removeItem(STORAGE_KEY);
-        } catch {
-          /* ignore */
-        }
       },
     }),
-    [user],
+    [user, loading],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

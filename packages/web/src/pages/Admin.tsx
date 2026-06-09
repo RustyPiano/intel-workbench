@@ -40,7 +40,7 @@ function useAdminData<T>(load: (user: ReturnType<typeof useSession>["user"]) => 
 
 /** 提示词模板（内置基线只读，产品 spec §8.11）。 */
 export function AdminPromptsPage() {
-  const { data: prompts, error } = useAdminData<ApiPrompt[]>((u) => (u ? listPrompts(u) : undefined));
+  const { data: prompts, error } = useAdminData<ApiPrompt[]>((u) => (u ? listPrompts() : undefined));
   return (
     <div className="page">
       <div className="page__head">
@@ -85,14 +85,14 @@ export function AdminPromptsPage() {
 
 /** Skill 管理：列表 / 启停 / 自检（产品 spec §8.12）。 */
 export function AdminSkillsPage() {
-  const { user, data: skills, error, reload } = useAdminData<ApiSkill[]>((u) => (u ? listSkills(u) : undefined));
+  const { user, data: skills, error, reload } = useAdminData<ApiSkill[]>((u) => (u ? listSkills() : undefined));
   const [busy, setBusy] = useState<string | null>(null);
 
   const toggle = async (skill: ApiSkill) => {
     if (!user) return;
     setBusy(skill.name);
     try {
-      await setSkillEnabled(user, skill.name, !skill.enabled);
+      await setSkillEnabled(skill.name, !skill.enabled);
       reload();
     } finally {
       setBusy(null);
@@ -126,7 +126,7 @@ export function AdminSkillsPage() {
 
 /** 模型配置 + 自检（doctor，脱敏，产品 spec §8.13）。 */
 export function AdminModelsPage() {
-  const { data: doctor, error } = useAdminData<ApiModelDoctor>((u) => (u ? modelDoctor(u) : undefined));
+  const { data: doctor, error } = useAdminData<ApiModelDoctor>((u) => (u ? modelDoctor() : undefined));
   return (
     <div className="page">
       <h1 className="page__title">模型适配器配置</h1>
@@ -167,7 +167,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 /** 用户与权限（最简，config/users.json，产品 spec §8.14）。 */
 export function AdminUsersPage() {
-  const { data: users, error } = useAdminData<ApiUser[]>((u) => (u ? listAdminUsers(u) : undefined));
+  const { data: users, error } = useAdminData<ApiUser[]>((u) => (u ? listAdminUsers() : undefined));
   return (
     <div className="page">
       <h1 className="page__title">用户与权限</h1>

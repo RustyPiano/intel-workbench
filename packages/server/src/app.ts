@@ -7,9 +7,11 @@ import express, { type ErrorRequestHandler, type Express } from "express";
 
 import { AdminService } from "./admin/admin-service.js";
 import { AuditService } from "./audit/audit-service.js";
+import { AuthService } from "./auth/auth-service.js";
+import { UserStore } from "./auth/user-store.js";
 import { CaseService } from "./cases/case-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
-import { AppError, identityMiddleware } from "./domain/identity.js";
+import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
 import { MaterialService } from "./materials/material-service.js";
@@ -73,6 +75,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const paths = resolveDataPaths(options.dataDir ?? defaultDataDir());
   const devMode = options.devMode ?? process.env.WORKBENCH_DEV_MODE !== "false";
   const audit = new AuditService(paths);
+  const users = new UserStore(paths);
+  const auth = new AuthService(users, audit);
   const cases = new CaseService(paths, audit, devMode);
   const materials = new MaterialService(paths, audit, cases);
 
@@ -87,7 +91,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const inquiries = new InquiryService(paths, audit, cases, materials, llm);
   const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
-  const admin = new AdminService(paths, audit, model, guard.allowlist);
+  const admin = new AdminService(paths, audit, model, guard.allowlist, users);
 
   const services: AppServices = {
     paths,
@@ -103,8 +107,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
   };
   app.locals.services = services;
 
-  // API surface：身份注入（开发期）→ 路由（实 + §5 占位）。
-  app.use("/api", identityMiddleware, createApiRouter({ cases, audit, materials, inquiries, elements, reports, admin }));
+  // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, reports, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

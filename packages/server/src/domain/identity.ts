@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 
-import { CLEARANCES, ROLES, type Clearance, type Identity, type Role } from "./types.js";
+import type { AuthService } from "../auth/auth-service.js";
+import type { Identity } from "./types.js";
 
 /** 业务错误：携带 HTTP 状态码，由全局错误处理中间件转 JSON。 */
 export class AppError extends Error {
@@ -22,32 +23,35 @@ declare global {
   }
 }
 
+/** 从 `Authorization: Bearer <token>` 取令牌。 */
+export function bearerToken(req: Request): string | undefined {
+  const h = req.headers.authorization;
+  if (!h) return undefined;
+  const m = /^Bearer\s+(.+)$/i.exec(Array.isArray(h) ? h[0] : h);
+  return m ? m[1].trim() : undefined;
+}
+
+/** 无需会话即可访问的路由（相对 `/api` 挂载点）。 */
+const PUBLIC_PATHS = new Set(["/health", "/_routes", "/auth/login"]);
+
 /**
- * 开发期身份（M1）。**真正的登录 / 会话 / 口令校验在 M5 落地**
- * （`config/users.json`）。现阶段服务端信任前端 role-picker 选定的身份，
- * 经请求头注入（仅 ASCII：id / role / clearance），并对取值做白名单兜底。
- * 审计的 `user` 即此处的 `id`。
+ * 鉴权中间件（产品 spec §8.1）。身份**仅**来自服务端会话：从
+ * `Authorization: Bearer <token>` 解析令牌 → AuthService 校验 → 注入
+ * `req.identity`。无效或缺失令牌的受保护路由返回 401。客户端不再能自报身份
+ * （替换 M1 的开发期请求头信任，闭合越权伪冒缺口）。
  */
-const DEV_DEFAULT: Identity = {
-  id: "dev-operator",
-  name: "演示作业员",
-  role: "operator",
-  clearance: "internal",
-};
-
-function pick<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T {
-  return value && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
-}
-
-function header(req: Request, key: string): string | undefined {
-  const v = req.headers[key];
-  return Array.isArray(v) ? v[0] : v;
-}
-
-export function identityMiddleware(req: Request, _res: Response, next: NextFunction): void {
-  const role = pick<Role>(header(req, "x-user-role"), ROLES, DEV_DEFAULT.role);
-  const clearance = pick<Clearance>(header(req, "x-user-clearance"), CLEARANCES, DEV_DEFAULT.clearance);
-  const id = header(req, "x-user-id") || DEV_DEFAULT.id;
-  req.identity = { id, name: id, role, clearance };
-  next();
+export function authMiddleware(auth: AuthService) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (PUBLIC_PATHS.has(req.path)) {
+      next();
+      return;
+    }
+    const identity = auth.resolve(bearerToken(req));
+    if (!identity) {
+      next(new AppError(401, "未登录或会话已失效"));
+      return;
+    }
+    req.identity = identity;
+    next();
+  };
 }

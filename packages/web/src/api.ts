@@ -1,11 +1,18 @@
 import type { Clearance, Role, SessionUser } from "./types";
 
 /**
- * 本地 HTTP API 客户端（M1）。开发期身份经请求头注入（仅 ASCII），
- * 真正的登录 / 会话在 M5 接通 `POST /api/auth/login`。
+ * 本地 HTTP API 客户端。身份由服务端会话决定：登录拿到令牌后，所有请求经
+ * `Authorization: Bearer <token>` 携带；服务端据此注入身份（客户端不再自报）。
  */
 
 const BASE = "/api";
+
+/** 模块级会话令牌，由 SessionProvider 在登录/恢复/登出时设置。 */
+let sessionToken: string | null = null;
+
+export function setSessionToken(token: string | null): void {
+  sessionToken = token;
+}
 
 export interface ApiCase {
   id: string;
@@ -165,12 +172,9 @@ export interface ApiPrompt {
   description: string;
 }
 
-function headers(user: SessionUser, json = false): Record<string, string> {
-  const h: Record<string, string> = {
-    "x-user-id": user.id,
-    "x-user-role": user.role,
-    "x-user-clearance": user.clearance,
-  };
+function headers(json = false): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (sessionToken) h.authorization = `Bearer ${sessionToken}`;
   if (json) h["content-type"] = "application/json";
   return h;
 }
@@ -183,52 +187,73 @@ async function unwrap<T>(res: Response, key: string): Promise<T> {
   return body[key] as T;
 }
 
-export function listCases(user: SessionUser): Promise<ApiCase[]> {
-  return fetch(`${BASE}/cases`, { headers: headers(user) }).then((r) => unwrap<ApiCase[]>(r, "cases"));
+// ---- 鉴权（产品 spec §8.1） ----
+
+export async function login(username: string, password: string): Promise<{ token: string; user: SessionUser }> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
+  if (!res.ok || body.ok === false) throw new Error(body.message ?? `登录失败（HTTP ${res.status}）`);
+  return { token: body.token as string, user: body.user as SessionUser };
 }
 
-export function createCase(user: SessionUser, input: { name: string; clearance: Clearance }): Promise<ApiCase> {
+export function fetchMe(): Promise<SessionUser> {
+  return fetch(`${BASE}/auth/me`, { headers: headers() }).then((r) => unwrap<SessionUser>(r, "user"));
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${BASE}/auth/logout`, { method: "POST", headers: headers() }).catch(() => undefined);
+}
+
+export function listCases(): Promise<ApiCase[]> {
+  return fetch(`${BASE}/cases`, { headers: headers() }).then((r) => unwrap<ApiCase[]>(r, "cases"));
+}
+
+export function createCase(input: { name: string; clearance: Clearance }): Promise<ApiCase> {
   return fetch(`${BASE}/cases`, {
     method: "POST",
-    headers: headers(user, true),
+    headers: headers(true),
     body: JSON.stringify(input),
   }).then((r) => unwrap<ApiCase>(r, "case"));
 }
 
-export function getCase(user: SessionUser, id: string): Promise<ApiCase> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, { headers: headers(user) }).then((r) => unwrap<ApiCase>(r, "case"));
+export function getCase(id: string): Promise<ApiCase> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, { headers: headers() }).then((r) => unwrap<ApiCase>(r, "case"));
 }
 
-export function listMaterials(user: SessionUser, caseId: string): Promise<ApiMaterial[]> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, { headers: headers(user) }).then((r) =>
+export function listMaterials(caseId: string): Promise<ApiMaterial[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, { headers: headers() }).then((r) =>
     unwrap<ApiMaterial[]>(r, "materials"),
   );
 }
 
-export function ingestMaterials(user: SessionUser, caseId: string, files: IngestFile[]): Promise<ApiMaterial[]> {
+export function ingestMaterials(caseId: string, files: IngestFile[]): Promise<ApiMaterial[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, {
     method: "POST",
-    headers: headers(user, true),
+    headers: headers(true),
     body: JSON.stringify({ files }),
   }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
 }
 
-export function listInquiries(user: SessionUser, caseId: string): Promise<ApiInquiry[]> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { headers: headers(user) }).then((r) =>
+export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { headers: headers() }).then((r) =>
     unwrap<ApiInquiry[]>(r, "inquiries"),
   );
 }
 
-export function askInquiry(user: SessionUser, caseId: string, question: string): Promise<ApiInquiry> {
+export function askInquiry(caseId: string, question: string): Promise<ApiInquiry> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
     method: "POST",
-    headers: headers(user, true),
+    headers: headers(true),
     body: JSON.stringify({ question }),
   }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
 }
 
-export function getMaterialContent(user: SessionUser, materialId: string): Promise<MaterialContent> {
-  return fetch(`${BASE}/materials/${encodeURIComponent(materialId)}`, { headers: headers(user) }).then(async (r) => {
+export function getMaterialContent(materialId: string): Promise<MaterialContent> {
+  return fetch(`${BASE}/materials/${encodeURIComponent(materialId)}`, { headers: headers() }).then(async (r) => {
     const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
     if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
@@ -237,77 +262,77 @@ export function getMaterialContent(user: SessionUser, materialId: string): Promi
 
 // ---- 要素抽取 ----
 
-export function listElements(user: SessionUser, caseId: string): Promise<ApiElement[]> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { headers: headers(user) }).then((r) =>
+export function listElements(caseId: string): Promise<ApiElement[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { headers: headers() }).then((r) =>
     unwrap<ApiElement[]>(r, "elements"),
   );
 }
 
-export function extractElements(user: SessionUser, caseId: string): Promise<ApiElement[]> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { method: "POST", headers: headers(user) }).then((r) =>
+export function extractElements(caseId: string): Promise<ApiElement[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { method: "POST", headers: headers() }).then((r) =>
     unwrap<ApiElement[]>(r, "elements"),
   );
 }
 
 // ---- 报告（M4，复核闸门） ----
 
-export function getReport(user: SessionUser, caseId: string): Promise<ApiReport | null> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report`, { headers: headers(user) }).then((r) =>
+export function getReport(caseId: string): Promise<ApiReport | null> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report`, { headers: headers() }).then((r) =>
     unwrap<ApiReport | null>(r, "report"),
   );
 }
 
-export function draftReport(user: SessionUser, caseId: string, input: DraftReportInput): Promise<ApiReport> {
+export function draftReport(caseId: string, input: DraftReportInput): Promise<ApiReport> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/draft`, {
     method: "POST",
-    headers: headers(user, true),
+    headers: headers(true),
     body: JSON.stringify(input),
   }).then((r) => unwrap<ApiReport>(r, "report"));
 }
 
-function reportAction(user: SessionUser, caseId: string, action: "submit" | "approve"): Promise<ApiReport> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/${action}`, { method: "POST", headers: headers(user) }).then(
+function reportAction(caseId: string, action: "submit" | "approve"): Promise<ApiReport> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/${action}`, { method: "POST", headers: headers() }).then(
     (r) => unwrap<ApiReport>(r, "report"),
   );
 }
 
-export const submitReport = (user: SessionUser, caseId: string) => reportAction(user, caseId, "submit");
-export const approveReport = (user: SessionUser, caseId: string) => reportAction(user, caseId, "approve");
+export const submitReport = (caseId: string) => reportAction(caseId, "submit");
+export const approveReport = (caseId: string) => reportAction(caseId, "approve");
 
-export function exportReport(user: SessionUser, caseId: string): Promise<{ filename: string; content: string; status: ReportStatus }> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers(user) }).then((r) =>
+export function exportReport(caseId: string): Promise<{ filename: string; content: string; status: ReportStatus }> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers() }).then((r) =>
     unwrap<{ filename: string; content: string; status: ReportStatus }>(r, "export"),
   );
 }
 
 // ---- 管理后台（M5） ----
 
-export function listSkills(user: SessionUser): Promise<ApiSkill[]> {
-  return fetch(`${BASE}/admin/skills`, { headers: headers(user) }).then((r) => unwrap<ApiSkill[]>(r, "skills"));
+export function listSkills(): Promise<ApiSkill[]> {
+  return fetch(`${BASE}/admin/skills`, { headers: headers() }).then((r) => unwrap<ApiSkill[]>(r, "skills"));
 }
 
-export function setSkillEnabled(user: SessionUser, name: string, enabled: boolean): Promise<ApiSkill[]> {
+export function setSkillEnabled(name: string, enabled: boolean): Promise<ApiSkill[]> {
   return fetch(`${BASE}/admin/skills/${encodeURIComponent(name)}`, {
     method: "POST",
-    headers: headers(user, true),
+    headers: headers(true),
     body: JSON.stringify({ enabled }),
   }).then((r) => unwrap<ApiSkill[]>(r, "skills"));
 }
 
-export function modelDoctor(user: SessionUser): Promise<ApiModelDoctor> {
-  return fetch(`${BASE}/admin/models`, { headers: headers(user) }).then((r) => unwrap<ApiModelDoctor>(r, "model"));
+export function modelDoctor(): Promise<ApiModelDoctor> {
+  return fetch(`${BASE}/admin/models`, { headers: headers() }).then((r) => unwrap<ApiModelDoctor>(r, "model"));
 }
 
-export function listAdminUsers(user: SessionUser): Promise<ApiUser[]> {
-  return fetch(`${BASE}/admin/users`, { headers: headers(user) }).then((r) => unwrap<ApiUser[]>(r, "users"));
+export function listAdminUsers(): Promise<ApiUser[]> {
+  return fetch(`${BASE}/admin/users`, { headers: headers() }).then((r) => unwrap<ApiUser[]>(r, "users"));
 }
 
-export function listPrompts(user: SessionUser): Promise<ApiPrompt[]> {
-  return fetch(`${BASE}/admin/prompts`, { headers: headers(user) }).then((r) => unwrap<ApiPrompt[]>(r, "prompts"));
+export function listPrompts(): Promise<ApiPrompt[]> {
+  return fetch(`${BASE}/admin/prompts`, { headers: headers() }).then((r) => unwrap<ApiPrompt[]>(r, "prompts"));
 }
 
-export function exportAudit(user: SessionUser): Promise<{ exportedAt: string; count: number; events: AuditEvent[] }> {
-  return fetch(`${BASE}/audit/export`, { method: "POST", headers: headers(user) }).then(async (r) => {
+export function exportAudit(): Promise<{ exportedAt: string; count: number; events: AuditEvent[] }> {
+  return fetch(`${BASE}/audit/export`, { method: "POST", headers: headers() }).then(async (r) => {
     const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
     if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     return { exportedAt: body.exportedAt, count: body.count, events: body.events } as { exportedAt: string; count: number; events: AuditEvent[] };
@@ -333,10 +358,10 @@ export function readFileForUpload(file: File): Promise<IngestFile> {
   });
 }
 
-export function listAudit(user: SessionUser): Promise<AuditEvent[]> {
-  return fetch(`${BASE}/audit`, { headers: headers(user) }).then((r) => unwrap<AuditEvent[]>(r, "events"));
+export function listAudit(): Promise<AuditEvent[]> {
+  return fetch(`${BASE}/audit`, { headers: headers() }).then((r) => unwrap<AuditEvent[]>(r, "events"));
 }
 
-export function verifyAudit(user: SessionUser): Promise<VerifyResult> {
-  return fetch(`${BASE}/audit/verify`, { headers: headers(user) }).then((r) => unwrap<VerifyResult>(r, "result"));
+export function verifyAudit(): Promise<VerifyResult> {
+  return fetch(`${BASE}/audit/verify`, { headers: headers() }).then((r) => unwrap<VerifyResult>(r, "result"));
 }

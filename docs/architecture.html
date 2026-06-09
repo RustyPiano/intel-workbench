@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>情报分析工作台 · 系统架构图解</title>
+<style>
+  :root{
+    --bg:#0a0e14; --bg2:#0d121b; --panel:#111824; --panel2:#0f1622;
+    --line:#1d2a3a; --line2:#26384d;
+    --ink:#dbe5f0; --dim:#8fa3b8; --mute:#5d7188;
+    --cyan:#34d3e0; --teal:#2dd4bf; --green:#56d97f; --amber:#f5b73d; --red:#f4716a; --violet:#a98cf0; --blue:#5aa9f0;
+    --grad:linear-gradient(135deg,#34d3e0,#2dd4bf);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Songti SC","Noto Serif SC",Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--mono); font-size:14px; line-height:1.6;
+    background-image:
+      radial-gradient(900px 500px at 85% -10%, rgba(52,211,224,.07), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(169,140,240,.06), transparent 55%),
+      linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+    background-size:auto,auto,42px 42px,42px 42px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 28px 90px}
+
+  /* ── Header band ── */
+  header{
+    position:relative;margin:0 -28px 0;padding:46px 28px 34px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(52,211,224,.05),transparent);
+  }
+  .ticker{display:flex;justify-content:space-between;align-items:center;font-size:11px;letter-spacing:.18em;color:var(--mute);text-transform:uppercase}
+  .ticker .cls{color:var(--amber);border:1px solid rgba(245,183,61,.35);padding:2px 9px;border-radius:3px;background:rgba(245,183,61,.06)}
+  h1{font-family:var(--serif);font-weight:600;font-size:40px;line-height:1.1;margin:20px 0 8px;letter-spacing:.01em}
+  h1 .accent{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--dim);max-width:760px;font-size:14px}
+  .sub b{color:var(--ink);font-weight:600}
+
+  /* ── Legend ── */
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:22px 0 4px;font-size:12px;color:var(--dim)}
+  .lg{display:flex;align-items:center;gap:7px}
+  .dot{width:11px;height:11px;border-radius:50%;flex:none}
+  .dot.g{background:var(--green)} .dot.a{background:var(--amber)} .dot.s{background:#3b4a5e;border:1px solid var(--line2)}
+  .swatch{width:13px;height:13px;flex:none;border-radius:3px}
+  .swatch.red{border:1.5px solid var(--red);background:rgba(244,113,106,.10)}
+  .swatch.slot{border:1.5px dashed var(--violet);background:rgba(169,140,240,.08)}
+
+  /* ── Section scaffolding ── */
+  section{margin-top:58px}
+  .shead{display:flex;align-items:baseline;gap:16px;margin-bottom:22px;border-bottom:1px solid var(--line);padding-bottom:12px}
+  .snum{font-family:var(--serif);font-size:30px;color:var(--cyan);font-weight:600;line-height:1}
+  .stitle{font-family:var(--serif);font-size:25px;font-weight:600;letter-spacing:.01em}
+  .stag{margin-left:auto;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+  .lead{color:var(--dim);margin:-6px 0 22px;max-width:840px}
+  .lead code{color:var(--cyan);background:rgba(52,211,224,.08);padding:1px 6px;border-radius:4px;font-size:12.5px}
+
+  /* ── Cards / boxes ── */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .grid{display:grid;gap:14px}
+  .node{
+    background:var(--panel);border:1px solid var(--line2);border-radius:9px;padding:13px 15px;position:relative;
+  }
+  .node .k{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--mute);margin-bottom:5px}
+  .node .t{font-weight:600;font-size:14.5px;color:var(--ink)}
+  .node .d{font-size:12px;color:var(--dim);margin-top:5px;line-height:1.5}
+  .node.built{border-color:rgba(86,217,127,.4);box-shadow:inset 0 0 0 1px rgba(86,217,127,.08)}
+  .node.built .t::after{content:"●";color:var(--green);font-size:9px;vertical-align:middle;margin-left:8px}
+  .node.scaf{border-color:rgba(245,183,61,.42)}
+  .node.scaf .t::after{content:"◐";color:var(--amber);font-size:11px;margin-left:8px}
+  .node.plan{border-style:dashed;border-color:var(--line2);background:var(--panel2)}
+  .node.plan .t{color:var(--dim)}
+  .node.plan .t::after{content:"○";color:var(--mute);font-size:11px;margin-left:8px}
+  .node.slot{border:1.5px dashed rgba(169,140,240,.5);background:rgba(169,140,240,.05)}
+  .node.slot .k{color:var(--violet)}
+
+  /* ── Flow (horizontal pipeline) ── */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .flow .node{flex:1 1 0;min-width:135px}
+  .arrow{flex:none;align-self:center;color:var(--line2);font-size:20px;padding:0 9px;user-select:none}
+  .arrow b{color:var(--cyan)}
+
+  .vstack{display:flex;flex-direction:column;gap:0}
+  .varrow{align-self:center;color:var(--line2);font-size:18px;line-height:1;padding:5px 0}
+
+  /* ── Stack (monorepo) ── */
+  .stack{display:grid;gap:8px}
+  .layer{display:grid;grid-template-columns:160px 1fr;gap:14px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:13px 16px}
+  .layer .lk{font-weight:700;color:var(--cyan)}
+  .layer .lk small{display:block;color:var(--mute);font-weight:400;font-size:11px;letter-spacing:.08em;margin-top:2px}
+  .layer .lv{color:var(--dim);font-size:12.5px}
+  .layer .lv b{color:var(--ink);font-weight:600}
+
+  /* ── Redline panel ── */
+  .redgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .red{border:1.5px solid rgba(244,113,106,.45);background:rgba(244,113,106,.05);border-radius:9px;padding:14px 16px}
+  .red .k{display:flex;align-items:center;gap:8px;font-weight:700;color:#ff9089;font-size:13.5px}
+  .red .k i{font-style:normal;font-size:15px}
+  .red p{margin:8px 0 0;font-size:12px;color:var(--dim);line-height:1.55}
+
+  .callout{display:flex;gap:13px;border:1px solid var(--line);border-left:3px solid var(--amber);background:linear-gradient(90deg,rgba(245,183,61,.07),transparent);border-radius:8px;padding:13px 16px;margin-top:18px}
+  .callout .ico{color:var(--amber);font-size:17px;flex:none}
+  .callout p{margin:0;font-size:12.5px;color:var(--dim)}
+  .callout b{color:var(--ink)}
+
+  /* ── Router branch ── */
+  .router{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px}
+  .branch{border:1px solid var(--line);border-radius:10px;padding:0;overflow:hidden}
+  .branch .bh{padding:11px 15px;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:space-between}
+  .branch.def .bh{background:rgba(86,217,127,.10);color:var(--green);border-bottom:1px solid rgba(86,217,127,.2)}
+  .branch.ret .bh{background:rgba(90,169,240,.10);color:var(--blue);border-bottom:1px solid rgba(90,169,240,.2)}
+  .branch .bb{padding:14px 15px}
+  .branch .bb .mini{font-size:12px;color:var(--dim);line-height:1.55}
+  .pill{display:inline-block;font-size:11px;border:1px solid var(--line2);border-radius:20px;padding:2px 10px;margin:3px 4px 0 0;color:var(--dim)}
+  .gate{text-align:center;background:var(--panel);border:1px dashed var(--line2);border-radius:9px;padding:12px;margin:0 auto 14px;max-width:560px}
+  .gate b{color:var(--cyan)} .gate code{color:var(--amber);font-size:12px}
+
+  /* ── unify banner ── */
+  .unify{margin-top:18px;border:1.5px solid rgba(52,211,224,.4);border-radius:11px;padding:18px 20px;background:linear-gradient(135deg,rgba(52,211,224,.08),rgba(45,212,191,.04))}
+  .unify .ut{font-family:var(--serif);font-size:18px;font-weight:600;color:var(--cyan);margin-bottom:6px}
+  .unify p{margin:0;color:var(--dim);font-size:13px}
+  .unify code{color:var(--teal);background:rgba(45,212,191,.1);padding:1px 6px;border-radius:4px;font-size:12px}
+
+  /* ── audio detail ── */
+  .term{background:#070b11;border:1px solid var(--line);border-radius:9px;padding:14px 16px;font-size:12.5px;margin-top:14px;overflow-x:auto}
+  .term .c0{color:var(--green)} .term .c1{color:var(--blue)} .term .cm{color:var(--mute)} .term .ca{color:var(--amber)}
+
+  /* ── status table ── */
+  table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12.5px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  td .tag{font-size:10.5px;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .tag.now{background:rgba(86,217,127,.12);color:var(--green);border:1px solid rgba(86,217,127,.3)}
+  .tag.blk{background:rgba(245,183,61,.10);color:var(--amber);border:1px solid rgba(245,183,61,.3)}
+  td b{color:var(--ink)}
+  td small{color:var(--mute)}
+
+  .foot{margin-top:60px;border-top:1px solid var(--line);padding-top:18px;font-size:11.5px;color:var(--mute);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+
+  /* reveal */
+  @media (prefers-reduced-motion:no-preference){
+    .reveal{opacity:0;transform:translateY(14px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+    @keyframes rise{to{opacity:1;transform:none}}
+  }
+  @media(max-width:780px){
+    .router,.redgrid{grid-template-columns:1fr}
+    .layer{grid-template-columns:1fr}
+    h1{font-size:30px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="ticker">
+      <span>情报分析工作台 · INTEL ANALYSIS WORKBENCH</span>
+      <span class="cls">分类 // 内部 · 离线 air-gapped</span>
+    </div>
+    <h1>系统架构图解 — <span class="accent">当前 vs 推荐</span></h1>
+    <p class="sub">把已经建成的<b>一期闭环</b>与下一步要扩展的<b>RAG 检索 + 多模态入库</b>画在一起。一条贯穿始终的主线：<b>所有 AI 结论都绑定到带 content_hash 的源片段</b>——这条溯源红线在任何模态、任何检索策略下都不变。</p>
+
+    <div class="legend">
+      <span class="lg"><i class="dot g"></i> 已建成 / 真实接口</span>
+      <span class="lg"><i class="dot a"></i> 已可搭骨架 · 待接模型</span>
+      <span class="lg"><i class="dot s"></i> 规划 · 阻塞于本地模型部署</span>
+      <span class="lg"><i class="swatch red"></i> 三条红线（强制约束）</span>
+      <span class="lg"><i class="swatch slot"></i> 可插拔模型槽（openai-compatible / 本地服务）</span>
+    </div>
+  </header>
+
+  <!-- ════════════ SECTION 1 — CURRENT ════════════ -->
+  <section class="reveal">
+    <div class="shead">
+      <span class="snum">01</span>
+      <span class="stitle">当前架构 · 一期已交付</span>
+      <span class="stag">As-Built · 2026-06</span>
+    </div>
+    <p class="lead">Monorepo 三层：<code>packages/web</code> 作业/管理双面界面，<code>packages/server</code> Express 接口层，<code>packages/core</code> 复用的 agent 运行时（私有内部包）。数据<b>文件优先、零数据库</b>，专题产物落 <code>cases/&lt;id&gt;/</code>。</p>
+
+    <div class="stack">
+      <div class="layer"><div class="lk">web<small>React 19 · Vite</small></div><div class="lv"><b>作业面</b>（建专题 / 汇入 / 要素 / 问答 / 报告）+ <b>管理面</b>（用户·Skill·模型·提示词）+ <b>审计中心</b>。会话令牌经 Bearer 携带。</div></div>
+      <div class="varrow">↑↓ <span style="color:var(--mute);font-size:11px">/api · JSON</span></div>
+      <div class="layer"><div class="lk">server<small>Express 5 · ESM</small></div><div class="lv"><b>鉴权中间件</b>（会话→身份）→ 路由 → 服务层（Case / Material / Inquiry / Element / Report / Admin / Audit / Auth）。绑定 <b>127.0.0.1</b>。</div></div>
+      <div class="varrow">↑↓ <span style="color:var(--mute);font-size:11px">in-process import</span></div>
+      <div class="layer"><div class="lk">core<small>mini-agent 运行时</small></div><div class="lv"><b>模型适配器</b>（openai-compatible）· skills · tools · sessions。文本 LLM 经此走本地/兼容端点。</div></div>
+    </div>
+
+    <h3 style="margin:34px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">主流程 · 专题闭环</h3>
+    <div class="flow">
+      <div class="node built"><div class="k">Auth</div><div class="t">登录鉴权</div><div class="d">scrypt 口令 · 内存会话令牌 · 失败锁定</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="k">Case</div><div class="t">建专题</div><div class="d">密级分级 · owner · 审计提交点</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="k">Ingest</div><div class="t">汇入·加工</div><div class="d">文本归一→切块<br><code style="font-size:11px;color:var(--cyan)">chunk_id + content_hash</code></div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="k">Analyze</div><div class="t">要素 / 问答 / 报告</div><div class="d">每条结论绑定素材出处</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="k">Export</div><div class="t">导出</div><div class="d">复核闸门通过后出公文</div></div>
+    </div>
+
+    <h3 style="margin:34px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">§7.3 问答管线 · 溯源受控</h3>
+    <div class="flow">
+      <div class="node built"><div class="t">检索 BM25</div><div class="d">中英混排分词 · top-k</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="t">无命中即拒答</div><div class="d">"现有材料不足以判断"</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="t">OfflineGuard 授权</div><div class="d">白名单外即拒+审计</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="t">LLM 结构化 JSON</div><div class="d">claims[] + 引用 chunk_id</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="t">Citation 校验</div><div class="d">验 hash，否则降"待核"</div></div>
+      <div class="arrow">→</div>
+      <div class="node built"><div class="t">落 inquiries</div><div class="d">jsonl + 审计</div></div>
+    </div>
+
+    <h3 style="margin:34px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">三条红线 · 服务层强制</h3>
+    <div class="redgrid">
+      <div class="red"><div class="k"><i>▣</i> 零外发 OfflineGuard</div><p>应用层出站闸门，仅白名单 host（模型端点）放行，allow/deny 全入审计；生产置空即全断。配合部署层 air-gap。</p></div>
+      <div class="red"><div class="k"><i>▣</i> 审计哈希链</div><p>append-only，<code style="font-size:11px;color:#ff9089">payload_hash · prev_hash · event_hash</code> 单写串行，可独立 verify 定位断链。</p></div>
+      <div class="red"><div class="k"><i>▣</i> Citation 溯源</div><p>每条 claim 必须引用检索到的 chunk 且 <code style="font-size:11px;color:#ff9089">sha256==content_hash</code>，否则降级待核或拒答。</p></div>
+    </div>
+
+    <div class="callout">
+      <span class="ico">⚠</span>
+      <p><b>当前缺口：</b>媒体（音频 / 视频 / PDF / Office）目前一律<b>降级为 pending</b>——只登记、不真正抽取内容。这正是 §02 推荐架构要补的部分。文本专题闭环已完整可用。</p>
+    </div>
+  </section>
+
+  <!-- ════════════ SECTION 2 — RECOMMENDED ════════════ -->
+  <section class="reveal">
+    <div class="shead">
+      <span class="snum">02</span>
+      <span class="stitle">推荐架构 · RAG 检索 + 多模态入库</span>
+      <span class="stag">Target</span>
+    </div>
+    <p class="lead">两条扩展，<b>都复用现有 Citation / 审计 / OfflineGuard 红线，一行不改</b>：(A) 把"必检索"改成<b>按 token 预算路由</b>——小数据走全上下文，大数据/知识库才检索；(B) 媒体从"降级 pending"换成<b>入库时真处理成带时间码的可引用 chunk</b>。</p>
+
+    <h3 style="margin:6px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">A · RAG 检索路由（溯源与检索解耦）</h3>
+    <div class="gate">
+      <b>路由判据</b> &nbsp;·&nbsp; <code>专题切块总量 ≤ 模型上下文预算(取窗口 ~50–60%)</code> ?
+    </div>
+    <div class="router">
+      <div class="branch def">
+        <div class="bh"><span>↳ 是 · 全上下文 grounding（默认）</span><span style="font-size:11px;font-weight:400">小数据最优</span></div>
+        <div class="bb"><p class="mini">所有 chunk（带 id）直接喂模型 → 模型作答引用 chunk_id → <b>事后验哈希</b>。<b>零检索召回风险</b>：每个片段都在场，不会因漏检而漏引。直接化解"RAG 压制回答质量"的顾虑。</p></div>
+      </div>
+      <div class="branch ret">
+        <div class="bh"><span>↳ 否 · 检索路（超限 / 跨专题KB）</span><span style="font-size:11px;font-weight:400">规模兜底</span></div>
+        <div class="bb"><p class="mini"><b>BM25 ⊕ dense</b> 经 <b>RRF(k=60)</b> 融合 → top-N → <b>可选重排</b>（按候选数门控）→ top-k 喂模型，同样引用 chunk_id + 验哈希。</p>
+        <div><span class="pill">嵌入 Qwen3-Embedding-0.6B</span><span class="pill">重排 Qwen3-Reranker-0.6B</span><span class="pill">RRF 零依赖</span></div></div>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:14px"><b>向量库</b>：单专题用<b>进程内暴力余弦</b>（精确、零依赖、贴合文件优先）；跨专题 KB 用 <code>sqlite-vec</code>（纯 C 单文件、SIMD 精确 KNN）。对溯源系统而言"精确不漏"比 ANN 速度更重要——避免索引悄悄丢掉那一个匹配块。</p>
+
+    <h3 style="margin:34px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">B · 多模态入库管线 → 统一可引用 chunk</h3>
+    <div class="grid" style="grid-template-columns:1fr">
+
+      <div class="card" style="border-left:3px solid var(--green)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="color:var(--green)">文本</b><span style="color:var(--mute);font-size:12px">— 已建成</span></div>
+        <div class="flow">
+          <div class="node built"><div class="t">归一化 + 结构切块</div><div class="d">标题→段落→句 · 父子粒度</div></div>
+          <div class="arrow">→</div>
+          <div class="node scaf"><div class="t">+ char 偏移</div><div class="d">UI 源文高亮（待补字段）</div></div>
+          <div class="arrow">→</div>
+          <div class="node built"><div class="t">chunk + content_hash</div><div class="d">locator: page/paragraph</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-left:3px solid var(--teal)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="color:var(--teal)">音频</b><span style="color:var(--mute);font-size:12px">— 阿里 FunASR 链（你已选定，详见 §03）</span></div>
+        <div class="flow">
+          <div class="node plan"><div class="t">fsmn-vad</div><div class="d">语音活动检测·切段</div></div>
+          <div class="arrow">→</div>
+          <div class="node slot"><div class="k">ASR 槽</div><div class="t">转写 + 时间戳</div><div class="d">SenseVoice / Fun-ASR-Nano / Qwen3-ASR-1.7B</div></div>
+          <div class="arrow">→</div>
+          <div class="node plan"><div class="t">cam++ 说话人分离</div><div class="d">Speaker 标签 + 时间戳</div></div>
+          <div class="arrow">→</div>
+          <div class="node plan"><div class="t">chunk + content_hash</div><div class="d">locator: <b style="color:var(--teal)">timecode</b> + speaker</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-left:3px solid var(--blue)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="color:var(--blue)">视频</b><span style="color:var(--mute);font-size:12px">— 入库预处理（非查询时现场喂 VLM）</span></div>
+        <div class="flow">
+          <div class="node plan"><div class="t">demux + 分镜</div><div class="d">ffmpeg · TransNetV2 → 镜头[t1,t2]</div></div>
+          <div class="arrow">→</div>
+          <div class="node slot"><div class="k">每镜头并行</div><div class="t">VLM 配文 · ASR · OCR</div><div class="d">MiniCPM-V 4.5 / Qwen3-VL · 帧 OCR</div></div>
+          <div class="arrow">→</div>
+          <div class="node plan"><div class="t">chunk + content_hash</div><div class="d">locator: <b style="color:var(--blue)">timecode</b> / 帧</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="border-left:3px solid var(--violet)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><b style="color:var(--violet)">图像</b><span style="color:var(--mute);font-size:12px">— 规划</span></div>
+        <div class="flow">
+          <div class="node slot"><div class="k">VLM 槽</div><div class="t">视觉配文</div><div class="d">MiniCPM-V / Qwen3-VL</div></div>
+          <div class="arrow">→</div>
+          <div class="node plan"><div class="t">OCR（车牌/标牌/字幕）</div><div class="d">PaddleOCR 等</div></div>
+          <div class="arrow">→</div>
+          <div class="node plan"><div class="t">chunk + content_hash</div><div class="d">locator: <b style="color:var(--violet)">bbox</b></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="unify">
+      <div class="ut">⧉ 统一原则 · 一切皆"带 locator 的可引用 chunk"</div>
+      <p>音频/视频/图像不是新东西，只是新的 chunk 类型——<code>locator</code> 已有 <code>timecode / page / bbox</code> 字段。落库后，<b>CitationService 校验、§7.3 管线、OfflineGuard 授权、审计链 一行不改</b>。检索只负责"选哪些 chunk 进上下文"，<b>溯源永远靠 content_hash 事后校验</b>——两者彻底解耦。</p>
+    </div>
+
+    <h3 style="margin:34px 0 12px;font-family:var(--serif);font-weight:600;font-size:17px;color:var(--ink)">可插拔模型槽 · 全 openai-compatible / 本地服务</h3>
+    <div class="grid" style="grid-template-columns:repeat(5,1fr)">
+      <div class="node slot"><div class="k">LLM</div><div class="t">问答/要素/起草</div><div class="d">本地 · 已接 (dev DeepSeek)</div></div>
+      <div class="node slot"><div class="k">Embedding</div><div class="t">Qwen3-Emb-0.6B</div><div class="d">Apache · CPU 可跑</div></div>
+      <div class="node slot"><div class="k">Reranker</div><div class="t">Qwen3-Rerank-0.6B</div><div class="d">可选 · 门控开启</div></div>
+      <div class="node slot"><div class="k">ASR</div><div class="t">FunASR 链</div><div class="d">中文强 · 原生时间戳</div></div>
+      <div class="node slot"><div class="k">VLM</div><div class="t">MiniCPM-V 4.5</div><div class="d">端侧 / Qwen3-VL 求质量</div></div>
+    </div>
+  </section>
+
+  <!-- ════════════ SECTION 3 — AUDIO ════════════ -->
+  <section class="reveal">
+    <div class="shead">
+      <span class="snum">03</span>
+      <span class="stitle">音频方案 · 阿里 FunASR（已选定）</span>
+      <span class="stag">Decided</span>
+    </div>
+    <p class="lead">工业级工具包，<b>一行接好端到端</b>：<code>VAD + ASR + 时间戳 + 说话人分离 + 标点</code>。中文极强、部署简单、含 openai-compatible API 与 vLLM 加速。ASR 引擎可在 <b>SenseVoice-Small</b>（~170× 实时、最快）/ <b>Fun-ASR-Nano</b>（LLM 高精度多语）/ <b>Qwen3-ASR-1.7B</b>（52 语自动检测）间切换——正好落在我们的"ASR 槽"。</p>
+
+    <div class="flow" style="margin-bottom:6px">
+      <div class="node plan"><div class="k">in</div><div class="t">音频文件</div><div class="d">截获 / 录音 · 长音频</div></div>
+      <div class="arrow">→</div>
+      <div class="node plan"><div class="t">fsmn-vad</div><div class="d">切语音段</div></div>
+      <div class="arrow">→</div>
+      <div class="node slot"><div class="k">spk_model=cam++</div><div class="t">ASR + 说话人分离</div><div class="d">转写 + Speaker + 时间戳</div></div>
+      <div class="arrow">→</div>
+      <div class="node plan"><div class="t">可引用 chunk</div><div class="d">locator.timecode + speaker<br>+ content_hash</div></div>
+    </div>
+
+    <div class="term">
+      <div><span class="cm"># FunASR 一行接好（端到端，含 diarization）</span></div>
+      <div><span class="c1">from</span> funasr <span class="c1">import</span> AutoModel</div>
+      <div>&nbsp;</div>
+      <div>model = AutoModel(</div>
+      <div>&nbsp;&nbsp;model=<span class="c0">"iic/SenseVoiceSmall"</span> <span class="cm"># 或 Fun-ASR-Nano-2512 / Qwen3-ASR-1.7B —— ASR 槽</span></div>
+      <div>&nbsp;&nbsp;vad_model=<span class="c0">"fsmn-vad"</span>,&nbsp;&nbsp;&nbsp;<span class="cm"># 语音活动检测</span></div>
+      <div>&nbsp;&nbsp;spk_model=<span class="c0">"cam++"</span>,&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># 说话人分离（关键）</span></div>
+      <div>&nbsp;&nbsp;device=<span class="c0">"cuda"</span>)</div>
+      <div>&nbsp;</div>
+      <div>result = model.generate(input=<span class="c0">"meeting.wav"</span>)</div>
+      <div><span class="cm"># → [<span class="ca">00:00.4 → 00:03.8</span>] <span class="ca">Speaker 0</span>: 文本内容 ...　→ 落为带时间码+说话人的 chunk</span></div>
+    </div>
+
+    <div class="callout" style="border-left-color:var(--teal);background:linear-gradient(90deg,rgba(45,212,191,.07),transparent)">
+      <span class="ico" style="color:var(--teal)">✓</span>
+      <p><b>为什么贴合本项目：</b>① 原生 <b>词/段级时间戳</b> → 直接喂 <code style="color:var(--teal);font-size:11px">locator.timecode</code> 满足时间码溯源；② <b>说话人分离</b>（cam++）情报价值高；③ 全程在 <b>OfflineGuard</b> 后、本地权重、无出站；④ ASR 引擎可热插拔，先 SenseVoice 跑通、需要更高精度再换 Qwen3-ASR-1.7B / Fun-ASR-Nano。<b>务必</b>拿真实截获音频（噪声/口音）做头对头再定引擎。</p>
+    </div>
+  </section>
+
+  <!-- ════════════ SECTION 4 — STATUS ════════════ -->
+  <section class="reveal">
+    <div class="shead">
+      <span class="snum">04</span>
+      <span class="stitle">建设状态 · 现在可建 vs 待模型</span>
+      <span class="stag">Roadmap</span>
+    </div>
+    <p class="lead">关键判断：<b>骨架与红线现在就能建，且不依赖任何本地模型</b>；只有实际权重落地、精度调优、显存实测阻塞于部署（你范围外）。适配器接口先用 mock 跑通，模型到位即插即用。</p>
+    <table>
+      <thead><tr><th style="width:140px">状态</th><th>事项</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag now">现在可建</span></td><td><b>§7.3 检索路由</b></td><td>全上下文 ↔ BM25 按 token 阈值切换，引用校验两路都走。纯逻辑、零新依赖、立竿见影提升小数据质量。</td></tr>
+        <tr><td><span class="tag now">现在可建</span></td><td><b>媒体入库管线骨架</b></td><td>demux / 分镜 / OCR 调度 + <b>ASR/VLM 适配器接口</b>（openai-compatible 槽），先接 mock，留好 timecode locator 落库路径。</td></tr>
+        <tr><td><span class="tag now">现在可建</span></td><td><b>chunk 加 char 偏移</b></td><td>UI 点引用高亮源文片段所需，纯数据字段。</td></tr>
+        <tr><td><span class="tag now">现在可建</span></td><td><b>向量库抽象 + RRF</b></td><td>进程内暴力余弦先行 + BM25⊕dense 融合接口；嵌入槽待接。</td></tr>
+        <tr><td><span class="tag blk">待模型部署</span></td><td><b>嵌入 / 重排</b></td><td>Qwen3-Embedding-0.6B / Reranker-0.6B 权重落地与实测（CPU/显存）。</td></tr>
+        <tr><td><span class="tag blk">待模型部署</span></td><td><b>ASR 真链路</b></td><td>FunASR + cam++ 部署；真实音频精度/速度评测。</td></tr>
+        <tr><td><span class="tag blk">待模型部署</span></td><td><b>视频 / 图像 VLM</b></td><td>MiniCPM-V 4.5 / Qwen3-VL + TransNetV2 + PaddleOCR 部署与评测。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="foot">
+    <span>情报分析工作台 · 架构图解 · 当前=一期已交付（8 提交 feat/intel-workbench-m0）</span>
+    <span>模型版本均经 2026-06 现网调研 · 厂商基准请以真实素材头对头复核</span>
+  </div>
+
+</div>
+</body>
+</html>

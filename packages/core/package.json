@@ -1,0 +1,38 @@
+{
+  "name": "mini-agent",
+  "version": "1.1.0",
+  "description": "Local-first agent runtime (skills, tools, sessions, model adapter) — internal core package of the intel workbench monorepo.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mini-agent": "./dist/src/cli/bin.js"
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "dev": "tsx src/cli/bin.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1057.0",
+    "@aws-sdk/lib-storage": "^3.1057.0",
+    "@aws-sdk/s3-request-presigner": "^3.1057.0",
+    "fast-glob": "^3.3.3",
+    "gray-matter": "^4.0.3",
+    "nanoid": "^5.1.7",
+    "openai": "^6.34.0",
+    "zod": "^4.3.6"
+  }
+}

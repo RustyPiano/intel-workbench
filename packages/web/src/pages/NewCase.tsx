@@ -49,7 +49,7 @@ export function NewCasePage() {
     setError(null);
     try {
       // M1：真实创建并落盘（POST /api/cases）。开发模式下涉密会被服务端拒绝。
-      const created = await createCase(user, { name: name.trim(), clearance });
+      const created = await createCase({ name: name.trim(), clearance });
       navigate(`/cases/${encodeURIComponent(created.id)}`);
     } catch (err) {
       setError((err as Error).message);

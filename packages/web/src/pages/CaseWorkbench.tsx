@@ -48,7 +48,7 @@ export function CaseWorkbench() {
   useEffect(() => {
     if (!user || !id) return;
     let alive = true;
-    getCase(user, id)
+    getCase(id)
       .then((c) => alive && setCaseInfo(c))
       .catch(() => alive && setCaseInfo(null));
     return () => {
@@ -125,7 +125,7 @@ export function MaterialsPanel() {
 
   const refresh = () => {
     if (!user || !caseId) return;
-    listMaterials(user, caseId)
+    listMaterials(caseId)
       .then((list) => {
         setMaterials(list);
         setActiveId((prev) => prev ?? list[0]?.id ?? null);
@@ -141,7 +141,7 @@ export function MaterialsPanel() {
       return;
     }
     let alive = true;
-    getMaterialContent(user, activeId)
+    getMaterialContent(activeId)
       .then((c) => alive && setContent(c))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -155,7 +155,7 @@ export function MaterialsPanel() {
     setError(null);
     try {
       const payload = await Promise.all(Array.from(fileList).map(readFileForUpload));
-      const ingested = await ingestMaterials(user, caseId, payload);
+      const ingested = await ingestMaterials(caseId, payload);
       refresh();
       if (ingested[0]) setActiveId(ingested[0].id);
     } catch (e) {
@@ -290,7 +290,7 @@ export function ElementsPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
-    listElements(user, caseId)
+    listElements(caseId)
       .then((els) => alive && setElements(els))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -303,7 +303,7 @@ export function ElementsPanel() {
     setBusy(true);
     setError(null);
     try {
-      setElements(await extractElements(user, caseId));
+      setElements(await extractElements(caseId));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -458,7 +458,7 @@ export function InquiryPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
-    listInquiries(user, caseId)
+    listInquiries(caseId)
       .then((list) => alive && setHistory(list))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
@@ -474,7 +474,7 @@ export function InquiryPanel() {
     setError(null);
     setInput("");
     try {
-      const inquiry = await askInquiry(user, caseId, q);
+      const inquiry = await askInquiry(caseId, q);
       setHistory((prev) => [...prev, inquiry]);
     } catch (err) {
       setError((err as Error).message);
@@ -564,7 +564,7 @@ export function ReportPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
-    getReport(user, caseId)
+    getReport(caseId)
       .then((r) => {
         if (!alive) return;
         setReport(r);
@@ -598,7 +598,7 @@ export function ReportPanel() {
       setError("报告标题为必填项");
       return;
     }
-    void run(() => draftReport(user!, caseId!, { title: title.trim(), body }));
+    void run(() => draftReport(caseId!, { title: title.trim(), body }));
   };
 
   const handleExport = async () => {
@@ -606,7 +606,7 @@ export function ReportPanel() {
     setBusy(true);
     setError(null);
     try {
-      const out = await exportReport(user, caseId);
+      const out = await exportReport(caseId);
       const blob = new Blob([out.content], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -671,11 +671,11 @@ export function ReportPanel() {
             <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>加载报告状态…</span>
           ) : (
             <>
-              <button type="button" className="btn btn--primary" style={{ width: "100%" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(user!, caseId!))}>
+              <button type="button" className="btn btn--primary" style={{ width: "100%" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(caseId!))}>
                 🚀 提交保密员复核
               </button>
               {canReview ? (
-                <button type="button" className="btn" style={{ width: "100%" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(user!, caseId!))}>
+                <button type="button" className="btn" style={{ width: "100%" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(caseId!))}>
                   ✅ 复核核准
                 </button>
               ) : null}

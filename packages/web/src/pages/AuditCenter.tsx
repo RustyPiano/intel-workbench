@@ -35,7 +35,7 @@ export function AuditCenterPage() {
   useEffect(() => {
     if (!user) return;
     let alive = true;
-    Promise.all([listAudit(user), verifyAudit(user)])
+    Promise.all([listAudit(), verifyAudit()])
       .then(([evts, v]) => {
         if (!alive) return;
         setEvents(evts);
@@ -65,7 +65,7 @@ export function AuditCenterPage() {
   const handleExport = async () => {
     if (!user) return;
     try {
-      const out = await exportAudit(user);
+      const out = await exportAudit();
       const blob = new Blob([JSON.stringify(out.events, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

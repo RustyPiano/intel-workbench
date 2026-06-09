@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AdminService } from "../src/admin/admin-service.js";
 import { AuditService } from "../src/audit/audit-service.js";
+import { UserStore } from "../src/auth/user-store.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import type { ModelConfig } from "../src/model/model-config.js";
@@ -37,7 +38,7 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("listSkills 扫描 .agents/skills，含 intel-bulletin，默认启用", async () => {
-    const admin = new AdminService(paths, audit, UNCONFIGURED, []);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     const skills = await admin.listSkills();
     const bulletin = skills.find((s) => s.name === "intel-bulletin");
     expect(bulletin).toBeTruthy();
@@ -46,7 +47,7 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("setSkillEnabled 持久化并入审计", async () => {
-    const admin = new AdminService(paths, audit, UNCONFIGURED, []);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     await admin.setSkillEnabled(ADMIN, "intel-bulletin", false);
     const skills = await admin.listSkills();
     expect(skills.find((s) => s.name === "intel-bulletin")?.enabled).toBe(false);
@@ -56,7 +57,7 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("modelDoctor 脱敏：报告配置与白名单，不含 apiKey", () => {
-    const admin = new AdminService(paths, audit, CONFIGURED, ["api.deepseek.com"]);
+    const admin = new AdminService(paths, audit, CONFIGURED, ["api.deepseek.com"], new UserStore(paths));
     const doctor = admin.modelDoctor();
     expect(doctor).toEqual({
       configured: true,
@@ -69,19 +70,19 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("modelDoctor 未配置 → allowlisted false", () => {
-    const admin = new AdminService(paths, audit, UNCONFIGURED, []);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     expect(admin.modelDoctor().allowlisted).toBe(false);
   });
 
   it("listUsers 首次预置三角色，且不回 pwd_hash", async () => {
-    const admin = new AdminService(paths, audit, UNCONFIGURED, []);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     const users = await admin.listUsers();
     expect(users.map((u) => u.role).sort()).toEqual(["admin", "operator", "security"]);
     expect(JSON.stringify(users)).not.toContain("pwd_hash");
   });
 
   it("listPrompts 返回内置只读基线", () => {
-    const admin = new AdminService(paths, audit, UNCONFIGURED, []);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     expect(admin.listPrompts().length).toBeGreaterThan(0);
   });
 });

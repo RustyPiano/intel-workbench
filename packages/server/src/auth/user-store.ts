@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DataPaths } from "../data/paths.js";
-import type { Clearance, Role } from "../domain/types.js";
+import { AppError } from "../domain/identity.js";
+import { CLEARANCES, ROLES, type Clearance, type Role } from "../domain/types.js";
 
 /**
  * 本地用户存储（工程方案 §4.2，`config/users.json`）。口令以 scrypt 加盐哈希
@@ -54,15 +55,69 @@ const SEED_DEFAULTS: { user: PublicUser; password: string }[] = [
   { user: { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true }, password: "security123" },
 ];
 
+/** 去除口令哈希，得到可回前端的公开用户。 */
+function strip(user: StoredUser): PublicUser {
+  const { pwd_hash: _pwd, ...pub } = user;
+  return pub;
+}
+
 export class UserStore {
   constructor(private readonly paths: DataPaths) {}
 
   async list(): Promise<PublicUser[]> {
-    return (await this.read()).map(({ pwd_hash: _pwd, ...u }) => u);
+    return (await this.read()).map(strip);
   }
 
   async findById(id: string): Promise<StoredUser | undefined> {
     return (await this.read()).find((u) => u.id === id);
+  }
+
+  async create(input: { id: string; name: string; role: Role; clearance: Clearance; password: string }): Promise<PublicUser> {
+    const id = input.id.trim();
+    if (!id) throw new AppError(400, "账号 id 不能为空");
+    if (!ROLES.includes(input.role)) throw new AppError(400, "非法角色");
+    if (!CLEARANCES.includes(input.clearance)) throw new AppError(400, "非法密级");
+    if (!input.password) throw new AppError(400, "口令不能为空");
+    const users = await this.read();
+    if (users.some((u) => u.id === id)) throw new AppError(409, "账号已存在");
+    const user: StoredUser = {
+      id,
+      name: input.name.trim() || id,
+      role: input.role,
+      clearance: input.clearance,
+      enabled: true,
+      pwd_hash: hashPassword(input.password),
+    };
+    users.push(user);
+    await this.write(users);
+    return strip(user);
+  }
+
+  async update(id: string, patch: { name?: string; role?: Role; clearance?: Clearance; enabled?: boolean }): Promise<PublicUser> {
+    const users = await this.read();
+    const user = users.find((u) => u.id === id);
+    if (!user) throw new AppError(404, "用户不存在");
+    if (patch.role !== undefined) {
+      if (!ROLES.includes(patch.role)) throw new AppError(400, "非法角色");
+      user.role = patch.role;
+    }
+    if (patch.clearance !== undefined) {
+      if (!CLEARANCES.includes(patch.clearance)) throw new AppError(400, "非法密级");
+      user.clearance = patch.clearance;
+    }
+    if (patch.name !== undefined) user.name = patch.name.trim() || user.id;
+    if (patch.enabled !== undefined) user.enabled = patch.enabled;
+    await this.write(users);
+    return strip(user);
+  }
+
+  async setPassword(id: string, password: string): Promise<void> {
+    if (!password) throw new AppError(400, "口令不能为空");
+    const users = await this.read();
+    const user = users.find((u) => u.id === id);
+    if (!user) throw new AppError(404, "用户不存在");
+    user.pwd_hash = hashPassword(password);
+    await this.write(users);
   }
 
   private async read(): Promise<StoredUser[]> {

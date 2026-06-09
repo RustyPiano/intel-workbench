@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AdminService } from "../src/admin/admin-service.js";
 import { AuditService } from "../src/audit/audit-service.js";
+import { AuthService } from "../src/auth/auth-service.js";
 import { UserStore } from "../src/auth/user-store.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
@@ -84,5 +85,48 @@ describe("AdminService 管理后台（M5）", () => {
   it("listPrompts 返回内置只读基线", () => {
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     expect(admin.listPrompts().length).toBeGreaterThan(0);
+  });
+
+  it("createUser → 列表可见 + 入审计 + 新账号可登录", async () => {
+    const users = new UserStore(paths);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
+    const created = await admin.createUser(ADMIN, { id: "zhang", name: "张三", role: "operator", clearance: "secret", password: "zhang-pwd" });
+    expect(created).toMatchObject({ id: "zhang", role: "operator", clearance: "secret", enabled: true });
+    expect(JSON.stringify(created)).not.toContain("pwd_hash");
+    expect((await admin.listUsers()).some((u) => u.id === "zhang")).toBe(true);
+    expect((await audit.readAll()).some((e) => e.action === "user.create")).toBe(true);
+    const auth = new AuthService(users, audit);
+    expect((await auth.login("zhang", "zhang-pwd")).identity).toMatchObject({ id: "zhang", role: "operator" });
+  });
+
+  it("createUser 账号重复 → 409", async () => {
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
+    await expect(admin.createUser(ADMIN, { id: "operator", name: "x", role: "operator", clearance: "internal", password: "p" })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("updateUser 改角色/密级/启停并入审计；停用账号被拒登录", async () => {
+    const users = new UserStore(paths);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
+    const u = await admin.updateUser(ADMIN, "operator", { role: "security", clearance: "topsecret", enabled: false });
+    expect(u).toMatchObject({ role: "security", clearance: "topsecret", enabled: false });
+    expect((await audit.readAll()).some((e) => e.action === "user.update")).toBe(true);
+    const auth = new AuthService(users, audit);
+    await expect(auth.login("operator", "operator123")).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("禁止停用/改角色当前登录账号（防自锁）", async () => {
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
+    await expect(admin.updateUser(ADMIN, "admin", { enabled: false })).rejects.toMatchObject({ status: 400 });
+    await expect(admin.updateUser(ADMIN, "admin", { role: "operator" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("resetPassword：旧口令失效，新口令可登录", async () => {
+    const users = new UserStore(paths);
+    const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
+    await admin.resetPassword(ADMIN, "operator", "brand-new-pwd");
+    const auth = new AuthService(users, audit);
+    await expect(auth.login("operator", "operator123")).rejects.toMatchObject({ status: 401 });
+    expect((await auth.login("operator", "brand-new-pwd")).token).toBeTruthy();
+    expect((await audit.readAll()).some((e) => e.action === "user.password")).toBe(true);
   });
 });

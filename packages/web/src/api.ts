@@ -327,6 +327,33 @@ export function listAdminUsers(): Promise<ApiUser[]> {
   return fetch(`${BASE}/admin/users`, { headers: headers() }).then((r) => unwrap<ApiUser[]>(r, "users"));
 }
 
+export function createUser(input: { id: string; name: string; role: Role; clearance: Clearance; password: string }): Promise<ApiUser> {
+  return fetch(`${BASE}/admin/users`, { method: "POST", headers: headers(true), body: JSON.stringify(input) }).then((r) =>
+    unwrap<ApiUser>(r, "user"),
+  );
+}
+
+export function updateUser(
+  id: string,
+  patch: { name?: string; role?: Role; clearance?: Clearance; enabled?: boolean },
+): Promise<ApiUser> {
+  return fetch(`${BASE}/admin/users/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify(patch),
+  }).then((r) => unwrap<ApiUser>(r, "user"));
+}
+
+export async function resetUserPassword(id: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE}/admin/users/${encodeURIComponent(id)}/password`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ password }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+}
+
 export function listPrompts(): Promise<ApiPrompt[]> {
   return fetch(`${BASE}/admin/prompts`, { headers: headers() }).then((r) => unwrap<ApiPrompt[]>(r, "prompts"));
 }

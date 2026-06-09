@@ -33,6 +33,29 @@ export function createAdminRouter(admin: AdminService): Router {
     res.json({ ok: true, users: await admin.listUsers() });
   });
 
+  router.post("/users", async (req, res) => {
+    const { id, name, role, clearance, password } = (req.body ?? {}) as Record<string, string>;
+    const user = await admin.createUser(req.identity, {
+      id: id ?? "",
+      name: name ?? "",
+      role: role as Identity["role"],
+      clearance: clearance as Identity["clearance"],
+      password: password ?? "",
+    });
+    res.status(201).json({ ok: true, user });
+  });
+
+  router.patch("/users/:id", async (req, res) => {
+    const user = await admin.updateUser(req.identity, req.params.id, (req.body ?? {}) as Parameters<AdminService["updateUser"]>[2]);
+    res.json({ ok: true, user });
+  });
+
+  router.post("/users/:id/password", async (req, res) => {
+    const { password } = (req.body ?? {}) as { password?: string };
+    await admin.resetPassword(req.identity, req.params.id, password ?? "");
+    res.json({ ok: true });
+  });
+
   router.get("/prompts", (_req, res) => {
     res.json({ ok: true, prompts: admin.listPrompts() });
   });

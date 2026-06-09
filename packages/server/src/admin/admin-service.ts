@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { AuditService } from "../audit/audit-service.js";
 import type { UserStore } from "../auth/user-store.js";
 import type { DataPaths } from "../data/paths.js";
+import { AppError } from "../domain/identity.js";
 import type { Clearance, Identity, Role } from "../domain/types.js";
 import type { ModelConfig } from "../model/model-config.js";
 
@@ -128,6 +129,39 @@ export class AdminService {
 
   async listUsers(): Promise<UserInfo[]> {
     return this.users.list();
+  }
+
+  async createUser(
+    actor: Identity,
+    input: { id: string; name: string; role: Role; clearance: Clearance; password: string },
+  ): Promise<UserInfo> {
+    const user = await this.users.create(input);
+    await this.audit.append({
+      user: actor.id,
+      action: "user.create",
+      object: `user:${user.id}`,
+      detail: { role: user.role, clearance: user.clearance },
+    });
+    return user;
+  }
+
+  async updateUser(
+    actor: Identity,
+    id: string,
+    patch: { name?: string; role?: Role; clearance?: Clearance; enabled?: boolean },
+  ): Promise<UserInfo> {
+    // 防自锁：不允许管理员停用或改变自己当前登录账号的角色。
+    if (id === actor.id && (patch.enabled === false || (patch.role !== undefined && patch.role !== actor.role))) {
+      throw new AppError(400, "不能停用或改变当前登录账号的角色");
+    }
+    const user = await this.users.update(id, patch);
+    await this.audit.append({ user: actor.id, action: "user.update", object: `user:${id}`, detail: patch });
+    return user;
+  }
+
+  async resetPassword(actor: Identity, id: string, password: string): Promise<void> {
+    await this.users.setPassword(id, password);
+    await this.audit.append({ user: actor.id, action: "user.password", object: `user:${id}` });
   }
 
   listPrompts(): PromptInfo[] {

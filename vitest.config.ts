@@ -10,12 +10,12 @@ export default defineConfig({
   // 其 TS 源，避免依赖 dist 构建顺序与 vite 入口解析竞态。
   resolve: {
     alias: {
-      "mini-agent": path.resolve(root, "src/index.ts"),
+      "mini-agent": path.resolve(root, "packages/core/src/index.ts"),
     },
   },
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts", "packages/*/tests/**/*.test.ts"],
+    include: ["packages/*/tests/**/*.test.ts"],
     coverage: {
       reporter: ["text", "lcov"],
     },

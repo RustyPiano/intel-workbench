@@ -1,57 +1,27 @@
 {
-  "name": "mini-agent",
+  "name": "intel-workbench-monorepo",
   "version": "1.1.0",
-  "description": "A minimal local-first agent runtime with skills, tools, sessions, and a model adapter interface.",
+  "description": "情报分析工作台 — 离线智能情报处理与多模态分析系统（monorepo: core 运行时 + server + web）。",
   "type": "module",
+  "private": true,
   "workspaces": [
     "packages/*"
-  ],
-  "bin": {
-    "mini-agent": "./dist/src/cli/bin.js"
-  },
-  "main": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "dist/src/",
-    ".agents/skills/",
-    "docs/"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "prepack": "npm run build",
-    "prepublishOnly": "npm run check",
-    "dev": "tsx src/cli/bin.ts",
+    "clean": "npm run clean -w mini-agent",
+    "build": "npm run build -w mini-agent && npm run build -w @intel-workbench/server && npm run build -w @intel-workbench/web",
+    "dev": "npm run dev -w mini-agent",
     "test": "vitest",
     "test:run": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run build -w mini-agent && npm run typecheck -w @intel-workbench/server && npm run typecheck -w @intel-workbench/web",
     "check": "npm run typecheck && npm run test:run",
-    "dev:server": "npm run dev --workspace @intel-workbench/server",
-    "dev:web": "npm run dev --workspace @intel-workbench/web",
-    "build:server": "npm run build --workspace @intel-workbench/server",
-    "build:web": "npm run build --workspace @intel-workbench/web",
-    "typecheck:server": "npm run typecheck --workspace @intel-workbench/server",
-    "typecheck:web": "npm run typecheck --workspace @intel-workbench/web"
-  },
-  "dependencies": {
-    "@aws-sdk/client-s3": "^3.1057.0",
-    "@aws-sdk/lib-storage": "^3.1057.0",
-    "@aws-sdk/s3-request-presigner": "^3.1057.0",
-    "fast-glob": "^3.3.3",
-    "gray-matter": "^4.0.3",
-    "nanoid": "^5.1.7",
-    "openai": "^6.34.0",
-    "zod": "^4.3.6"
+    "dev:server": "npm run dev -w @intel-workbench/server",
+    "dev:web": "npm run dev -w @intel-workbench/web",
+    "build:server": "npm run build -w @intel-workbench/server",
+    "build:web": "npm run build -w @intel-workbench/web"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

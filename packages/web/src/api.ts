@@ -14,6 +14,18 @@ export function setSessionToken(token: string | null): void {
   sessionToken = token;
 }
 
+/** 会话失效（任意鉴权请求返回 401）回调，由 SessionProvider 注册以自动登出回登录页。 */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
+/** 鉴权请求遇 401 即触发自动登出（登录端点的 401 不走此路径）。 */
+function noteStatus(res: Response): void {
+  if (res.status === 401) onUnauthorized?.();
+}
+
 export interface ApiCase {
   id: string;
   name: string;
@@ -182,6 +194,7 @@ function headers(json = false): Record<string, string> {
 async function unwrap<T>(res: Response, key: string): Promise<T> {
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
   if (!res.ok || body.ok === false) {
+    noteStatus(res);
     throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
   }
   return body[key] as T;
@@ -255,7 +268,10 @@ export function askInquiry(caseId: string, question: string): Promise<ApiInquiry
 export function getMaterialContent(materialId: string): Promise<MaterialContent> {
   return fetch(`${BASE}/materials/${encodeURIComponent(materialId)}`, { headers: headers() }).then(async (r) => {
     const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
-    if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    if (!r.ok || body.ok === false) {
+      noteStatus(r);
+      throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    }
     return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
   });
 }
@@ -351,7 +367,10 @@ export async function resetUserPassword(id: string, password: string): Promise<v
     body: JSON.stringify({ password }),
   });
   const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
-  if (!res.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
 }
 
 export function listPrompts(): Promise<ApiPrompt[]> {
@@ -361,7 +380,10 @@ export function listPrompts(): Promise<ApiPrompt[]> {
 export function exportAudit(): Promise<{ exportedAt: string; count: number; events: AuditEvent[] }> {
   return fetch(`${BASE}/audit/export`, { method: "POST", headers: headers() }).then(async (r) => {
     const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
-    if (!r.ok || body.ok === false) throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    if (!r.ok || body.ok === false) {
+      noteStatus(r);
+      throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    }
     return { exportedAt: body.exportedAt, count: body.count, events: body.events } as { exportedAt: string; count: number; events: AuditEvent[] };
   });
 }

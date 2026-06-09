@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { fetchMe, login as apiLogin, logout as apiLogout, setSessionToken } from "../api";
+import { fetchMe, login as apiLogin, logout as apiLogout, setSessionToken, setUnauthorizedHandler } from "../api";
 import type { Role, SessionUser } from "../types";
 
 /**
@@ -41,6 +41,16 @@ function persistToken(token: string | null): void {
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // 任意鉴权请求遇 401（会话过期/失效）→ 清会话，守卫随即跳回登录页。
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setSessionToken(null);
+      persistToken(null);
+      setUser(null);
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   // 启动恢复：有存储令牌则向服务端校验，失效则清理。
   useEffect(() => {

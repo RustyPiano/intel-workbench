@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
 
 import {
+  createUser,
   listAdminUsers,
   listPrompts,
   listSkills,
   modelDoctor,
+  resetUserPassword,
   setSkillEnabled,
+  updateUser,
   type ApiModelDoctor,
   type ApiPrompt,
   type ApiSkill,
   type ApiUser,
 } from "../api";
 import { useSession } from "../state/session";
-import { CLEARANCE_LABELS, ROLE_LABELS } from "../types";
+import { CLEARANCE_LABELS, ROLE_LABELS, type Clearance, type Role } from "../types";
+
+const ROLE_OPTIONS = Object.keys(ROLE_LABELS) as Role[];
+const CLEARANCE_OPTIONS = Object.keys(CLEARANCE_LABELS) as Clearance[];
 
 /**
  * 管理后台（M5，骨架做实）。各页接通真实 /api/admin/* 接口；仅管理员可进入
@@ -165,14 +171,64 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-/** 用户与权限（最简，config/users.json，产品 spec §8.14）。 */
+/** 用户与权限（config/users.json，产品 spec §8.14）：新增 / 改角色密级 / 启停 / 重置口令。 */
 export function AdminUsersPage() {
-  const { data: users, error } = useAdminData<ApiUser[]>((u) => (u ? listAdminUsers() : undefined));
+  const { user: me, data: users, error, reload } = useAdminData<ApiUser[]>((u) => (u ? listAdminUsers() : undefined));
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({ id: "", name: "", role: "operator" as Role, clearance: "internal" as Clearance, password: "" });
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await fn();
+      reload();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!draft.id.trim() || !draft.password) {
+      setActionError("账号与口令为必填项");
+      return;
+    }
+    void act(async () => {
+      await createUser({ ...draft, id: draft.id.trim() });
+      setDraft({ id: "", name: "", role: "operator", clearance: "internal", password: "" });
+    });
+  };
+
+  const handleReset = (u: ApiUser) => {
+    const pwd = window.prompt(`为「${u.name}（${u.id}）」设置新口令：`);
+    if (pwd) void act(() => resetUserPassword(u.id, pwd));
+  };
+
   return (
     <div className="page">
       <h1 className="page__title">用户与权限</h1>
-      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>一期预置 1 管理员 + 1 作业员 + 1 保密员（config/users.json）。账号编辑/口令在后续接通。</p>
-      {error ? <p style={{ color: "var(--danger-light)" }}>{error}</p> : null}
+      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>
+        账号存于 config/users.json，口令以 scrypt 哈希落盘。新增账号即可登录；停用账号将被拒绝登录。
+      </p>
+      {(error || actionError) ? <p style={{ color: "var(--danger-light)" }}>{error ?? actionError}</p> : null}
+
+      <form onSubmit={handleCreate} style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" }}>
+        <input className="input-text" placeholder="账号 id" value={draft.id} onChange={(e) => setDraft({ ...draft, id: e.target.value })} style={{ padding: "8px 10px", fontSize: "13px", width: "120px" }} />
+        <input className="input-text" placeholder="姓名" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} style={{ padding: "8px 10px", fontSize: "13px", width: "120px" }} />
+        <select className="input-text" value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value as Role })} style={{ padding: "8px 10px", fontSize: "13px" }}>
+          {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+        </select>
+        <select className="input-text" value={draft.clearance} onChange={(e) => setDraft({ ...draft, clearance: e.target.value as Clearance })} style={{ padding: "8px 10px", fontSize: "13px" }}>
+          {CLEARANCE_OPTIONS.map((c) => <option key={c} value={c}>{CLEARANCE_LABELS[c]}</option>)}
+        </select>
+        <input className="input-text" type="password" placeholder="初始口令" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} style={{ padding: "8px 10px", fontSize: "13px", width: "120px" }} />
+        <button type="submit" className="btn btn--primary" disabled={busy} style={{ padding: "8px 16px", fontSize: "13px" }}>+ 新增用户</button>
+      </form>
+
       <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
         <table className="elements-table">
           <thead>
@@ -181,25 +237,42 @@ export function AdminUsersPage() {
               <th>角色</th>
               <th>最大可访问密级</th>
               <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            {(users ?? []).map((u) => (
-              <tr key={u.id}>
-                <td style={{ fontWeight: "700" }}>
-                  {u.name} <code style={{ fontSize: "11px", color: "var(--text-muted)" }}>({u.id})</code>
-                </td>
-                <td>{ROLE_LABELS[u.role]}</td>
-                <td>
-                  <span className={`badge badge--clearance tone-${u.clearance}`} style={{ padding: "2px 8px", fontSize: "11px" }}>
-                    {CLEARANCE_LABELS[u.clearance]}
-                  </span>
-                </td>
-                <td>
-                  <span style={{ color: u.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>● {u.enabled ? "活跃" : "停用"}</span>
-                </td>
-              </tr>
-            ))}
+            {(users ?? []).map((u) => {
+              const isSelf = u.id === me?.id;
+              return (
+                <tr key={u.id}>
+                  <td style={{ fontWeight: "700" }}>
+                    {u.name} <code style={{ fontSize: "11px", color: "var(--text-muted)" }}>({u.id})</code>
+                    {isSelf ? <span style={{ fontSize: "11px", color: "var(--accent-light)", marginLeft: "6px" }}>当前账号</span> : null}
+                  </td>
+                  <td>
+                    <select className="input-text" value={u.role} disabled={busy || isSelf} onChange={(e) => act(() => updateUser(u.id, { role: e.target.value as Role }))} style={{ padding: "4px 8px", fontSize: "12px" }}>
+                      {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <select className="input-text" value={u.clearance} disabled={busy} onChange={(e) => act(() => updateUser(u.id, { clearance: e.target.value as Clearance }))} style={{ padding: "4px 8px", fontSize: "12px" }}>
+                      {CLEARANCE_OPTIONS.map((c) => <option key={c} value={c}>{CLEARANCE_LABELS[c]}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <span style={{ color: u.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>● {u.enabled ? "活跃" : "停用"}</span>
+                  </td>
+                  <td style={{ display: "flex", gap: "6px" }}>
+                    <button type="button" className="btn" disabled={busy || isSelf} onClick={() => act(() => updateUser(u.id, { enabled: !u.enabled }))} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                      {u.enabled ? "停用" : "启用"}
+                    </button>
+                    <button type="button" className="btn" disabled={busy} onClick={() => handleReset(u)} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                      重置口令
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -119,3 +119,69 @@ export function fitToBudget(chunks: Chunk[], budget: number): { used: Chunk[]; t
   }
   return { used, truncated: used.length < chunks.length };
 }
+
+/**
+ * 稠密检索 + 混合 RRF（二期 §5.2）。精确暴力余弦（不漏匹配，对溯源关键）；RRF 融合排名
+ * 而非分数，规避 BM25/cosine 量纲不可比。embedding 不可用时退 BM25-only。
+ */
+
+/** 候选过取回深度：先各取较宽再融合截 top-k。 */
+function candidateDepth(k: number): number {
+  return Math.max(k * 4, 24);
+}
+
+function cosine(a: Float32Array, b: Float32Array): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/** 进程内暴力余弦 top-n（返回 chunk_id，降序）。 */
+export function denseSearch(queryVec: Float32Array, byId: Map<string, Float32Array>, n: number): string[] {
+  return [...byId.entries()]
+    .map(([id, v]) => ({ id, score: cosine(queryVec, v) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n)
+    .map((s) => s.id);
+}
+
+/** Reciprocal Rank Fusion（k=60）：score = Σ 1/(k + rank)（rank 1-based），按融合分降序。 */
+export function rrf(rankings: readonly (readonly string[])[], k = 60): string[] {
+  const score = new Map<string, number>();
+  for (const ranking of rankings) {
+    ranking.forEach((id, rank) => {
+      score.set(id, (score.get(id) ?? 0) + 1 / (k + rank + 1));
+    });
+  }
+  return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+}
+
+/**
+ * 混合检索：BM25 ⊕ dense via RRF → top-k。queryVec/向量缺失即退 BM25-only（不报错）。
+ * used 即喂模型且供 Citation 校验的候选集——溯源红线两路同一 resolveValidCitations。
+ */
+export function retrieveHybrid(
+  query: string,
+  chunks: Chunk[],
+  queryVec: Float32Array | null,
+  byId: Map<string, Float32Array>,
+  k = 6,
+): Chunk[] {
+  const byChunkId = new Map(chunks.map((c) => [c.chunk_id, c]));
+  const depth = candidateDepth(k);
+  const bm25Ranked = retrieve(query, chunks, depth).map((h) => h.chunk.chunk_id);
+  const pick = (ids: string[]): Chunk[] => ids.slice(0, k).map((id) => byChunkId.get(id)).filter((c): c is Chunk => Boolean(c));
+  if (!queryVec || byId.size === 0) {
+    return pick(bm25Ranked); // 退 BM25-only
+  }
+  const denseRanked = denseSearch(queryVec, byId, depth);
+  return pick(rrf([bm25Ranked, denseRanked], 60));
+}

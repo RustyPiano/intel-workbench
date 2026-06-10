@@ -8,10 +8,11 @@ import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Material, Modality } from "../domain/types.js";
-import type { AsrResult, ModelSlots } from "../model/slots.js";
+import type { AsrResult, EmbeddingAdapter, ModelSlots } from "../model/slots.js";
 import { sha256, shortId } from "../util/hash.js";
 import { writeFileAtomic } from "../util/atomic.js";
 import { processAudio, processImage, processVideo, type MediaFrame } from "./media-pipeline.js";
+import { readVec, writeVec } from "./vec-store.js";
 
 const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
 
@@ -202,7 +203,18 @@ export class MaterialService {
       chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
       "utf8",
     );
+    await this.writeIndex(caseDir, id, chunks); // 同提交写稠密索引（§5.3）
     return chunks.length;
+  }
+
+  /** 稠密索引：embed 切块文本 → 写 `index/<mid>.vec`（与 chunks 同序同提交，§5.3）。未配置 embed 即跳过。 */
+  private async writeIndex(caseDir: string, materialId: string, chunks: Chunk[]): Promise<void> {
+    const embed = this.slots.embed;
+    if (!embed || chunks.length === 0) return;
+    const vectors = await embed.embed(chunks.map((c) => c.text));
+    const indexDir = path.join(caseDir, "index");
+    await mkdir(indexDir, { recursive: true });
+    await writeVec(path.join(indexDir, `${materialId}.vec`), { embed_model: embed.modelId, dim: embed.dim, count: chunks.length }, vectors);
   }
 
   /**
@@ -353,6 +365,7 @@ export class MaterialService {
         out.chunks.map((c) => JSON.stringify(c)).join("\n") + (out.chunks.length ? "\n" : ""),
       );
       if (out.frames) await this.writeFrames(processedDir, materialId, out.frames);
+      await this.writeIndex(this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3）
 
       const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
         m.status = "done";
@@ -439,6 +452,41 @@ export class MaterialService {
       }
     }
     return chunks;
+  }
+
+  /** 单素材切块（有序），供与 .vec 向量按位置 zip（§5.3）。 */
+  private async loadMaterialChunks(caseId: string, materialId: string): Promise<Chunk[]> {
+    try {
+      const raw = await readFile(path.join(this.paths.caseDir(caseId), "processed", `${materialId}.chunks.jsonl`), "utf8");
+      return raw.split("\n").filter((l) => l.length > 0).map((l) => JSON.parse(l) as Chunk);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
+    }
+  }
+
+  /**
+   * 读专题稠密向量（§5.3），按 chunk_id 索引。**读时校验版本戳**：与当前 embed 不符
+   * （换模型/维度变 / count 与切块数不符=重切块未重嵌）→ 跳过该素材（退 BM25），其 id
+   * 计入 stale（待重建索引）；无 .vec 不算 stale（可能入库时未配 embedding）。
+   */
+  async loadCaseVectors(caseId: string, embed: EmbeddingAdapter): Promise<{ byId: Map<string, Float32Array>; stale: string[] }> {
+    const byId = new Map<string, Float32Array>();
+    const stale: string[] = [];
+    const manifest = await this.cases.loadManifest(caseId);
+    if (!manifest) return { byId, stale };
+    for (const m of manifest.materials) {
+      if (m.status !== "done") continue;
+      const vec = await readVec(path.join(this.paths.caseDir(caseId), "index", `${m.id}.vec`));
+      if (!vec) continue;
+      const chunks = await this.loadMaterialChunks(caseId, m.id);
+      if (vec.embed_model !== embed.modelId || vec.dim !== embed.dim || vec.count !== chunks.length) {
+        stale.push(m.id);
+        continue;
+      }
+      for (let i = 0; i < chunks.length; i++) byId.set(chunks[i].chunk_id, vec.vectors[i]);
+    }
+    return { byId, stale };
   }
 
   private async locate(materialId: string): Promise<{ caseId: string; material: Material } | null> {

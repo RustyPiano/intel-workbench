@@ -11,6 +11,8 @@ import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { InquiryService } from "../src/inquiry/inquiry-service.js";
 import { MaterialService } from "../src/materials/material-service.js";
+import { MockEmbed } from "../src/model/mock-slots.js";
+import type { ModelSlots } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
@@ -156,5 +158,60 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
       expect(inq.status).toBe("insufficient");
       expect(inq.claims[0].status).toBe("unverified");
     });
+  });
+});
+
+describe("InquiryService 混合检索（二期 P2.4 §5.2）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let materials: MaterialService;
+  let caseId: string;
+  let chunkId: string;
+  const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
+  let savedBudget: string | undefined;
+
+  const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-hyb-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    materials = new MaterialService(paths, audit, cases, EMBED_SLOTS); // 入库写 .vec
+    caseId = (await cases.create(OPERATOR, { name: "混检专题", clearance: "internal" })).id;
+    await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "南海周边发现可疑舰船活动，疑似军事演习。" }]);
+    chunkId = (await materials.loadCaseChunks(caseId))[0].chunk_id;
+    savedBudget = process.env[KEY];
+  });
+
+  afterEach(async () => {
+    if (savedBudget === undefined) delete process.env[KEY];
+    else process.env[KEY] = savedBudget;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function service(json: string): InquiryService {
+    const adapter: ModelAdapter = { name: "stub", generate: async () => ({ message: { role: "assistant", content: json }, stopReason: "end_turn" }) };
+    const guard = new OfflineGuard(["stub.local"], audit);
+    return new InquiryService(paths, audit, cases, materials, { adapter, guard, modelEndpoint: "https://stub.local/v1" }, { embed: new MockEmbed(), embedEndpoint: "" });
+  }
+
+  it("检索路 + embed 可用 → 混合检索 answered，引用解析有效，审计 mode=hybrid", async () => {
+    delete process.env[KEY]; // 未设预算 → 检索路（非全上下文）
+    const json = JSON.stringify({ claims: [{ text: "发现可疑舰船活动", type: "fact", citations: [chunkId] }], insufficient: false });
+    const inq = await service(json).ask(OPERATOR, caseId, "有何可疑舰船活动");
+    expect(inq.status).toBe("answered");
+    expect(inq.claims[0].citations[0].content_hash).toBeTruthy(); // 红线：hash 校验过
+    const ev = (await audit.readAll()).filter((e) => e.action === "inquiry.create").pop();
+    expect(ev?.detail?.mode).toBe("hybrid");
+  });
+
+  it("混合检索下第③条拒答仍守红线：引用不存在 chunk → 整体拒答", async () => {
+    delete process.env[KEY];
+    const json = JSON.stringify({ claims: [{ text: "捏造", type: "fact", citations: ["m#999"] }], insufficient: false });
+    const inq = await service(json).ask(OPERATOR, caseId, "有何可疑舰船活动");
+    expect(inq.status).toBe("insufficient");
   });
 });

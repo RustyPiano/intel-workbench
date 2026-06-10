@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Chunk } from "../src/domain/types.js";
-import { estChunkTokens, estTokens, fitToBudget, retrieve, selectContext, tokenize } from "../src/inquiry/retrieval.js";
+import { denseSearch, estChunkTokens, estTokens, fitToBudget, retrieve, retrieveHybrid, rrf, selectContext, tokenize } from "../src/inquiry/retrieval.js";
 
 function chunk(id: string, text: string): Chunk {
   return { chunk_id: id, material_id: "m", modality: "doc", locator: {}, text, content_hash: "" };
@@ -75,5 +75,46 @@ describe("token 预算路由（二期 Spec §5.1）", () => {
     const tight = fitToBudget(chunks, 1);
     expect(tight.used).toHaveLength(1); // 至少 1 块
     expect(tight.truncated).toBe(true);
+  });
+});
+
+describe("稠密检索 + 混合 RRF（二期 §5.2）", () => {
+  const chunks = [
+    chunk("m#0", "南海周边发现可疑舰船活动"),
+    chunk("m#1", "今日天气晴朗适合外出"),
+    chunk("m#2", "舰船编号与呼号存在关联"),
+  ];
+
+  it("rrf 融合排名符合公式 Σ1/(60+rank)", () => {
+    // a:1/61+1/63, b:1/62+1/61, c:1/63+1/62 → b>a>c。
+    expect(rrf([["a", "b", "c"], ["b", "c", "a"]], 60)).toEqual(["b", "a", "c"]);
+  });
+
+  it("denseSearch：按余弦降序返回 top-n chunk_id", () => {
+    const byId = new Map([
+      ["m#0", new Float32Array([1, 0, 0])],
+      ["m#1", new Float32Array([0, 1, 0])],
+      ["m#2", new Float32Array([0.9, 0.1, 0])],
+    ]);
+    const ranked = denseSearch(new Float32Array([1, 0, 0]), byId, 2);
+    expect(ranked[0]).toBe("m#0"); // 与查询同向最相似
+    expect(ranked).toContain("m#2");
+    expect(ranked).toHaveLength(2);
+  });
+
+  it("retrieveHybrid：有向量 → BM25⊕dense 融合；缺向量/空 byId → 退 BM25-only", () => {
+    const byId = new Map([
+      ["m#0", new Float32Array([1, 0, 0])],
+      ["m#1", new Float32Array([0, 1, 0])],
+      ["m#2", new Float32Array([0.8, 0.2, 0])],
+    ]);
+    const hybrid = retrieveHybrid("可疑舰船", chunks, new Float32Array([1, 0, 0]), byId, 3);
+    expect(hybrid.length).toBeGreaterThan(0);
+    // 退化：queryVec=null 或空 byId → 等价 BM25 top-k。
+    const bm25 = retrieve("可疑舰船", chunks, 3).map((h) => h.chunk.chunk_id);
+    const degradedNull = retrieveHybrid("可疑舰船", chunks, null, byId, 3).map((c) => c.chunk_id);
+    const degradedEmpty = retrieveHybrid("可疑舰船", chunks, new Float32Array([1, 0, 0]), new Map(), 3).map((c) => c.chunk_id);
+    expect(degradedNull).toEqual(bm25);
+    expect(degradedEmpty).toEqual(bm25);
   });
 });

@@ -8,10 +8,18 @@ import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readCtxBudgetTokens } from "../model/rag-config.js";
+import type { EmbeddingAdapter } from "../model/slots.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { shortId } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
-import { selectContext } from "./retrieval.js";
+import { retrieveHybrid, selectContext } from "./retrieval.js";
+
+/** 稠密检索依赖（二期 P2.4）。embed 缺省 null → 检索退 BM25-only。 */
+export interface DenseDeps {
+  embed: EmbeddingAdapter | null;
+  /** embed 端点（real 适配器出站前授权用；mock 在进程内为 ""，跳过授权）。 */
+  embedEndpoint: string;
+}
 
 /**
  * 问答带溯源（工程方案 §7.3）。受控管线，不走开放工具循环：
@@ -41,6 +49,8 @@ export class InquiryService {
     private readonly cases: CaseService,
     private readonly materials: MaterialService,
     private readonly deps: LlmDeps,
+    /** 稠密检索依赖（二期 P2.4）；缺省无 embed → 检索退 BM25-only。 */
+    private readonly dense: DenseDeps = { embed: null, embedEndpoint: "" },
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
@@ -50,8 +60,18 @@ export class InquiryService {
     const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
 
     const chunks = await this.materials.loadCaseChunks(caseId);
-    // token 预算路由（§5.1）：预算内全上下文、超预算 BM25 检索；未设预算退一期 top-k。
-    const { used, mode } = selectContext(q, chunks, readCtxBudgetTokens(), TOP_K);
+    // token 预算路由（§5.1）：预算内全上下文、超预算检索；未设预算退一期 top-k。
+    const sel = selectContext(q, chunks, readCtxBudgetTokens(), TOP_K);
+    let used = sel.used;
+    let mode: string = sel.mode;
+    let staleIndex = 0;
+    // 检索路且 embed 可用 → 升级为 BM25 ⊕ dense 混合（§5.2）；否则保持 BM25。
+    if (sel.mode === "retrieval" && this.dense.embed) {
+      const hybrid = await this.hybridRetrieve(actor, q, caseId, chunks);
+      used = hybrid.used;
+      staleIndex = hybrid.stale;
+      mode = "hybrid";
+    }
 
     let inquiry: Inquiry;
     if (chunks.length === 0) {
@@ -71,9 +91,21 @@ export class InquiryService {
       action: "inquiry.create",
       object: `inquiry:${inquiry.id}`,
       caseId,
-      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, mode, used: used.length },
+      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, mode, used: used.length, staleIndex },
     });
     return inquiry;
+  }
+
+  /** BM25 ⊕ dense 混合检索（§5.2）。embed query 出站前授权（real）；向量缺失/维度不符自动退 BM25。 */
+  private async hybridRetrieve(actor: Identity, q: string, caseId: string, chunks: Chunk[]): Promise<{ used: Chunk[]; stale: number }> {
+    const embed = this.dense.embed!;
+    // 零外发红线：real embed 端点出站前授权（mock 在进程内、endpoint 为空则跳过）。
+    if (this.dense.embedEndpoint) {
+      await this.deps.guard.authorize(this.dense.embedEndpoint, { user: actor.id, purpose: "embed-query" });
+    }
+    const [queryVec] = await embed.embed([q]);
+    const { byId, stale } = await this.materials.loadCaseVectors(caseId, embed);
+    return { used: retrieveHybrid(q, chunks, queryVec ?? null, byId, TOP_K), stale: stale.length };
   }
 
   async list(actor: Identity, caseId: string): Promise<Inquiry[]> {

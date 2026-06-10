@@ -71,7 +71,12 @@ function splitLong(paragraph: string): string[] {
   return pieces;
 }
 
-/** 文档归一化文本 → 带稳定 id 的切块（§7.3 step 1）。 */
+/**
+ * 文档归一化文本 → 带稳定 id 的切块（§7.3 step 1）。
+ * 二期 Spec §2.1：每块带 `modality:"doc"` + `char_start/char_end`（归一化文本中的偏移，
+ * 供 UI 高亮源片段；不变量：`text.slice(char_start,char_end) === chunk.text`）。
+ * 段落经 trim/splitLong 后仍是归一化文本的子串，故用单调游标按文档顺序定位偏移。
+ */
 function chunkText(materialId: string, text: string): Chunk[] {
   const paragraphs = text
     .split(/\n\s*\n/)
@@ -79,12 +84,17 @@ function chunkText(materialId: string, text: string): Chunk[] {
     .filter((p) => p.length > 0);
   const chunks: Chunk[] = [];
   let idx = 0;
+  let cursor = 0;
   paragraphs.forEach((para, pIdx) => {
     for (const piece of splitLong(para)) {
+      const charStart = text.indexOf(piece, cursor);
+      const charEnd = charStart + piece.length;
+      cursor = charEnd;
       chunks.push({
         chunk_id: `${materialId}#${idx}`,
         material_id: materialId,
-        locator: { paragraph: pIdx + 1 },
+        modality: "doc",
+        locator: { paragraph: pIdx + 1, char_start: charStart, char_end: charEnd },
         text: piece,
         content_hash: sha256(piece),
       });

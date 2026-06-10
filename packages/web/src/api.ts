@@ -86,10 +86,36 @@ export interface AsrSegment {
   text: string;
 }
 
+/** OCR 行（文本 + 归一化区域 [x,y,w,h]，二期 P2.3b）。 */
+export interface OcrLine {
+  text: string;
+  bbox: [number, number, number, number];
+}
+export interface VideoShot {
+  t1: number;
+  t2: number;
+  frameKey: string;
+  caption: string | null;
+  ocr: OcrLine[];
+}
+export interface VideoMedia {
+  kind: "video";
+  duration: number;
+  shots: VideoShot[];
+  transcript: { segments: AsrSegment[] } | null;
+}
+export interface ImageMedia {
+  kind: "image";
+  caption: string | null;
+  ocr: OcrLine[];
+}
+
 export interface MaterialContent {
   material: ApiMaterial;
   text?: string;
   segments?: AsrSegment[];
+  /** 视频/图像加工中间结果（二期 P2.3b）。 */
+  media?: VideoMedia | ImageMedia;
   chunkCount?: number;
   note?: string;
 }
@@ -283,8 +309,18 @@ export function getMaterialContent(materialId: string): Promise<MaterialContent>
       noteStatus(r);
       throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     }
-    return { material: body.material, text: body.text, segments: body.segments, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
+    return { material: body.material, text: body.text, segments: body.segments, media: body.media, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
   });
+}
+
+/** 拉取视频/图像关键帧为对象 URL（带令牌，供 bbox 框选回放，二期 §4.3）。调用方负责 revoke。 */
+export async function fetchFrameUrl(materialId: string, t: number | string): Promise<string> {
+  const res = await fetch(`${BASE}/materials/${encodeURIComponent(materialId)}/frame?t=${encodeURIComponent(String(t))}`, { headers: headers() });
+  if (!res.ok) {
+    noteStatus(res);
+    throw new Error(`帧加载失败（HTTP ${res.status}）`);
+  }
+  return URL.createObjectURL(await res.blob());
 }
 
 /** 显式加工媒体素材（二期 P2.3a）：pending/failed/done → done|failed。 */

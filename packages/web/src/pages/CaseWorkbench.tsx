@@ -7,6 +7,7 @@ import {
   draftReport,
   exportReport,
   extractElements,
+  fetchFrameUrl,
   fetchMaterialRawUrl,
   getCase,
   getMaterialContent,
@@ -18,13 +19,16 @@ import {
   submitReport,
   uploadMaterial,
   type ApiCase,
+  type ApiCitation,
   type ApiClaim,
   type ApiElement,
   type ApiInquiry,
   type ApiMaterial,
   type ApiReport,
   type ElementType,
+  type ImageMedia,
   type MaterialContent,
+  type VideoMedia,
 } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS } from "../types";
@@ -113,6 +117,23 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function isMediaModality(m: ApiMaterial["modality"]): boolean {
+  return m === "audio" || m === "video" || m === "image";
+}
+
+/** 媒体素材加工状态行文案（含部分失败 note，二期 P2.3a/b）。 */
+function mediaStatusText(content: MaterialContent): string {
+  const mt = content.material;
+  if (mt.status === "processing") return "加工中…";
+  if (mt.status !== "done") return mt.note ?? "尚未加工。点击「加工」生成可引用片段（带时间码/坐标）。";
+  const eng = `引擎 ${mt.engine ?? "—"}`;
+  const dur = mt.duration ? ` · ${mt.duration}s` : "";
+  const warn = mt.note ? ` · ⚠ ${mt.note}` : "";
+  if (mt.modality === "audio") return `转写完成 · ${content.segments?.length ?? 0} 段 · ${eng}${dur}${warn}`;
+  if (mt.modality === "video" && content.media?.kind === "video") return `解析完成 · ${content.media.shots.length} 镜头 · ${eng}${dur}${warn}`;
+  return `解析完成 · ${eng}${warn}`;
+}
+
 /** 解析时间码 "start-end"（秒）→ [start, end]（二期 P2.3a）。 */
 function parseTimecode(tc?: string): [number, number] | null {
   if (!tc) return null;
@@ -163,6 +184,141 @@ async function playCitedSegment(materialId: string, timecode: string): Promise<v
   });
   audio.addEventListener("ended", release);
   audio.addEventListener("error", release);
+}
+
+interface BBox {
+  bbox: [number, number, number, number];
+  label?: string;
+}
+
+/**
+ * 帧图 + bbox 框选（二期 §4.3）。带令牌拉帧（视频=frame 端点按 t，图像=raw 原图）→
+ * objectURL → <img>，OCR/引用区域按归一化 [x,y,w,h] 叠加描边框。
+ */
+function BboxImage({ materialId, frameT, boxes }: { materialId: string; frameT?: number; boxes: BBox[] }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    let u: string | null = null;
+    const p = frameT !== undefined ? fetchFrameUrl(materialId, frameT) : fetchMaterialRawUrl(materialId);
+    p.then((x) => {
+      if (alive) {
+        u = x;
+        setUrl(x);
+      } else {
+        URL.revokeObjectURL(x);
+      }
+    }).catch(() => alive && setUrl(null));
+    return () => {
+      alive = false;
+      if (u) URL.revokeObjectURL(u);
+      setUrl(null);
+    };
+  }, [materialId, frameT]);
+
+  if (!url) return <div style={{ padding: "16px", fontSize: "12px", color: "var(--text-dim)", background: "rgba(16,24,40,0.4)", borderRadius: "var(--radius)" }}>加载帧…</div>;
+  return (
+    <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", lineHeight: 0 }}>
+      <img src={url} alt="frame" style={{ maxWidth: "100%", display: "block", borderRadius: "var(--radius)" }} />
+      {boxes.map((b, i) => (
+        <div
+          key={i}
+          title={b.label}
+          style={{
+            position: "absolute",
+            left: `${b.bbox[0] * 100}%`,
+            top: `${b.bbox[1] * 100}%`,
+            width: `${b.bbox[2] * 100}%`,
+            height: `${b.bbox[3] * 100}%`,
+            border: "2px solid #5ee7a8",
+            boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+            boxSizing: "border-box",
+            pointerEvents: "none",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 视频阅读区：分镜（帧+配文+OCR 框选）+ 音轨转写（二期 P2.3b）。 */
+function VideoMediaView({ materialId, media }: { materialId: string; media: VideoMedia }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>分镜 {media.shots.length} · 时长 {media.duration}s</div>
+      {media.shots.map((shot, i) => (
+        <div key={i} style={{ display: "flex", gap: "14px", flexWrap: "wrap", padding: "10px", background: "rgba(16,24,40,0.3)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}>
+          <div style={{ flexShrink: 0, width: "240px", maxWidth: "100%" }}>
+            <BboxImage materialId={materialId} frameT={shot.t1} boxes={shot.ocr.map((o) => ({ bbox: o.bbox, label: o.text }))} />
+            <div style={{ fontSize: "11px", fontFamily: "monospace", color: "var(--text-muted)", marginTop: "4px" }}>镜头 {shot.t1}–{shot.t2}s</div>
+          </div>
+          <div style={{ fontSize: "13px", lineHeight: 1.6, flex: 1, minWidth: "180px" }}>
+            {shot.caption ? <div><strong style={{ color: "var(--accent-light)" }}>配文：</strong>{shot.caption}</div> : null}
+            {shot.ocr.length ? <div style={{ marginTop: "6px" }}><strong style={{ color: "var(--accent-light)" }}>OCR：</strong>{shot.ocr.map((o) => o.text).join(" / ")}</div> : null}
+          </div>
+        </div>
+      ))}
+      {media.transcript && media.transcript.segments.length ? (
+        <div>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", margin: "4px 0" }}>音轨转写</div>
+          {media.transcript.segments.map((seg, i) => (
+            <div key={i} style={{ fontSize: "13px", padding: "3px 0" }}>
+              <span style={{ fontFamily: "monospace", color: "var(--text-muted)", marginRight: "8px" }}>{seg.start}–{seg.end}s</span>
+              {seg.speaker ? <strong style={{ color: "var(--accent-light)", marginRight: "6px" }}>{seg.speaker}</strong> : null}
+              {seg.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 引用帧框选（硬验收，二期 §4.3）：bbox/timecode 引用 → 取帧（视频=frame 端点按时间码起点，
+ * 图像=原图）并在帧上框出被引用区域，复核员据此核对"区域"而非仅文本。
+ */
+function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => void }) {
+  const tc = parseTimecode(cite.locator.timecode);
+  const frameT = cite.modality === "video" && tc ? tc[0] : undefined;
+  const boxes = cite.locator.bbox ? [{ bbox: cite.locator.bbox, label: cite.snippet }] : [];
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px", background: "rgba(16,24,40,0.5)", display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+          引用出处：{cite.material_name}
+          {cite.locator.timecode ? ` · ${cite.locator.timecode}s` : ""}
+        </span>
+        <button type="button" className="btn" style={{ padding: "2px 8px", fontSize: "11px" }} onClick={onClose}>
+          ✕ 关闭
+        </button>
+      </div>
+      <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
+      <div style={{ fontSize: "12px", color: "var(--text)" }}>{cite.snippet}</div>
+    </div>
+  );
+}
+
+/** 图像阅读区：原图 + OCR 区域框选 + 配文（二期 P2.3b）。 */
+function ImageMediaView({ materialId, media }: { materialId: string; media: ImageMedia }) {
+  return (
+    <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+      <div style={{ flexShrink: 0, maxWidth: "360px" }}>
+        <BboxImage materialId={materialId} boxes={media.ocr.map((o) => ({ bbox: o.bbox, label: o.text }))} />
+      </div>
+      <div style={{ fontSize: "13px", lineHeight: 1.7, minWidth: "200px", flex: 1 }}>
+        {media.caption ? <div><strong style={{ color: "var(--accent-light)" }}>配文：</strong>{media.caption}</div> : null}
+        {media.ocr.length ? (
+          <div style={{ marginTop: "8px" }}>
+            <strong style={{ color: "var(--accent-light)" }}>OCR：</strong>
+            <ul style={{ margin: "4px 0", paddingLeft: "18px" }}>
+              {media.ocr.map((o, i) => <li key={i}>{o.text}</li>)}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function MaterialsPanel() {
@@ -339,7 +495,7 @@ export function MaterialsPanel() {
             </div>
 
             <div className="materials-viewer__body">
-              {content.material.modality === "audio" ? (
+              {isMediaModality(content.material.modality) ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                     <button
@@ -355,18 +511,12 @@ export function MaterialsPanel() {
                           ? "🔁 重新加工"
                           : content.material.status === "failed"
                             ? "↻ 重试加工"
-                            : "▶ 加工转写"}
+                            : "▶ 加工"}
                     </button>
-                    <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
-                      {content.material.status === "done"
-                        ? `转写完成 · ${content.segments?.length ?? 0} 段 · 引擎 ${content.material.engine ?? "—"}${content.material.duration ? ` · ${content.material.duration}s` : ""}`
-                        : content.material.status === "processing"
-                          ? "加工中…"
-                          : (content.material.note ?? "尚未加工。点击「加工转写」生成可引用的转写片段（带时间码/说话人）。")}
-                    </span>
+                    <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>{mediaStatusText(content)}</span>
                   </div>
 
-                  {content.segments ? (
+                  {content.material.modality === "audio" && content.segments ? (
                     <>
                       {rawUrl ? <audio ref={audioRef} controls src={rawUrl} style={{ width: "100%" }} /> : null}
                       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -393,6 +543,14 @@ export function MaterialsPanel() {
                         ))}
                       </div>
                     </>
+                  ) : null}
+
+                  {content.material.modality === "video" && content.media?.kind === "video" ? (
+                    <VideoMediaView materialId={content.material.id} media={content.media} />
+                  ) : null}
+
+                  {content.material.modality === "image" && content.media?.kind === "image" ? (
+                    <ImageMediaView materialId={content.material.id} media={content.media} />
                   ) : null}
                 </div>
               ) : content.text !== undefined ? (
@@ -562,27 +720,30 @@ export function ElementsPanel() {
 
 // ==================== 3. Inquiry Sub-panel ====================
 
-function CitationChips({ claim }: { claim: ApiClaim }) {
+function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCitation) => void }) {
   if (claim.citations.length === 0) return null;
   return (
     <span style={{ marginLeft: "6px" }}>
       {claim.citations.map((c, i) => {
-        // 音频引用带时间码 → 可点击回听被引用片段（硬验收，二期 §6）。
-        const tc = c.modality === "audio" ? c.locator.timecode : undefined;
+        // 音频引用带时间码 → 点击回听片段；视频/图像带 bbox/时间码 → 点击取帧框选（硬验收，§4.3/§6）。
+        const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
+        const framed = (c.modality === "video" || c.modality === "image") && Boolean(c.locator.bbox || c.locator.timecode);
         const loc = c.locator.timecode
           ? ` · ⏱ ${c.locator.timecode} 秒${c.locator.speaker ? ` · ${c.locator.speaker}` : ""}`
           : c.locator.paragraph
             ? ` · 第${c.locator.paragraph}段`
             : "";
+        const onClick = audioTc ? () => void playCitedSegment(c.material_id, audioTc) : framed ? () => onFrame(c) : undefined;
+        const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : "";
         return (
           <span
             key={i}
             className="citation"
-            style={tc ? { cursor: "pointer" } : undefined}
-            title={`${c.material_name}${loc}\n${c.snippet}${tc ? "\n（点击回听被引用片段）" : ""}`}
-            onClick={tc ? () => void playCitedSegment(c.material_id, tc) : undefined}
+            style={onClick ? { cursor: "pointer" } : undefined}
+            title={`${c.material_name}${loc}\n${c.snippet}${hint}`}
+            onClick={onClick}
           >
-            {tc ? "▶ " : ""}
+            {audioTc ? "▶ " : framed ? "▢ " : ""}
             {i + 1}
           </span>
         );
@@ -591,7 +752,7 @@ function CitationChips({ claim }: { claim: ApiClaim }) {
   );
 }
 
-function InquiryAnswer({ inquiry }: { inquiry: ApiInquiry }) {
+function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void }) {
   if (inquiry.status !== "answered") {
     const unverified = inquiry.claims.filter((c) => c.status === "unverified");
     return (
@@ -615,7 +776,7 @@ function InquiryAnswer({ inquiry }: { inquiry: ApiInquiry }) {
         <div key={i} style={{ marginBottom: "6px" }}>
           {i + 1}. {c.text}
           {c.type === "inference" ? <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>（推断）</span> : null}
-          <CitationChips claim={c} />
+          <CitationChips claim={c} onFrame={onFrame} />
         </div>
       ))}
     </div>
@@ -629,6 +790,7 @@ export function InquiryPanel() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -677,7 +839,7 @@ export function InquiryPanel() {
             <div className="chat-bubble chat-bubble--ai">
               <div className="chat-avatar">🤖</div>
               <div className="chat-content">
-                <InquiryAnswer inquiry={inq} />
+                <InquiryAnswer inquiry={inq} onFrame={setFrameCite} />
               </div>
             </div>
           </div>
@@ -691,6 +853,11 @@ export function InquiryPanel() {
           </div>
         ) : null}
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px" }}>{error}</div> : null}
+        {frameCite ? (
+          <div style={{ padding: "8px" }}>
+            <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} />
+          </div>
+        ) : null}
       </div>
 
       <form onSubmit={handleSend} className="chat-input-area">

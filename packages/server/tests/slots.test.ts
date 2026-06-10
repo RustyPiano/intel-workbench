@@ -106,10 +106,12 @@ describe("mock 适配器确定性输出（二期 P2.2）", () => {
 
   it("MockEmbed：确定性、归一化、维度固定；不同文本不同向量", async () => {
     const embed = new MockEmbed();
+    expect(embed.dim).toBe(MOCK_EMBED_DIM); // P2.4 .vec 版本戳读此
+    expect(embed.modelId).toBeTruthy();
     const [v1] = await embed.embed(["南海舰船活动"]);
     const [v1b] = await embed.embed(["南海舰船活动"]);
     const [v2] = await embed.embed(["今日天气晴朗"]);
-    expect(v1.length).toBe(MOCK_EMBED_DIM);
+    expect(v1.length).toBe(embed.dim);
     expect(Array.from(v1)).toEqual(Array.from(v1b)); // 确定性
     const norm = Math.sqrt(Array.from(v1).reduce((s, x) => s + x * x, 0));
     expect(norm).toBeCloseTo(1, 5); // 归一化

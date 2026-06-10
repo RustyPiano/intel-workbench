@@ -49,7 +49,11 @@ export interface OcrAdapter {
 }
 
 export interface EmbeddingAdapter {
-  /** 文本批 → 向量批（同序）。 */
+  /** 向量维度（P2.4 `.vec` 版本戳 `dim`，Spec §5.3：维度变即失效旧索引）。 */
+  readonly dim: number;
+  /** 模型标识（P2.4 `.vec` 版本戳 `embed_model`：换模型即失效旧索引并标待重建）。 */
+  readonly modelId: string;
+  /** 文本批 → 向量批（同序，长度恒为 dim）。 */
   embed(texts: string[]): Promise<Float32Array[]>;
 }
 

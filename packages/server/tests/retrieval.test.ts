@@ -45,6 +45,8 @@ describe("token 预算路由（二期 Spec §5.1）", () => {
     expect(estTokens([chunk("a", "中文")])).toBe(4);
     // 拉丁文本按 chars/4 折算，远小于等长 CJK。
     expect(estChunkTokens(chunk("a", "abcdefgh"))).toBeLessThan(estChunkTokens(chunk("a", "中文中文中文中文")));
+    // 非 ASCII（如俄语）保守计 ~1/字，不被当成 ASCII 低估约 4×（fail-safe）。
+    expect(estChunkTokens(chunk("a", "Привет"))).toBeGreaterThanOrEqual(6);
   });
 
   it("预算内 → 全上下文（used=全集，mode=full）", () => {

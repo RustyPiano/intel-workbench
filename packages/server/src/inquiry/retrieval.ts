@@ -64,11 +64,15 @@ export function retrieve(query: string, chunks: Chunk[], k = 6): ScoredChunk[] {
 /** 近边界即走检索（评审：低估→撑爆窗口属不对称风险，留 20% 安全垫）。 */
 const BUDGET_SAFETY = 0.8;
 
-/** 粗估 token：CJK/全角字符≈1，其余（拉丁/数字/标点）≈chars/4（Spec §5.1）。 */
+/**
+ * 粗估 token（Spec §5.1）：非 ASCII 字符保守计 1（CJK/全角/西里尔/希腊/重音拉丁——
+ * 真实 BPE 多为每字 ≥1 token），ASCII（拉丁/数字/标点）≈chars/4。
+ * 取保守侧：低估 → 撑爆真实窗口是不对称风险（如俄语截获素材若按 chars/4 会低估约 4×）。
+ */
 function estStringTokens(s: string): number {
   let wide = 0;
   for (let i = 0; i < s.length; i++) {
-    if (s.charCodeAt(i) > 0x2e7f) wide++; // CJK 部首起点；含中文标点（保守计 1）
+    if (s.charCodeAt(i) >= 0x80) wide++;
   }
   return wide + Math.ceil((s.length - wide) / 4);
 }

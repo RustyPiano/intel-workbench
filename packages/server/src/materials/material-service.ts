@@ -6,7 +6,12 @@ import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Material, Modality } from "../domain/types.js";
+import type { AsrResult, ModelSlots } from "../model/slots.js";
 import { sha256, shortId } from "../util/hash.js";
+import { writeFileAtomic } from "../util/atomic.js";
+import { processAudio } from "./media-pipeline.js";
+
+const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
 
 /**
  * 素材汇入与加工（M2）。一期仅**文档文本**模态做实：归一化 → 切块
@@ -31,6 +36,8 @@ export interface IngestFile {
 export interface MaterialContent {
   material: Material;
   text?: string;
+  /** 音频加工结果的转写段（done 音频素材，供复核展示+回放，二期 P2.3a）。 */
+  segments?: AsrResult["segments"];
   chunkCount?: number;
   note?: string;
 }
@@ -109,6 +116,8 @@ export class MaterialService {
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
     private readonly cases: CaseService,
+    /** 模型槽（二期 P2.2）；媒体加工取 slots.asr 等。缺省全 null=媒体降级。 */
+    private readonly slots: ModelSlots = EMPTY_SLOTS,
   ) {}
 
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
@@ -193,11 +202,109 @@ export class MaterialService {
     await this.cases.get(actor, located.caseId);
 
     const material = located.material;
+    const processedDir = path.join(this.paths.caseDir(located.caseId), "processed");
     if (material.status === "done") {
-      const text = await readFile(path.join(this.paths.caseDir(located.caseId), "processed", `${material.id}.txt`), "utf8");
+      if (material.modality === "audio") {
+        // 音频：返回转写段（含时间码/说话人），供复核展示与回放定位（二期 P2.3a）。
+        const media = JSON.parse(await readFile(path.join(processedDir, `${material.id}.media.json`), "utf8")) as AsrResult;
+        return { material, segments: media.segments, chunkCount: material.chunk_count };
+      }
+      const text = await readFile(path.join(processedDir, `${material.id}.txt`), "utf8");
       return { material, text, chunkCount: material.chunk_count };
     }
     return { material, note: material.note ?? "该素材尚未加工完成" };
+  }
+
+  /** 原始素材文件路径（供回放/下载，二期 P2.3a）。经 cases.get 复用密级校验。 */
+  async getRawFile(actor: Identity, materialId: string): Promise<{ path: string; filename: string }> {
+    const located = await this.locate(materialId);
+    if (!located) throw new AppError(404, "素材不存在");
+    await this.cases.get(actor, located.caseId);
+    const filePath = path.join(this.paths.caseDir(located.caseId), "materials", `${located.material.id}-${located.material.filename}`);
+    return { path: filePath, filename: located.material.filename };
+  }
+
+  /**
+   * 显式加工媒体素材（二期 §4.1/§4.2）。状态机 pending/failed/done → processing →
+   * done|failed。幂等（重 process 生成新 chunk_id 版本，replace 不 append，§2.5）。
+   * 提交点顺序（§2.4）：先把 media.json + chunks.jsonl 完整原子写盘 → 再翻 done → 审计，
+   * 杜绝并发问答读到"done 但零 chunk"。
+   */
+  async process(actor: Identity, caseId: string, materialId: string): Promise<Material> {
+    const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const material = manifest.materials.find((m) => m.id === materialId);
+    if (!material) throw new AppError(404, "素材不存在");
+    if (material.modality !== "audio") throw new AppError(400, "本期仅支持音频加工（视频/图像见 P2.3b）");
+
+    // 原子占位：并发 process 中第二个见 processing → 409，不重复加工、不丢状态。
+    await this.cases.updateMaterial(caseId, materialId, (m) => {
+      if (m.status === "processing") throw new AppError(409, "素材正在加工中");
+      m.status = "processing";
+    });
+    await this.audit.append({
+      user: actor.id,
+      action: "material.process",
+      object: `material:${materialId}`,
+      caseId,
+      detail: { caseId, materialId, phase: "start" },
+    });
+
+    const asr = this.slots.asr;
+    if (!asr) {
+      return this.failProcess(actor, caseId, materialId, "音频转写未配置：设置 MINI_AGENT_ASR_* 或开启 MINI_AGENT_USE_MOCK_MEDIA", "asr-unconfigured");
+    }
+
+    try {
+      const audio = await readFile(path.join(this.paths.caseDir(caseId), "materials", `${materialId}-${material.filename}`));
+      const version = (material.chunk_version ?? 0) + 1;
+      const { chunks, media, duration } = await processAudio(materialId, version, audio, asr);
+
+      // 提交点顺序：先完整写盘（原子），再翻 done。
+      const processedDir = path.join(this.paths.caseDir(caseId), "processed");
+      await mkdir(processedDir, { recursive: true });
+      await writeFileAtomic(path.join(processedDir, `${materialId}.media.json`), `${JSON.stringify(media, null, 2)}\n`);
+      await writeFileAtomic(
+        path.join(processedDir, `${materialId}.chunks.jsonl`),
+        chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
+      );
+
+      const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
+        m.status = "done";
+        m.chunk_count = chunks.length;
+        m.chunk_version = version;
+        m.duration = duration;
+        m.engine = asr.engine;
+        m.language = media.language;
+        m.processed_at = new Date().toISOString();
+        m.note = undefined;
+      });
+      await this.audit.append({
+        user: actor.id,
+        action: "material.process",
+        object: `material:${materialId}`,
+        caseId,
+        detail: { caseId, materialId, phase: "done", engine: asr.engine, chunkCount: chunks.length, version, duration },
+      });
+      return updated;
+    } catch (e) {
+      return this.failProcess(actor, caseId, materialId, `音频转写失败：${(e as Error).message}`, "asr-error");
+    }
+  }
+
+  private async failProcess(actor: Identity, caseId: string, materialId: string, note: string, reason: string): Promise<Material> {
+    const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
+      m.status = "failed";
+      m.note = note;
+    });
+    await this.audit.append({
+      user: actor.id,
+      action: "material.process",
+      object: `material:${materialId}`,
+      caseId,
+      result: "error",
+      detail: { caseId, materialId, phase: "fail", reason },
+    });
+    return updated;
   }
 
   /** 读取专题下所有已加工文档的切块（供问答检索，§7.3）。 */

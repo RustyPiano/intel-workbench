@@ -54,6 +54,14 @@ export interface Material {
   chunk_count?: number;
   /** 降级 / 失败原因（产品 spec §10）。 */
   note?: string;
+  /** 音视频时长秒（二期 P2.3a，媒体加工后记）。 */
+  duration?: number;
+  /** 加工完成时间（二期 P2.3a）。 */
+  processed_at?: string;
+  /** 实际所用引擎名（ASR/VLM，二期 P2.3a，审计/复核用）。 */
+  engine?: string;
+  /** 切块版本号（二期 §2.5）。重加工 +1，chunk_id 用新版本前缀，旧 Citation 不失效。 */
+  chunk_version?: number;
 }
 
 /**

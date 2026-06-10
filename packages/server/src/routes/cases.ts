@@ -25,6 +25,12 @@ export function createCasesRouter(cases: CaseService, materials: MaterialService
     res.status(201).json({ ok: true, materials: ingested });
   });
 
+  // 显式加工媒体素材（二期 P2.3a §4.1）：pending/failed/done → done|failed。
+  router.post("/:id/materials/:mid/process", async (req, res) => {
+    const material = await materials.process(req.identity, req.params.id, req.params.mid);
+    res.json({ ok: true, material });
+  });
+
   router.post("/", async (req, res) => {
     const { name, clearance } = (req.body ?? {}) as { name?: string; clearance?: string };
     const manifest = await cases.create(req.identity, {

@@ -24,6 +24,7 @@ export const MOCK_EMBED_MODEL = "mock-embed";
 const SEG_SECONDS = 5;
 
 export class MockAsr implements AsrAdapter {
+  readonly engine = "mock-asr";
   // 按"时长"造确定性段 + 交替说话人。时长从字节数确定性折算（无真实解码）。
   async transcribe(audio: Buffer, _opts?: AsrOptions): Promise<AsrResult> {
     const duration = Math.max(1, Math.round(audio.length / 1000));

@@ -83,7 +83,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const users = new UserStore(paths);
   const auth = new AuthService(users, audit);
   const cases = new CaseService(paths, audit, devMode);
-  const materials = new MaterialService(paths, audit, cases);
 
   // 文本 LLM + 零外发闸门（M3）。开发期白名单仅模型端点 host；未配置则白名单为空
   // → 任何出站皆被拒并落审计（生产置空即一键全断，§7.1）。
@@ -99,6 +98,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     audit,
   );
   const slots: ModelSlots = buildSlots(useMockMedia());
+  // 素材服务依赖模型槽（媒体加工取 slots.asr，二期 P2.3a），故在槽构建之后装配。
+  const materials = new MaterialService(paths, audit, cases, slots);
   const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
   const inquiries = new InquiryService(paths, audit, cases, materials, llm);
   const elements = new ElementService(paths, audit, cases, materials, llm);

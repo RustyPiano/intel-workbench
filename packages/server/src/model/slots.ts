@@ -23,6 +23,8 @@ export interface AsrOptions {
   signal?: AbortSignal;
 }
 export interface AsrAdapter {
+  /** 引擎名（如 SenseVoiceSmall / mock-asr）；记入 material.engine 供审计/复核（§6）。 */
+  readonly engine: string;
   /** 音频字节 → 段（含时间码/说话人）。 */
   transcribe(audio: Buffer, opts?: AsrOptions): Promise<AsrResult>;
 }

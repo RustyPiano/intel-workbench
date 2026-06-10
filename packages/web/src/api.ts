@@ -72,11 +72,24 @@ export interface ApiMaterial {
   language?: string;
   chunk_count?: number;
   note?: string;
+  duration?: number;
+  processed_at?: string;
+  engine?: string;
+  chunk_version?: number;
+}
+
+/** 音频转写段（二期 P2.3a，done 音频素材的 getContent 返回）。 */
+export interface AsrSegment {
+  start: number;
+  end: number;
+  speaker?: string;
+  text: string;
 }
 
 export interface MaterialContent {
   material: ApiMaterial;
   text?: string;
+  segments?: AsrSegment[];
   chunkCount?: number;
   note?: string;
 }
@@ -91,7 +104,7 @@ export interface ApiCitation {
   material_id: string;
   material_name: string;
   modality: Modality;
-  locator: { page?: number; paragraph?: number; timecode?: string; bbox?: [number, number, number, number] };
+  locator: { page?: number; paragraph?: number; char_start?: number; char_end?: number; timecode?: string; speaker?: string; bbox?: [number, number, number, number]; frame?: number };
   snippet: string;
   confidence: number;
   content_hash: string;
@@ -272,8 +285,26 @@ export function getMaterialContent(materialId: string): Promise<MaterialContent>
       noteStatus(r);
       throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     }
-    return { material: body.material, text: body.text, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
+    return { material: body.material, text: body.text, segments: body.segments, chunkCount: body.chunkCount, note: body.note } as MaterialContent;
   });
+}
+
+/** 显式加工媒体素材（二期 P2.3a）：pending/failed/done → done|failed。 */
+export function processMaterial(caseId: string, materialId: string): Promise<ApiMaterial> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/${encodeURIComponent(materialId)}/process`, {
+    method: "POST",
+    headers: headers(),
+  }).then((r) => unwrap<ApiMaterial>(r, "material"));
+}
+
+/** 拉取原始素材为对象 URL，供音频回放（带会话令牌，故不能直接用 <audio src>）。调用方负责 revoke。 */
+export async function fetchMaterialRawUrl(materialId: string): Promise<string> {
+  const res = await fetch(`${BASE}/materials/${encodeURIComponent(materialId)}/raw`, { headers: headers() });
+  if (!res.ok) {
+    noteStatus(res);
+    throw new Error(`回放加载失败（HTTP ${res.status}）`);
+  }
+  return URL.createObjectURL(await res.blob());
 }
 
 // ---- 要素抽取 ----

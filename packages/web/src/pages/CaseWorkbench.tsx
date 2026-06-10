@@ -7,6 +7,7 @@ import {
   draftReport,
   exportReport,
   extractElements,
+  fetchMaterialRawUrl,
   getCase,
   getMaterialContent,
   getReport,
@@ -14,6 +15,7 @@ import {
   listElements,
   listInquiries,
   listMaterials,
+  processMaterial,
   readFileForUpload,
   submitReport,
   type ApiCase,
@@ -112,6 +114,43 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** 解析时间码 "start-end"（秒）→ [start, end]（二期 P2.3a）。 */
+function parseTimecode(tc?: string): [number, number] | null {
+  if (!tc) return null;
+  const [a, b] = tc.split("-");
+  const s = Number(a);
+  if (!Number.isFinite(s)) return null;
+  const e = Number(b);
+  return [s, Number.isFinite(e) ? e : s];
+}
+
+function fmtTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * 回听被引用的音频片段（硬验收，二期 §6）：拉原始素材（带令牌）→ 跳播到时间码区间。
+ * 用独立 Audio 元素，到段尾即停；调用方无需管理生命周期。
+ */
+async function playCitedSegment(materialId: string, timecode: string): Promise<void> {
+  const tc = parseTimecode(timecode);
+  if (!tc) return;
+  const url = await fetchMaterialRawUrl(materialId);
+  const audio = new Audio(url);
+  audio.addEventListener("loadedmetadata", () => {
+    audio.currentTime = tc[0];
+    void audio.play();
+  });
+  audio.addEventListener("timeupdate", () => {
+    if (audio.currentTime >= tc[1]) {
+      audio.pause();
+      URL.revokeObjectURL(url);
+    }
+  });
+}
+
 export function MaterialsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
@@ -121,6 +160,9 @@ export function MaterialsPanel() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [content, setContent] = useState<MaterialContent | null>(null);
   const [busy, setBusy] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [rawUrl, setRawUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
@@ -166,6 +208,54 @@ export function MaterialsPanel() {
     }
   };
 
+  // 显式加工媒体素材（二期 P2.3a）；完成后刷新列表与阅读区。
+  const handleProcess = async (mid: string) => {
+    if (!user || !caseId || processing) return;
+    setProcessing(true);
+    setError(null);
+    try {
+      await processMaterial(caseId, mid);
+      refresh();
+      setContent(await getMaterialContent(mid));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // done 音频：拉原始素材为对象 URL，供回放（带令牌，故先 fetch 再 objectURL）。
+  useEffect(() => {
+    if (content?.material.modality !== "audio" || !content.segments) {
+      setRawUrl(null);
+      return;
+    }
+    let alive = true;
+    let url: string | null = null;
+    fetchMaterialRawUrl(content.material.id)
+      .then((u) => {
+        if (alive) {
+          url = u;
+          setRawUrl(u);
+        } else {
+          URL.revokeObjectURL(u);
+        }
+      })
+      .catch(() => alive && setRawUrl(null));
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [content]);
+
+  const playSeg = (start: number) => {
+    const a = audioRef.current;
+    if (a) {
+      a.currentTime = start;
+      void a.play();
+    }
+  };
+
   return (
     <div className="materials-layout">
       <input
@@ -193,7 +283,7 @@ export function MaterialsPanel() {
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
         ) : materials.length === 0 ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-            还没有素材。点击「+ 汇入」上传文档（TXT/MD/CSV/JSON/LOG 等可直接加工；PDF/Office/音视频/图片暂降级占位）。
+            还没有素材。点击「+ 汇入」上传文档（TXT/MD/CSV/JSON/LOG 等可直接加工；音频可加工转写为带时间码/说话人的可引用片段；PDF/Office/视频/图片暂降级占位）。
           </div>
         ) : (
           materials.map((m) => {
@@ -232,7 +322,63 @@ export function MaterialsPanel() {
             </div>
 
             <div className="materials-viewer__body">
-              {content.text !== undefined ? (
+              {content.material.modality === "audio" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      style={{ padding: "6px 14px", fontSize: "12px" }}
+                      onClick={() => void handleProcess(content.material.id)}
+                      disabled={processing || content.material.status === "processing"}
+                    >
+                      {processing || content.material.status === "processing"
+                        ? "加工中…"
+                        : content.material.status === "done"
+                          ? "🔁 重新加工"
+                          : content.material.status === "failed"
+                            ? "↻ 重试加工"
+                            : "▶ 加工转写"}
+                    </button>
+                    <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+                      {content.material.status === "done"
+                        ? `转写完成 · ${content.segments?.length ?? 0} 段 · 引擎 ${content.material.engine ?? "—"}${content.material.duration ? ` · ${content.material.duration}s` : ""}`
+                        : content.material.status === "processing"
+                          ? "加工中…"
+                          : (content.material.note ?? "尚未加工。点击「加工转写」生成可引用的转写片段（带时间码/说话人）。")}
+                    </span>
+                  </div>
+
+                  {content.segments ? (
+                    <>
+                      {rawUrl ? <audio ref={audioRef} controls src={rawUrl} style={{ width: "100%" }} /> : null}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        {content.segments.map((seg, i) => (
+                          <div
+                            key={i}
+                            style={{ display: "flex", gap: "10px", alignItems: "flex-start", padding: "8px 10px", background: "rgba(16,24,40,0.3)", border: "1px solid var(--border)", borderRadius: "var(--radius)" }}
+                          >
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ padding: "2px 8px", fontSize: "11px", fontFamily: "monospace", flexShrink: 0 }}
+                              onClick={() => playSeg(seg.start)}
+                              title="回听此段"
+                              disabled={!rawUrl}
+                            >
+                              ▶ {fmtTime(seg.start)}
+                            </button>
+                            <div style={{ fontSize: "13px", lineHeight: "1.6" }}>
+                              {seg.speaker ? <strong style={{ color: "var(--accent-light)", marginRight: "6px" }}>{seg.speaker}</strong> : null}
+                              {seg.text}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : content.text !== undefined ? (
                 <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: "13px", lineHeight: "1.7", color: "var(--text)", margin: 0 }}>
                   {content.text}
                 </pre>
@@ -240,7 +386,7 @@ export function MaterialsPanel() {
                 <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
                   ⚠️ {content.note ?? "该素材尚未加工完成。"}
                   <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
-                    （一期仅文本文档做实加工；该模态待接入本地模型后接通。）
+                    （视频/图像加工见 P2.3b；该模态待接入本地模型后接通。）
                   </div>
                 </div>
               )}
@@ -403,15 +549,27 @@ function CitationChips({ claim }: { claim: ApiClaim }) {
   if (claim.citations.length === 0) return null;
   return (
     <span style={{ marginLeft: "6px" }}>
-      {claim.citations.map((c, i) => (
-        <span
-          key={i}
-          className="citation"
-          title={`${c.material_name}${c.locator.paragraph ? ` · 第${c.locator.paragraph}段` : ""}\n${c.snippet}`}
-        >
-          {i + 1}
-        </span>
-      ))}
+      {claim.citations.map((c, i) => {
+        // 音频引用带时间码 → 可点击回听被引用片段（硬验收，二期 §6）。
+        const tc = c.modality === "audio" ? c.locator.timecode : undefined;
+        const loc = c.locator.timecode
+          ? ` · ${c.locator.timecode}s${c.locator.speaker ? ` · ${c.locator.speaker}` : ""}`
+          : c.locator.paragraph
+            ? ` · 第${c.locator.paragraph}段`
+            : "";
+        return (
+          <span
+            key={i}
+            className="citation"
+            style={tc ? { cursor: "pointer" } : undefined}
+            title={`${c.material_name}${loc}\n${c.snippet}${tc ? "\n（点击回听被引用片段）" : ""}`}
+            onClick={tc ? () => void playCitedSegment(c.material_id, tc) : undefined}
+          >
+            {tc ? "▶ " : ""}
+            {i + 1}
+          </span>
+        );
+      })}
     </span>
   );
 }

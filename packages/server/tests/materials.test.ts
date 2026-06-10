@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -111,6 +112,26 @@ describe("MaterialService 汇入与加工（M2）", () => {
 
   it("getContent 不存在的素材 → 404", async () => {
     await expect(materials.getContent(OPERATOR, "m-nope")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("ingestStream 文本文档 → done + 切块（流式，绕 base64）", async () => {
+    const m = await materials.ingestStream(OPERATOR, caseId, "stream.txt", Readable.from(Buffer.from("第一段内容。\n\n第二段含线索。", "utf8")));
+    expect(m.status).toBe("done");
+    expect(m.modality).toBe("doc");
+    expect(m.chunk_count).toBe(2);
+    const content = await materials.getContent(OPERATOR, m.id);
+    expect(content.text).toContain("第一段内容");
+    // 原始素材按 <id>-<filename> 落盘。
+    const raw = await readFile(path.join(paths.caseDir(caseId), "materials", `${m.id}-stream.txt`), "utf8");
+    expect(raw).toContain("第二段含线索");
+  });
+
+  it("ingestStream 音频 → pending（待 process）+ basename 去穿越", async () => {
+    const m = await materials.ingestStream(OPERATOR, caseId, "../../evil/clip.mp3", Readable.from(Buffer.from("fake-bytes")));
+    expect(m.modality).toBe("audio");
+    expect(m.status).toBe("pending");
+    expect(m.filename).toBe("clip.mp3"); // 路径穿越被 basename 化
+    expect(m.note).toBeTruthy();
   });
 });
 

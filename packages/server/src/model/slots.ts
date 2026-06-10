@@ -33,6 +33,8 @@ export interface VlmOptions {
   signal?: AbortSignal;
 }
 export interface VlmAdapter {
+  /** 引擎名（记入 material.engine 供审计/复核，§6）。 */
+  readonly engine: string;
   /** 关键帧（一或多帧字节）→ 配文/理解文本。 */
   caption(frames: Buffer[], opts?: VlmOptions): Promise<string>;
 }
@@ -46,6 +48,8 @@ export interface OcrResult {
   lines: OcrLine[];
 }
 export interface OcrAdapter {
+  /** 引擎名（记入 material.engine 供审计/复核，§6）。 */
+  readonly engine: string;
   /** 图像字节 → 带区域的文本块。 */
   ocr(image: Buffer): Promise<OcrResult>;
 }

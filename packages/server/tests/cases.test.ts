@@ -8,7 +8,7 @@ import { AuditService } from "../src/audit/audit-service.js";
 import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import { AppError } from "../src/domain/identity.js";
-import type { Identity } from "../src/domain/types.js";
+import type { Identity, Material, MaterialStatus } from "../src/domain/types.js";
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "confidential" };
 const ADMIN: Identity = { id: "admin", name: "admin", role: "admin", clearance: "topsecret" };
@@ -97,5 +97,67 @@ describe("CaseService（M1 数据底座）", () => {
     for (const evil of ["../../etc", "..", "a/b", "x\\y"]) {
       await expect(cases.get(OPERATOR, evil)).rejects.toMatchObject({ status: 400 });
     }
+  });
+});
+
+describe("CaseService 并发与崩溃恢复（二期 P2.3a 阻塞项）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let caseId: string;
+
+  function mat(id: string, status: MaterialStatus = "done"): Material {
+    return { id, case_id: caseId, filename: `${id}.txt`, modality: "doc", format: "txt", size: 1, ingested_at: new Date().toISOString(), status };
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-cc-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    caseId = (await cases.create(OPERATOR, { name: "并发专题", clearance: "internal" })).id;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("20 个并发 attachMaterial 不丢素材（串行化）", async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, i) => cases.attachMaterial(caseId, mat(`m-${i}`))));
+    const loaded = await cases.loadManifest(caseId);
+    expect(loaded?.materials).toHaveLength(20);
+    expect(new Set(loaded?.materials.map((m) => m.id)).size).toBe(20);
+  });
+
+  it("并发 attach 撞 updateMaterial：两个变更都不丢（RMW 串行）", async () => {
+    await cases.attachMaterial(caseId, mat("m-A", "done"));
+    await Promise.all([
+      cases.attachMaterial(caseId, mat("m-B", "done")),
+      cases.updateMaterial(caseId, "m-A", (m) => {
+        m.status = "processing";
+      }),
+    ]);
+    const loaded = await cases.loadManifest(caseId);
+    expect(loaded?.materials.map((m) => m.id).sort()).toEqual(["m-A", "m-B"]);
+    expect(loaded?.materials.find((m) => m.id === "m-A")?.status).toBe("processing");
+  });
+
+  it("updateMaterial 不存在的素材 → 404", async () => {
+    await expect(cases.updateMaterial(caseId, "m-nope", () => {})).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("sweepInterrupted：processing → failed 带原因，done 不动", async () => {
+    await cases.attachMaterial(caseId, mat("m-stuck", "processing"));
+    await cases.attachMaterial(caseId, mat("m-ok", "done"));
+    const swept = await cases.sweepInterrupted();
+    expect(swept).toEqual([{ caseId, materialId: "m-stuck" }]);
+    const loaded = await cases.loadManifest(caseId);
+    const stuck = loaded?.materials.find((m) => m.id === "m-stuck");
+    expect(stuck?.status).toBe("failed");
+    expect(stuck?.note).toBeTruthy();
+    expect(loaded?.materials.find((m) => m.id === "m-ok")?.status).toBe("done");
+    // 无中断素材时清扫返回空。
+    expect(await cases.sweepInterrupted()).toEqual([]);
   });
 });

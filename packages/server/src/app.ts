@@ -15,6 +15,9 @@ import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
 import { MaterialService } from "./materials/material-service.js";
+import { buildSlots } from "./model/mock-slots.js";
+import { readSlotConfigs, slotAllowlistHosts, useMockMedia } from "./model/slot-config.js";
+import type { ModelSlots } from "./model/slots.js";
 import type { LlmDeps } from "./model/structured.js";
 import { readModelConfig } from "./model/model-config.js";
 import { ReportService } from "./report/report-service.js";
@@ -45,6 +48,8 @@ export interface AppServices {
   elements: ElementService;
   reports: ReportService;
   admin: AdminService;
+  /** 模型槽适配器（二期 P2.2；mock-first，供媒体管线/稠密检索消费）。 */
+  slots: ModelSlots;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
   modelConfigured: boolean;
   /** OfflineGuard 当前白名单（启动日志展示）。 */
@@ -86,7 +91,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const adapter: ModelAdapter | null = model.configured
     ? createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey })
     : null;
-  const guard = new OfflineGuard(model.configured ? [model.host] : [], audit);
+  // 模型槽（Embedding/Reranker/ASR/VLM/OCR，二期 P2.2）：已配置槽 host 并入白名单
+  // （真实接入 P2.6 时"插上即用"），适配器本期 mock-first（开关 MINI_AGENT_USE_MOCK_MEDIA）。
+  const slotConfigs = readSlotConfigs();
+  const guard = new OfflineGuard(
+    [...(model.configured ? [model.host] : []), ...slotAllowlistHosts(slotConfigs)],
+    audit,
+  );
+  const slots: ModelSlots = buildSlots(useMockMedia());
   const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
   const inquiries = new InquiryService(paths, audit, cases, materials, llm);
   const elements = new ElementService(paths, audit, cases, materials, llm);
@@ -102,6 +114,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     elements,
     reports,
     admin,
+    slots,
     modelConfigured: model.configured,
     egressAllowlist: guard.allowlist,
   };

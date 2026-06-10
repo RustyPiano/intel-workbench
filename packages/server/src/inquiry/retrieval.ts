@@ -131,11 +131,13 @@ function candidateDepth(k: number): number {
 }
 
 function cosine(a: Float32Array, b: Float32Array): number {
+  // 维度不符不可比：版本戳校验（loadCaseVectors）本应已拦截，此处防御性兜底——
+  // 宁可判 0（排末位）也不 Math.min 静默截断算垃圾相似度（§5.3 维度不匹配之忧）。
+  if (a.length !== b.length) return 0;
   let dot = 0;
   let na = 0;
   let nb = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     na += a[i] * a[i];
     nb += b[i] * b[i];

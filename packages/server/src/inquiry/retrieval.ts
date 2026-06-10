@@ -1,4 +1,5 @@
 import type { Chunk } from "../domain/types.js";
+import type { RerankerAdapter } from "../model/slots.js";
 
 /**
  * 一期检索：关键词/全文 BM25 兜底（工程方案 §7.3 step 2；嵌入检索二期）。
@@ -186,4 +187,24 @@ export function retrieveHybrid(
   }
   const denseRanked = denseSearch(queryVec, byId, depth);
   return pick(rrf([bm25Ranked, denseRanked], 60));
+}
+
+/**
+ * 重排二阶段（二期 §5.2，可选门控）：RerankerAdapter 对融合候选精排，取 top-k。
+ * 纯变换——是否启用（配置 + 候选数门控）与出站授权由调用方负责（与 embed 一致，§3.2）。
+ * 分数同序对齐候选；缺失分数判 0（排末位）而非丢候选——溯源候选集不可悄悄缩水。
+ */
+export async function rerankTopK(
+  query: string,
+  candidates: Chunk[],
+  reranker: RerankerAdapter,
+  k: number,
+): Promise<Chunk[]> {
+  if (candidates.length === 0) return [];
+  const scores = await reranker.rerank(query, candidates.map((c) => c.text));
+  return candidates
+    .map((chunk, i) => ({ chunk, score: scores[i] ?? 0 }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k)
+    .map((s) => s.chunk);
 }

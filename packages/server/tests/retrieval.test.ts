@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { Chunk } from "../src/domain/types.js";
-import { denseSearch, estChunkTokens, estTokens, fitToBudget, retrieve, retrieveHybrid, rrf, selectContext, tokenize } from "../src/inquiry/retrieval.js";
+import { denseSearch, estChunkTokens, estTokens, fitToBudget, rerankTopK, retrieve, retrieveHybrid, rrf, selectContext, tokenize } from "../src/inquiry/retrieval.js";
+import { MockReranker } from "../src/model/mock-slots.js";
+import type { RerankerAdapter } from "../src/model/slots.js";
 
 function chunk(id: string, text: string): Chunk {
   return { chunk_id: id, material_id: "m", modality: "doc", locator: {}, text, content_hash: "" };
@@ -116,5 +118,30 @@ describe("稠密检索 + 混合 RRF（二期 §5.2）", () => {
     const degradedEmpty = retrieveHybrid("可疑舰船", chunks, new Float32Array([1, 0, 0]), new Map(), 3).map((c) => c.chunk_id);
     expect(degradedNull).toEqual(bm25);
     expect(degradedEmpty).toEqual(bm25);
+  });
+});
+
+describe("重排二阶段（二期 P2.5 §5.2）", () => {
+  const reranker = new MockReranker(); // 词面重叠分：含查询去重字越多越高
+  const cands = [
+    chunk("m#0", "今日天气晴朗适合外出散步"), // 与"可疑舰船"几乎无重叠
+    chunk("m#1", "南海周边发现可疑舰船活动"), // 含"可""疑""舰""船"
+    chunk("m#2", "舰船编号与呼号存在关联"), // 含"舰""船"
+  ];
+
+  it("rerankTopK：按 Reranker 分数降序取 top-k", async () => {
+    const out = await rerankTopK("可疑舰船", cands, reranker, 2);
+    expect(out.map((c) => c.chunk_id)).toEqual(["m#1", "m#2"]); // 重叠最多者居前，无关项被截
+  });
+
+  it("空候选 → 空（不触发出站/排序）", async () => {
+    expect(await rerankTopK("可疑舰船", [], reranker, 3)).toEqual([]);
+  });
+
+  it("分数缺失判 0 排末位，不丢候选", async () => {
+    const sparse: RerankerAdapter = { rerank: async (_q, c) => c.map((_, i) => (i === 0 ? undefined : 1)) as number[] };
+    const out = await rerankTopK("q", cands, sparse, 3);
+    expect(out).toHaveLength(3); // 候选不缩水
+    expect(out[out.length - 1].chunk_id).toBe("m#0"); // 缺分项排末位
   });
 });

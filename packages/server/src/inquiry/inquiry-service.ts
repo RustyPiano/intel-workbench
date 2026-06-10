@@ -7,18 +7,25 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
-import { readCtxBudgetTokens } from "../model/rag-config.js";
-import type { EmbeddingAdapter } from "../model/slots.js";
+import { readCtxBudgetTokens, readRerankMinCandidates } from "../model/rag-config.js";
+import type { EmbeddingAdapter, RerankerAdapter } from "../model/slots.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { shortId } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
-import { retrieveHybrid, selectContext } from "./retrieval.js";
+import { rerankTopK, retrieveHybrid, selectContext } from "./retrieval.js";
 
 /** 稠密检索依赖（二期 P2.4）。embed 缺省 null → 检索退 BM25-only。 */
 export interface DenseDeps {
   embed: EmbeddingAdapter | null;
   /** embed 端点（real 适配器出站前授权用；mock 在进程内为 ""，跳过授权）。 */
   embedEndpoint: string;
+}
+
+/** 重排依赖（二期 P2.5，可选门控）。reranker 缺省 null → 不重排，混合检索结果直用。 */
+export interface RerankDeps {
+  reranker: RerankerAdapter | null;
+  /** rerank 端点（real 适配器出站前授权用；mock 在进程内为 ""，跳过授权）。 */
+  rerankEndpoint: string;
 }
 
 /**
@@ -31,6 +38,8 @@ export interface DenseDeps {
 const INSUFFICIENT = "现有材料不足以判断";
 const TIMEOUT_MS = 60_000;
 const TOP_K = 6;
+/** 重排候选过取回深度（§5.2 二阶段）：启用重排时先取宽候选，再由 Reranker 精排回 TOP_K。 */
+const RERANK_CANDIDATES = 24;
 
 interface RawClaim {
   text?: unknown;
@@ -51,6 +60,8 @@ export class InquiryService {
     private readonly deps: LlmDeps,
     /** 稠密检索依赖（二期 P2.4）；缺省无 embed → 检索退 BM25-only。 */
     private readonly dense: DenseDeps = { embed: null, embedEndpoint: "" },
+    /** 重排依赖（二期 P2.5）；缺省无 reranker → 不重排，默认路径不变。 */
+    private readonly rerank: RerankDeps = { reranker: null, rerankEndpoint: "" },
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
@@ -70,7 +81,7 @@ export class InquiryService {
       const hybrid = await this.hybridRetrieve(actor, q, caseId, chunks);
       used = hybrid.used;
       staleIndex = hybrid.stale;
-      mode = "hybrid";
+      mode = hybrid.reranked ? "hybrid+rerank" : "hybrid";
     }
 
     let inquiry: Inquiry;
@@ -96,8 +107,17 @@ export class InquiryService {
     return inquiry;
   }
 
-  /** BM25 ⊕ dense 混合检索（§5.2）。embed query 出站前授权（real）；向量缺失/维度不符自动退 BM25。 */
-  private async hybridRetrieve(actor: Identity, q: string, caseId: string, chunks: Chunk[]): Promise<{ used: Chunk[]; stale: number }> {
+  /**
+   * BM25 ⊕ dense 混合检索（§5.2）+ 可选重排二阶段（§5.2，P2.5）。
+   * embed/rerank query 出站前授权（real）；向量缺失/维度不符自动退 BM25。
+   * 重排门控：reranker 配置 且 融合候选数 ≥ 阈值才精排，否则直取融合 top-k（默认路径不变）。
+   */
+  private async hybridRetrieve(
+    actor: Identity,
+    q: string,
+    caseId: string,
+    chunks: Chunk[],
+  ): Promise<{ used: Chunk[]; stale: number; reranked: boolean }> {
     const embed = this.dense.embed!;
     // 零外发红线：real embed 端点出站前授权（mock 在进程内、endpoint 为空则跳过）。
     if (this.dense.embedEndpoint) {
@@ -105,7 +125,22 @@ export class InquiryService {
     }
     const [queryVec] = await embed.embed([q]);
     const { byId, stale } = await this.materials.loadCaseVectors(caseId, embed);
-    return { used: retrieveHybrid(q, chunks, queryVec ?? null, byId, TOP_K), stale: stale.length };
+    const reranker = this.rerank.reranker;
+    if (!reranker) {
+      // 重排关：融合 top-k 直用（默认路径，与 P2.4 一致）。
+      return { used: retrieveHybrid(q, chunks, queryVec ?? null, byId, TOP_K), stale: stale.length, reranked: false };
+    }
+    // 重排开：取宽候选；候选数 < 阈值则跳过精排（门控），直取融合 top-k。
+    const candidates = retrieveHybrid(q, chunks, queryVec ?? null, byId, RERANK_CANDIDATES);
+    if (candidates.length < readRerankMinCandidates()) {
+      return { used: candidates.slice(0, TOP_K), stale: stale.length, reranked: false };
+    }
+    // 零外发红线：real rerank 端点出站前授权（mock 在进程内、endpoint 为空则跳过）。
+    if (this.rerank.rerankEndpoint) {
+      await this.deps.guard.authorize(this.rerank.rerankEndpoint, { user: actor.id, purpose: "rerank-query" });
+    }
+    const used = await rerankTopK(q, candidates, reranker, TOP_K);
+    return { used, stale: stale.length, reranked: true };
   }
 
   async list(actor: Identity, caseId: string): Promise<Inquiry[]> {

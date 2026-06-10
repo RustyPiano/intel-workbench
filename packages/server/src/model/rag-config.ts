@@ -10,3 +10,18 @@ export function readCtxBudgetTokens(): number | null {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
+
+/** 重排触发的最小候选数门控默认值（§5.2）。候选数 < 阈值不重排：小候选集精排无收益、徒增一次出站。 */
+const RERANK_MIN_CANDIDATES = 8;
+
+/**
+ * 读重排门控阈值 `MINI_AGENT_RERANK_MIN_CANDIDATES`；未配置/非法 → 默认 8。
+ * 注意：候选来自过取回深度（inquiry-service `RERANK_CANDIDATES`=24），故阈值设高于 24
+ * 会使重排**永不触发**（候选数恒 ≤ 24）——关闭重排应改为不配置 reranker，而非调高此值。
+ */
+export function readRerankMinCandidates(): number {
+  const raw = process.env.MINI_AGENT_RERANK_MIN_CANDIDATES;
+  if (!raw) return RERANK_MIN_CANDIDATES;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : RERANK_MIN_CANDIDATES;
+}

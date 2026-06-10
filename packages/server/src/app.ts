@@ -103,7 +103,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
   // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
   const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
-  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense);
+  // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
+  const rerank = { reranker: slots.rerank, rerankEndpoint: slotConfigs.rerank.configured ? slotConfigs.rerank.baseURL : "" };
+  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense, rerank);
   const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users);

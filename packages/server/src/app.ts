@@ -101,7 +101,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // 素材服务依赖模型槽（媒体加工取 slots.asr，二期 P2.3a），故在槽构建之后装配。
   const materials = new MaterialService(paths, audit, cases, slots);
   const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
-  const inquiries = new InquiryService(paths, audit, cases, materials, llm);
+  // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
+  const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
+  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense);
   const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users);

@@ -10,12 +10,14 @@ import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { MaterialService } from "../src/materials/material-service.js";
-import { MockAsr, MockOcr, MockVlm } from "../src/model/mock-slots.js";
-import type { ModelSlots, OcrAdapter } from "../src/model/slots.js";
+import { readVec } from "../src/materials/vec-store.js";
+import { MockAsr, MockEmbed, MockOcr, MockVlm } from "../src/model/mock-slots.js";
+import type { EmbeddingAdapter, ModelSlots, OcrAdapter } from "../src/model/slots.js";
 import { sha256 } from "../src/util/hash.js";
 
 const ASR_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: null, ocr: null, embed: null, rerank: null };
 const FULL_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: new MockVlm(), ocr: new MockOcr(), embed: null, rerank: null };
+const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 
@@ -349,5 +351,61 @@ describe("MaterialService 视频/图像加工（二期 P2.3b）", () => {
     const m = await s.process(OPERATOR, caseId, mid);
     expect(m.status).toBe("failed");
     expect(m.note).toBeTruthy();
+  });
+});
+
+describe("MaterialService 稠密索引（二期 P2.4 §5.3）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let caseId: string;
+
+  function svc(): MaterialService {
+    return new MaterialService(paths, audit, cases, EMBED_SLOTS);
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-idx-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    caseId = (await cases.create(OPERATOR, { name: "索引专题", clearance: "internal" })).id;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("ingest 文档 → 同提交写 index/<mid>.vec，count 对齐 chunks + 版本戳", async () => {
+    const s = svc();
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "第一段。\n\n第二段含线索。" }]);
+    expect(m.chunk_count).toBe(2);
+    const vec = await readVec(path.join(paths.caseDir(caseId), "index", `${m.id}.vec`));
+    expect(vec?.count).toBe(2); // 与 chunks 对齐
+    expect(vec?.dim).toBe(8);
+    expect(vec?.embed_model).toBe("mock-embed");
+  });
+
+  it("未配置 embed → 不写 .vec（检索退 BM25）", async () => {
+    const s = new MaterialService(paths, audit, cases); // 无 embed 槽
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "正文。" }]);
+    expect(await readVec(path.join(paths.caseDir(caseId), "index", `${m.id}.vec`))).toBeNull();
+  });
+
+  it("loadCaseVectors：版本戳一致→byId 全覆盖；换模型/维度→stale 退 BM25（不报错）", async () => {
+    const s = svc();
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "第一段。\n\n第二段。" }]);
+
+    const ok = await s.loadCaseVectors(caseId, new MockEmbed());
+    expect(ok.byId.size).toBe(2);
+    expect(ok.stale).toEqual([]);
+    expect(ok.byId.get(`${m.id}#0`)?.length).toBe(8);
+
+    // 换模型/维度 → 版本戳不符 → 整素材 stale，byId 不含其向量。
+    const other: EmbeddingAdapter = { dim: 4, modelId: "other-embed", embed: async (ts) => ts.map(() => new Float32Array(4)) };
+    const mism = await s.loadCaseVectors(caseId, other);
+    expect(mism.byId.size).toBe(0);
+    expect(mism.stale).toEqual([m.id]);
   });
 });

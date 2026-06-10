@@ -4,7 +4,7 @@ import type { Chunk } from "../src/domain/types.js";
 import { retrieve, tokenize } from "../src/inquiry/retrieval.js";
 
 function chunk(id: string, text: string): Chunk {
-  return { chunk_id: id, material_id: "m", locator: {}, text, content_hash: "" };
+  return { chunk_id: id, material_id: "m", modality: "doc", locator: {}, text, content_hash: "" };
 }
 
 describe("BM25 兜底检索（§7.3 step 2）", () => {

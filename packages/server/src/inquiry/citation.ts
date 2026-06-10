@@ -11,7 +11,8 @@ export function chunkToCitation(chunk: Chunk, materialName: string, confidence =
   return {
     material_id: chunk.material_id,
     material_name: materialName,
-    modality: "doc",
+    // 透传 chunk 自带模态/出处（二期 Spec §2.2）；旧 chunk 无 modality 字段时缺省 "doc"。
+    modality: chunk.modality ?? "doc",
     locator: chunk.locator,
     snippet: chunk.text.slice(0, 200),
     confidence,

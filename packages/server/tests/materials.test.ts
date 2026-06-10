@@ -54,6 +54,24 @@ describe("MaterialService 汇入与加工（M2）", () => {
     expect((await audit.readAll()).some((e) => e.action === "material.ingest")).toBe(true);
   });
 
+  it("文档切块带 char 偏移：归一化文本 slice(char_start,char_end)===chunk.text，modality=doc（二期 Spec §2.1）", async () => {
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "multi.txt", content: "  第一段，含前导空白。\n\n\n第二段，含线索词。\n\n第三段收尾。  " },
+    ]);
+    const dir = path.join(paths.caseDir(caseId), "processed");
+    const normalized = await readFile(path.join(dir, `${m.id}.txt`), "utf8");
+    const raw = await readFile(path.join(dir, `${m.id}.chunks.jsonl`), "utf8");
+    const chunks = raw.trim().split("\n").map((l) => JSON.parse(l));
+    expect(chunks.length).toBe(3);
+    for (const c of chunks) {
+      expect(c.modality).toBe("doc");
+      expect(typeof c.locator.char_start).toBe("number");
+      expect(typeof c.locator.char_end).toBe("number");
+      // 不变量：偏移切片严格等于切块原文（UI 高亮依赖此）。
+      expect(normalized.slice(c.locator.char_start, c.locator.char_end)).toBe(c.text);
+    }
+  });
+
   it("音频素材：降级为 pending 并附原因", async () => {
     const [m] = await materials.ingest(OPERATOR, caseId, [
       { filename: "call.mp3", content: Buffer.from("fake-audio").toString("base64"), encoding: "base64" },

@@ -56,11 +56,28 @@ export interface Material {
   note?: string;
 }
 
+/**
+ * 切块/引用出处定位（二期 Spec §2.1）。所有字段可选，向后兼容旧 chunk（无新字段）。
+ * `Citation.locator` 与之共用同一结构，故 `chunkToCitation` 可整体透传（Spec §2.2 原子约束）。
+ */
+export interface ChunkLocator {
+  page?: number;        // 文档页
+  paragraph?: number;   // 文档段（一期已用）
+  char_start?: number;  // 原文字符偏移（UI 高亮源片段）；归一化文本中 slice(char_start,char_end)===text
+  char_end?: number;
+  timecode?: string;    // 音/视频时间码，"start-end"（秒，或 HH:MM:SS.mmm-...）
+  bbox?: [number, number, number, number]; // 图像/视频帧区域 [x,y,w,h] 归一化
+  speaker?: string;     // 说话人标签（diarization）
+  frame?: number;       // 视频帧号（可选）
+}
+
 /** 切块（汇入时，工程方案 §7.3 step 1）。存 `processed/<mid>.chunks.jsonl`。 */
 export interface Chunk {
   chunk_id: string;
   material_id: string;
-  locator: { page?: number; paragraph?: number };
+  /** chunk 自带模态（二期 Spec §2.1）；旧 chunk 无此字段，读取时缺省 "doc"。 */
+  modality: Modality;
+  locator: ChunkLocator;
   text: string;
   content_hash: string;
 }
@@ -70,7 +87,7 @@ export interface Citation {
   material_id: string;
   material_name: string;
   modality: Modality;
-  locator: { page?: number; paragraph?: number; timecode?: string; bbox?: [number, number, number, number] };
+  locator: ChunkLocator;
   snippet: string;
   confidence: number;
   /** 指向素材内容（≠ 审计 event_hash，§7.2）。 */

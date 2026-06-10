@@ -11,7 +11,7 @@ import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { InquiryService } from "../src/inquiry/inquiry-service.js";
 import { MaterialService } from "../src/materials/material-service.js";
-import { MockEmbed } from "../src/model/mock-slots.js";
+import { MockEmbed, MockReranker } from "../src/model/mock-slots.js";
 import type { ModelSlots } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 
@@ -213,5 +213,78 @@ describe("InquiryService 混合检索（二期 P2.4 §5.2）", () => {
     const json = JSON.stringify({ claims: [{ text: "捏造", type: "fact", citations: ["m#999"] }], insufficient: false });
     const inq = await service(json).ask(OPERATOR, caseId, "有何可疑舰船活动");
     expect(inq.status).toBe("insufficient");
+  });
+});
+
+describe("InquiryService 重排门控（二期 P2.5 §5.2）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let materials: MaterialService;
+  let caseId: string;
+  const BUDGET = "MINI_AGENT_CTX_BUDGET_TOKENS";
+  const MIN = "MINI_AGENT_RERANK_MIN_CANDIDATES";
+  let savedBudget: string | undefined;
+  let savedMin: string | undefined;
+
+  const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-rerank-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    materials = new MaterialService(paths, audit, cases, EMBED_SLOTS); // 入库写 .vec
+    caseId = (await cases.create(OPERATOR, { name: "重排专题", clearance: "internal" })).id;
+    // 10 份均含查询词"舰船"的素材 → BM25 候选 ≥ 默认阈值 8，触发重排门控。
+    const docs = Array.from({ length: 10 }, (_, i) => ({ filename: `m${i}.txt`, content: `第${i}号舰船在海域${i}活动记录。` }));
+    await materials.ingest(OPERATOR, caseId, docs);
+    savedBudget = process.env[BUDGET];
+    savedMin = process.env[MIN];
+    delete process.env[BUDGET]; // 未设预算 → 检索路（非全上下文）
+  });
+
+  afterEach(async () => {
+    if (savedBudget === undefined) delete process.env[BUDGET];
+    else process.env[BUDGET] = savedBudget;
+    if (savedMin === undefined) delete process.env[MIN];
+    else process.env[MIN] = savedMin;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function service(rerankOn: boolean): InquiryService {
+    const json = JSON.stringify({ claims: [{ text: "有舰船活动", type: "fact", citations: ["dummy"] }], insufficient: false });
+    const guard = new OfflineGuard(["stub.local"], audit);
+    return new InquiryService(
+      paths,
+      audit,
+      cases,
+      materials,
+      { adapter: stubAdapter(json), guard, modelEndpoint: ENDPOINT },
+      { embed: new MockEmbed(), embedEndpoint: "" },
+      { reranker: rerankOn ? new MockReranker() : null, rerankEndpoint: "" },
+    );
+  }
+
+  async function lastMode(): Promise<unknown> {
+    const ev = (await audit.readAll()).filter((e) => e.action === "inquiry.create").pop();
+    return ev?.detail?.mode;
+  }
+
+  it("reranker 配置 + 候选数 ≥ 阈值 → 触发重排，审计 mode=hybrid+rerank", async () => {
+    await service(true).ask(OPERATOR, caseId, "舰船");
+    expect(await lastMode()).toBe("hybrid+rerank");
+  });
+
+  it("门控：阈值高于候选数 → 不重排，mode=hybrid", async () => {
+    process.env[MIN] = "15"; // 候选 10 < 15（且 ≤ 过取回上限 24）→ 跳过精排
+    await service(true).ask(OPERATOR, caseId, "舰船");
+    expect(await lastMode()).toBe("hybrid");
+  });
+
+  it("默认关闭（无 reranker）→ 路径不变，mode=hybrid", async () => {
+    await service(false).ask(OPERATOR, caseId, "舰船");
+    expect(await lastMode()).toBe("hybrid");
   });
 });

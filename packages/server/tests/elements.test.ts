@@ -95,4 +95,24 @@ describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
   it("OfflineGuard 拦截非白名单端点 → 403", async () => {
     await expect(service(stubAdapter("{}"), []).extract(OPERATOR, caseId)).rejects.toMatchObject({ status: 403 });
   });
+
+  it("token 预算配置下超预算按预算截材，如实记 truncated（取代 MAX_CHUNKS，二期 §5.1）", async () => {
+    const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
+    const saved = process.env[KEY];
+    try {
+      const c2 = (await cases.create(OPERATOR, { name: "多块专题", clearance: "internal" })).id;
+      await materials.ingest(OPERATOR, c2, [{ filename: "multi.txt", content: "第一段含目标甲。\n\n第二段含目标乙。" }]);
+      const all = await materials.loadCaseChunks(c2);
+      expect(all.length).toBe(2);
+      process.env[KEY] = "1"; // 极小预算 → 贪心仅保留首块
+      const json = JSON.stringify({ elements: [{ name: "目标甲", type: "person", mentions: [{ chunk_id: all[0].chunk_id }] }] });
+      const els = await service(stubAdapter(json)).extract(OPERATOR, c2);
+      expect(els).toHaveLength(1);
+      const ev = (await audit.readAll()).filter((e) => e.action === "element.extract").pop();
+      expect(ev?.detail).toMatchObject({ truncated: true, chunks: 1 });
+    } finally {
+      if (saved === undefined) delete process.env[KEY];
+      else process.env[KEY] = saved;
+    }
+  });
 });

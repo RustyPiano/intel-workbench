@@ -7,6 +7,8 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Element, ElementType, Identity } from "../domain/types.js";
 import { resolveValidCitations } from "../inquiry/citation.js";
+import { fitToBudget } from "../inquiry/retrieval.js";
+import { readCtxBudgetTokens } from "../model/rag-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { shortId } from "../util/hash.js";
@@ -62,8 +64,10 @@ export class ElementService {
       throw new AppError(503, "文本 LLM 未配置：要素抽取不可用");
     }
 
-    const chunks = all.slice(0, MAX_CHUNKS);
-    const truncated = all.length > MAX_CHUNKS;
+    // token 预算路由取代静默截断（§5.1）：配置预算则按预算贪心取材，否则退一期 MAX_CHUNKS。
+    const budget = readCtxBudgetTokens();
+    const { used: chunks, truncated } =
+      budget !== null ? fitToBudget(all, budget) : { used: all.slice(0, MAX_CHUNKS), truncated: all.length > MAX_CHUNKS };
     // 零外发红线：出站前先经 OfflineGuard 授权。
     await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "text-llm-elements" });
 

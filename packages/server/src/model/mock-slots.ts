@@ -40,6 +40,7 @@ export class MockAsr implements AsrAdapter {
 }
 
 export class MockVlm implements VlmAdapter {
+  readonly engine = "mock-vlm";
   async caption(frames: Buffer[], _opts?: { signal?: AbortSignal }): Promise<string> {
     const bytes = frames.reduce((s, f) => s + f.length, 0);
     return `（mock 配文）画面含 ${frames.length} 帧，共 ${bytes} 字节`;
@@ -47,6 +48,7 @@ export class MockVlm implements VlmAdapter {
 }
 
 export class MockOcr implements OcrAdapter {
+  readonly engine = "mock-ocr";
   async ocr(image: Buffer): Promise<OcrResult> {
     return { lines: [{ text: `（mock OCR）识别文本 ${image.length}B`, bbox: [0.1, 0.1, 0.8, 0.1] }] };
   }

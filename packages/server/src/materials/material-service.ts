@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 
@@ -11,7 +11,7 @@ import type { Chunk, Identity, Material, Modality } from "../domain/types.js";
 import type { AsrResult, ModelSlots } from "../model/slots.js";
 import { sha256, shortId } from "../util/hash.js";
 import { writeFileAtomic } from "../util/atomic.js";
-import { processAudio } from "./media-pipeline.js";
+import { processAudio, processImage, processVideo, type MediaFrame } from "./media-pipeline.js";
 
 const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
 
@@ -44,9 +44,14 @@ export interface MaterialContent {
   text?: string;
   /** 音频加工结果的转写段（done 音频素材，供复核展示+回放，二期 P2.3a）。 */
   segments?: AsrResult["segments"];
+  /** 视频/图像加工的中间结果（done 视频=分镜+配文+转写+OCR；图像=配文+OCR，P2.3b）。 */
+  media?: unknown;
   chunkCount?: number;
   note?: string;
 }
+
+/** 可加工的媒体模态（二期 P2.3a/b）。 */
+const MEDIA_MODALITIES = new Set<Modality>(["audio", "video", "image"]);
 
 function extOf(filename: string): string {
   const dot = filename.lastIndexOf(".");
@@ -269,10 +274,30 @@ export class MaterialService {
         const media = JSON.parse(await readFile(path.join(processedDir, `${material.id}.media.json`), "utf8")) as AsrResult;
         return { material, segments: media.segments, chunkCount: material.chunk_count };
       }
+      if (material.modality === "video" || material.modality === "image") {
+        // 视频/图像：返回分镜/配文/转写/OCR 中间结果，供复核按模态展示（二期 P2.3b）。
+        const media = JSON.parse(await readFile(path.join(processedDir, `${material.id}.media.json`), "utf8"));
+        return { material, media, chunkCount: material.chunk_count };
+      }
       const text = await readFile(path.join(processedDir, `${material.id}.txt`), "utf8");
       return { material, text, chunkCount: material.chunk_count };
     }
     return { material, note: material.note ?? "该素材尚未加工完成" };
+  }
+
+  /** 取视频/图像关键帧文件（bbox 引用回放，二期 §4.3）。t = 镜头起始秒（数字）。 */
+  async getFrameFile(actor: Identity, materialId: string, t: string): Promise<{ path: string }> {
+    const located = await this.locate(materialId);
+    if (!located) throw new AppError(404, "素材不存在");
+    await this.cases.get(actor, located.caseId);
+    if (!/^\d+$/.test(t)) throw new AppError(400, "非法时间码");
+    const file = path.join(this.paths.caseDir(located.caseId), "processed", `${materialId}.frames`, `${t}.svg`);
+    try {
+      await stat(file);
+    } catch {
+      throw new AppError(404, "帧不存在");
+    }
+    return { path: file };
   }
 
   /** 原始素材文件路径（供回放/下载，二期 P2.3a）。经 cases.get 复用密级校验。 */
@@ -294,7 +319,7 @@ export class MaterialService {
     const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
     const material = manifest.materials.find((m) => m.id === materialId);
     if (!material) throw new AppError(404, "素材不存在");
-    if (material.modality !== "audio") throw new AppError(400, "本期仅支持音频加工（视频/图像见 P2.3b）");
+    if (!MEDIA_MODALITIES.has(material.modality)) throw new AppError(400, "该素材模态不支持加工（仅音/视/图）");
 
     // 原子占位：并发 process 中第二个见 processing → 409，不重复加工、不丢状态。
     await this.cases.updateMaterial(caseId, materialId, (m) => {
@@ -306,49 +331,79 @@ export class MaterialService {
       action: "material.process",
       object: `material:${materialId}`,
       caseId,
-      detail: { caseId, materialId, phase: "start" },
+      detail: { caseId, materialId, phase: "start", modality: material.modality },
     });
 
-    const asr = this.slots.asr;
-    if (!asr) {
-      return this.failProcess(actor, caseId, materialId, "音频转写未配置：设置 MINI_AGENT_ASR_* 或开启 MINI_AGENT_USE_MOCK_MEDIA", "asr-unconfigured");
-    }
-
     try {
-      const audio = await readFile(path.join(this.paths.caseDir(caseId), "materials", `${materialId}-${material.filename}`));
+      const bytes = await readFile(path.join(this.paths.caseDir(caseId), "materials", `${materialId}-${material.filename}`));
       const version = (material.chunk_version ?? 0) + 1;
-      const { chunks, media, duration } = await processAudio(materialId, version, audio, asr);
+      const out = await this.runPipeline(material.modality, materialId, version, bytes);
 
-      // 提交点顺序：先完整写盘（原子），再翻 done。
+      if (out.chunks.length === 0) {
+        // 全部模型未配置或全部失败 → 视为失败（不产出可引用内容）。
+        return this.failProcess(actor, caseId, materialId, out.note ?? "加工未产出可引用内容（模型未配置或全部失败）", "no-output");
+      }
+
+      // 提交点顺序（§2.4）：先完整写盘（media.json + chunks.jsonl + 帧），再翻 done → 审计。
       const processedDir = path.join(this.paths.caseDir(caseId), "processed");
       await mkdir(processedDir, { recursive: true });
-      await writeFileAtomic(path.join(processedDir, `${materialId}.media.json`), `${JSON.stringify(media, null, 2)}\n`);
+      await writeFileAtomic(path.join(processedDir, `${materialId}.media.json`), `${JSON.stringify(out.media, null, 2)}\n`);
       await writeFileAtomic(
         path.join(processedDir, `${materialId}.chunks.jsonl`),
-        chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
+        out.chunks.map((c) => JSON.stringify(c)).join("\n") + (out.chunks.length ? "\n" : ""),
       );
+      if (out.frames) await this.writeFrames(processedDir, materialId, out.frames);
 
       const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
         m.status = "done";
-        m.chunk_count = chunks.length;
+        m.chunk_count = out.chunks.length;
         m.chunk_version = version;
-        m.duration = duration;
-        m.engine = asr.engine;
-        m.language = media.language;
+        if (out.duration !== undefined) m.duration = out.duration;
+        m.engine = out.engine;
         m.processed_at = new Date().toISOString();
-        m.note = undefined;
+        m.note = out.note; // 部分失败说明（§4.5）；全成功为 undefined
       });
       await this.audit.append({
         user: actor.id,
         action: "material.process",
         object: `material:${materialId}`,
         caseId,
-        detail: { caseId, materialId, phase: "done", engine: asr.engine, chunkCount: chunks.length, version, duration },
+        detail: { caseId, materialId, phase: "done", modality: material.modality, engine: out.engine, chunkCount: out.chunks.length, version },
       });
       return updated;
     } catch (e) {
-      return this.failProcess(actor, caseId, materialId, `音频转写失败：${(e as Error).message}`, "asr-error");
+      return this.failProcess(actor, caseId, materialId, `加工失败：${(e as Error).message}`, "pipeline-error");
     }
+  }
+
+  /** 按模态分派到具体管线（二期 P2.3a/b）。返回统一形态供 process 落盘。 */
+  private async runPipeline(
+    modality: Modality,
+    materialId: string,
+    version: number,
+    bytes: Buffer,
+  ): Promise<{ chunks: Chunk[]; media: unknown; duration?: number; engine: string; frames?: MediaFrame[]; note?: string }> {
+    if (modality === "audio") {
+      if (!this.slots.asr) {
+        return { chunks: [], media: null, engine: "none", note: "音频转写未配置：设置 MINI_AGENT_ASR_* 或开启 MINI_AGENT_USE_MOCK_MEDIA" };
+      }
+      const r = await processAudio(materialId, version, bytes, this.slots.asr);
+      return { chunks: r.chunks, media: r.media, duration: r.duration, engine: this.slots.asr.engine };
+    }
+    if (modality === "video") {
+      const r = await processVideo(materialId, version, bytes, this.slots);
+      return { chunks: r.chunks, media: r.media, duration: r.duration, engine: r.engine, frames: r.frames, note: r.notes.join("；") || undefined };
+    }
+    const r = await processImage(materialId, version, bytes, this.slots);
+    return { chunks: r.chunks, media: r.media, engine: r.engine, note: r.notes.join("；") || undefined };
+  }
+
+  /** 写关键帧到 `processed/<mid>.frames/`（重加工先清旧帧，幂等）。 */
+  private async writeFrames(processedDir: string, materialId: string, frames: MediaFrame[]): Promise<void> {
+    const dir = path.join(processedDir, `${materialId}.frames`);
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    for (const f of frames) await writeFile(path.join(dir, `${f.key}.svg`), f.content);
   }
 
   private async failProcess(actor: Identity, caseId: string, materialId: string, note: string, reason: string): Promise<Material> {

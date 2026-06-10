@@ -10,11 +10,12 @@ import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { MaterialService } from "../src/materials/material-service.js";
-import { MockAsr } from "../src/model/mock-slots.js";
-import type { ModelSlots } from "../src/model/slots.js";
+import { MockAsr, MockOcr, MockVlm } from "../src/model/mock-slots.js";
+import type { ModelSlots, OcrAdapter } from "../src/model/slots.js";
 import { sha256 } from "../src/util/hash.js";
 
 const ASR_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: null, ocr: null, embed: null, rerank: null };
+const FULL_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: new MockVlm(), ocr: new MockOcr(), embed: null, rerank: null };
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 
@@ -246,5 +247,107 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
     const final = (await cases.loadManifest(caseId))?.materials.find((m) => m.id === mid);
     expect(final?.status).toBe("done");
     expect((await s.loadCaseChunks(caseId))).toHaveLength(3); // 未重复入库
+  });
+});
+
+describe("MaterialService 视频/图像加工（二期 P2.3b）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let caseId: string;
+
+  // 12000 字节 → mock 12s → 2 镜头（0-10, 10-12）。
+  const VIDEO_B64 = Buffer.alloc(12_000, 1).toString("base64");
+
+  function svc(slots: ModelSlots = FULL_SLOTS): MaterialService {
+    return new MaterialService(paths, audit, cases, slots);
+  }
+  async function ingest(s: MaterialService, filename: string): Promise<string> {
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename, content: VIDEO_B64, encoding: "base64" }]);
+    return m.id;
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-vi-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    caseId = (await cases.create(OPERATOR, { name: "视频专题", clearance: "internal" })).id;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("视频 → done，三类 chunk（配文/转写/OCR）各带正确 locator + 帧落盘", async () => {
+    const s = svc();
+    const mid = await ingest(s, "clip.mp4");
+    const m = await s.process(OPERATOR, caseId, mid);
+    expect(m.status).toBe("done");
+
+    const chunks = await s.loadCaseChunks(caseId);
+    const cap = chunks.filter((c) => c.chunk_id.includes(".cap#"));
+    const tr = chunks.filter((c) => c.chunk_id.includes(".tr#"));
+    const ocr = chunks.filter((c) => c.chunk_id.includes(".ocr#"));
+    expect(cap.length).toBe(2); // 每镜头 1 配文
+    expect(tr.length).toBe(3); // MockAsr 12s → 3 段
+    expect(ocr.length).toBe(2); // 每帧 1 OCR
+    expect(chunks.every((c) => c.modality === "video")).toBe(true);
+    // locator：配文带 timecode+frame；转写带 timecode+speaker；OCR 带 timecode+bbox。
+    expect(cap[0].locator).toMatchObject({ timecode: "0-10", frame: 0 });
+    expect(tr[0].locator.speaker).toBeTruthy();
+    expect(ocr[0].locator.bbox).toHaveLength(4);
+    expect(chunks[0].content_hash).toBe(sha256(chunks[0].text)); // 红线可复算
+
+    // 关键帧落盘（bbox 引用回放所需）。
+    const f0 = await readFile(path.join(paths.caseDir(caseId), "processed", `${mid}.frames`, "0.svg"), "utf8");
+    expect(f0).toContain("mock frame");
+    // media.json 含分镜 + 转写。
+    const media = JSON.parse(await readFile(path.join(paths.caseDir(caseId), "processed", `${mid}.media.json`), "utf8"));
+    expect(media.kind).toBe("video");
+    expect(media.shots).toHaveLength(2);
+    expect(media.transcript.segments).toHaveLength(3);
+  });
+
+  it("getFrameFile：有效 t 取到帧；缺失 → 404；非法 t → 400", async () => {
+    const s = svc();
+    const mid = await ingest(s, "clip.mp4");
+    await s.process(OPERATOR, caseId, mid);
+    expect((await s.getFrameFile(OPERATOR, mid, "0")).path).toContain("0.svg");
+    await expect(s.getFrameFile(OPERATOR, mid, "999")).rejects.toMatchObject({ status: 404 });
+    await expect(s.getFrameFile(OPERATOR, mid, "../etc")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("图像 → done，配文 + OCR chunk（bbox），modality:image", async () => {
+    const s = svc();
+    const [img] = await s.ingest(OPERATOR, caseId, [{ filename: "photo.jpg", content: Buffer.from("img-bytes").toString("base64"), encoding: "base64" }]);
+    const m = await s.process(OPERATOR, caseId, img.id);
+    expect(m.status).toBe("done");
+    const chunks = await s.loadCaseChunks(caseId);
+    expect(chunks.every((c) => c.modality === "image")).toBe(true);
+    expect(chunks.some((c) => c.chunk_id.includes(".cap#"))).toBe(true);
+    const ocr = chunks.find((c) => c.chunk_id.includes(".ocr#"));
+    expect(ocr?.locator.bbox).toHaveLength(4);
+  });
+
+  it("部分失败（VLM ok / OCR fail）→ done + note，已成功 chunk 入库（§4.5）", async () => {
+    const boomOcr: OcrAdapter = { engine: "boom-ocr", ocr: async () => { throw new Error("OCR 崩"); } };
+    const s = svc({ asr: new MockAsr(), vlm: new MockVlm(), ocr: boomOcr, embed: null, rerank: null });
+    const mid = await ingest(s, "clip.mp4");
+    const m = await s.process(OPERATOR, caseId, mid);
+    expect(m.status).toBe("done");
+    expect(m.note).toContain("OCR");
+    const chunks = await s.loadCaseChunks(caseId);
+    expect(chunks.some((c) => c.chunk_id.includes(".cap#"))).toBe(true); // 配文成功入库
+    expect(chunks.some((c) => c.chunk_id.includes(".ocr#"))).toBe(false); // OCR 失败无 ocr chunk
+  });
+
+  it("视频全模型未配置（slots 全 null）→ failed（无可引用产出）", async () => {
+    const s = svc({ asr: null, vlm: null, ocr: null, embed: null, rerank: null });
+    const mid = await ingest(s, "clip.mp4");
+    const m = await s.process(OPERATOR, caseId, mid);
+    expect(m.status).toBe("failed");
+    expect(m.note).toBeTruthy();
   });
 });

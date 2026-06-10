@@ -1,5 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
@@ -161,17 +163,8 @@ export class MaterialService {
     // 仅 UTF-8 文本文档做实加工；其余降级。
     const isProcessableDoc = modality === "doc" && encoding === "utf8" && !DOC_BINARY_EXTS.has(ext);
     if (isProcessableDoc) {
-      const text = normalize(buffer.toString("utf8"));
-      const chunks = chunkText(id, text);
-      await mkdir(path.join(caseDir, "processed"), { recursive: true });
-      await writeFile(path.join(caseDir, "processed", `${id}.txt`), text, "utf8");
-      await writeFile(
-        path.join(caseDir, "processed", `${id}.chunks.jsonl`),
-        chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
-        "utf8",
-      );
+      base.chunk_count = await this.writeDocChunks(caseDir, id, buffer.toString("utf8"));
       base.status = "done";
-      base.chunk_count = chunks.length;
     } else {
       base.status = "pending";
       base.note = modality === "doc" ? DEGRADE_NOTE["doc-binary"] : DEGRADE_NOTE[modality];
@@ -184,6 +177,69 @@ export class MaterialService {
       object: `material:${id}`,
       caseId,
       detail: { caseId, materialId: id, filename, modality, status: base.status },
+    });
+    return base;
+  }
+
+  /** 归一化文本 → 切块并落 `.txt` + `.chunks.jsonl`，返回切块数（base64/流式共用）。 */
+  private async writeDocChunks(caseDir: string, id: string, rawText: string): Promise<number> {
+    const text = normalize(rawText);
+    const chunks = chunkText(id, text);
+    const processed = path.join(caseDir, "processed");
+    await mkdir(processed, { recursive: true });
+    await writeFile(path.join(processed, `${id}.txt`), text, "utf8");
+    await writeFile(
+      path.join(processed, `${id}.chunks.jsonl`),
+      chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
+      "utf8",
+    );
+    return chunks.length;
+  }
+
+  /**
+   * 流式汇入（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节，直接 pipe
+   * 落盘 `materials/`，不经 base64 膨胀/JSON 解析。真实音视频（动辄上百 MB）走此路径。
+   * 文本文档同步切块 done；媒体 pending（待 process）。
+   */
+  async ingestStream(actor: Identity, caseId: string, rawFilename: string, stream: NodeJS.ReadableStream): Promise<Material> {
+    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const filename = path.basename(rawFilename ?? "").trim() || "未命名素材";
+    const ext = extOf(filename);
+    const modality = modalityOf(ext);
+    const id = shortId("m-");
+    const caseDir = this.paths.caseDir(caseId);
+
+    const dest = path.join(caseDir, "materials", `${id}-${filename}`);
+    await mkdir(path.join(caseDir, "materials"), { recursive: true });
+    await pipeline(stream, createWriteStream(dest));
+    const { size } = await stat(dest);
+
+    const base: Material = {
+      id,
+      case_id: caseId,
+      filename,
+      modality,
+      format: ext || "unknown",
+      size,
+      ingested_at: new Date().toISOString(),
+      status: "pending",
+    };
+
+    // 文本文档读回切块 done；PDF/Office/媒体降级 pending（媒体待 process）。
+    if (modality === "doc" && TEXT_EXTS.has(ext)) {
+      base.chunk_count = await this.writeDocChunks(caseDir, id, await readFile(dest, "utf8"));
+      base.status = "done";
+    } else {
+      base.note = modality === "doc" ? DEGRADE_NOTE["doc-binary"] : DEGRADE_NOTE[modality];
+    }
+
+    await this.cases.attachMaterial(caseId, base);
+    await this.audit.append({
+      user: actor.id,
+      action: "material.ingest",
+      object: `material:${id}`,
+      caseId,
+      detail: { caseId, materialId: id, filename, modality, status: base.status, via: "stream" },
     });
     return base;
   }

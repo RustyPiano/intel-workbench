@@ -25,6 +25,14 @@ export function createCasesRouter(cases: CaseService, materials: MaterialService
     res.status(201).json({ ok: true, materials: ingested });
   });
 
+  // 流式上传素材（二期 §4.6）：请求体即文件字节（application/octet-stream），
+  // 绕 25MB base64-in-JSON 上限，直接 pipe 落盘。文件名经 x-upload-filename 头传递。
+  router.post("/:id/materials/upload", async (req, res) => {
+    const filename = decodeURIComponent(req.header("x-upload-filename") ?? "");
+    const material = await materials.ingestStream(req.identity, req.params.id, filename, req);
+    res.status(201).json({ ok: true, material });
+  });
+
   // 显式加工媒体素材（二期 P2.3a §4.1）：pending/failed/done → done|failed。
   router.post("/:id/materials/:mid/process", async (req, res) => {
     const material = await materials.process(req.identity, req.params.id, req.params.mid);

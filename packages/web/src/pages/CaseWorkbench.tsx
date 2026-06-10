@@ -11,13 +11,12 @@ import {
   getCase,
   getMaterialContent,
   getReport,
-  ingestMaterials,
   listElements,
   listInquiries,
   listMaterials,
   processMaterial,
-  readFileForUpload,
   submitReport,
+  uploadMaterial,
   type ApiCase,
   type ApiClaim,
   type ApiElement,
@@ -211,8 +210,11 @@ export function MaterialsPanel() {
     setBusy(true);
     setError(null);
     try {
-      const payload = await Promise.all(Array.from(fileList).map(readFileForUpload));
-      const ingested = await ingestMaterials(caseId, payload);
+      // 流式上传（二期 §4.6）：逐个文件直传字节，绕 25MB base64 上限。
+      const ingested: ApiMaterial[] = [];
+      for (const file of Array.from(fileList)) {
+        ingested.push(await uploadMaterial(caseId, file));
+      }
       refresh();
       if (ingested[0]) setActiveId(ingested[0].id);
     } catch (e) {

@@ -264,6 +264,18 @@ export function ingestMaterials(caseId: string, files: IngestFile[]): Promise<Ap
   }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
 }
 
+/** 流式上传单个文件（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节。 */
+export function uploadMaterial(caseId: string, file: File): Promise<ApiMaterial> {
+  const h = headers();
+  h["content-type"] = "application/octet-stream";
+  h["x-upload-filename"] = encodeURIComponent(file.name);
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/upload`, {
+    method: "POST",
+    headers: h,
+    body: file,
+  }).then((r) => unwrap<ApiMaterial>(r, "material"));
+}
+
 export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { headers: headers() }).then((r) =>
     unwrap<ApiInquiry[]>(r, "inquiries"),

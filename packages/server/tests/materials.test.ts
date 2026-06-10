@@ -9,7 +9,11 @@ import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { MaterialService } from "../src/materials/material-service.js";
+import { MockAsr } from "../src/model/mock-slots.js";
+import type { ModelSlots } from "../src/model/slots.js";
 import { sha256 } from "../src/util/hash.js";
+
+const ASR_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: null, ocr: null, embed: null, rerank: null };
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 
@@ -107,5 +111,112 @@ describe("MaterialService 汇入与加工（M2）", () => {
 
   it("getContent 不存在的素材 → 404", async () => {
     await expect(materials.getContent(OPERATOR, "m-nope")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("MaterialService 音频加工（二期 P2.3a）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let caseId: string;
+
+  // 12000 字节 → MockAsr 折算 12s → 3 段（5s 粒度）。
+  const AUDIO_B64 = Buffer.alloc(12_000, 1).toString("base64");
+
+  function svc(slots: ModelSlots = ASR_SLOTS): MaterialService {
+    return new MaterialService(paths, audit, cases, slots);
+  }
+  async function ingestAudio(s: MaterialService): Promise<string> {
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "call.mp3", content: AUDIO_B64, encoding: "base64" }]);
+    return m.id;
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-au-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    caseId = (await cases.create(OPERATOR, { name: "音频专题", clearance: "internal" })).id;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("mock ASR → done，chunks 带 timecode/speaker/content_hash + 字段齐全", async () => {
+    const s = svc();
+    const mid = await ingestAudio(s);
+    const m = await s.process(OPERATOR, caseId, mid);
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBe(3);
+    expect(m.chunk_version).toBe(1);
+    expect(m.duration).toBe(12);
+    expect(m.engine).toBe("mock-asr");
+    expect(m.processed_at).toBeTruthy();
+
+    const chunks = await s.loadCaseChunks(caseId);
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0].modality).toBe("audio");
+    expect(chunks[0].locator.timecode).toBe("0-5");
+    expect(chunks[0].locator.speaker).toBe("说话人1");
+    expect(chunks[0].content_hash).toBe(sha256(chunks[0].text)); // 红线：可复算
+    expect(chunks[0].chunk_id).toBe(`${mid}.v1#0`);
+
+    // media.json 落盘（复核回放/重切块用）。
+    const media = JSON.parse(await readFile(path.join(paths.caseDir(caseId), "processed", `${mid}.media.json`), "utf8"));
+    expect(media.segments).toHaveLength(3);
+    // 审计含 start + done。
+    const acts = (await audit.readAll()).filter((e) => e.action === "material.process").map((e) => e.detail?.phase);
+    expect(acts).toContain("start");
+    expect(acts).toContain("done");
+  });
+
+  it("getContent done 音频 → 返回转写段", async () => {
+    const s = svc();
+    const mid = await ingestAudio(s);
+    await s.process(OPERATOR, caseId, mid);
+    const content = await s.getContent(OPERATOR, mid);
+    expect(content.segments).toHaveLength(3);
+    expect(content.segments?.[0].speaker).toBe("说话人1");
+  });
+
+  it("幂等：重 process 生成新 chunk_id 版本，替换不追加（§2.5）", async () => {
+    const s = svc();
+    const mid = await ingestAudio(s);
+    await s.process(OPERATOR, caseId, mid);
+    const m2 = await s.process(OPERATOR, caseId, mid);
+    expect(m2.chunk_version).toBe(2);
+    const chunks = await s.loadCaseChunks(caseId);
+    expect(chunks).toHaveLength(3); // 替换非追加（非 6）
+    expect(chunks.every((c) => c.chunk_id.startsWith(`${mid}.v2#`))).toBe(true);
+  });
+
+  it("ASR 未配置 → failed 带原因 + 审计 fail", async () => {
+    const s = svc({ asr: null, vlm: null, ocr: null, embed: null, rerank: null });
+    const mid = await ingestAudio(s);
+    const m = await s.process(OPERATOR, caseId, mid);
+    expect(m.status).toBe("failed");
+    expect(m.note).toContain("未配置");
+    expect((await audit.readAll()).some((e) => e.action === "material.process" && e.detail?.phase === "fail")).toBe(true);
+  });
+
+  it("非音频素材 → 400", async () => {
+    const s = svc();
+    const [doc] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "正文" }]);
+    await expect(s.process(OPERATOR, caseId, doc.id)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("两并发 process：恰一个 done，另一个 409（不丢状态/不重复入库）", async () => {
+    const s = svc();
+    const mid = await ingestAudio(s);
+    const results = await Promise.allSettled([s.process(OPERATOR, caseId, mid), s.process(OPERATOR, caseId, mid)]);
+    const done = results.filter((r) => r.status === "fulfilled" && r.value.status === "done");
+    const conflict = results.filter((r) => r.status === "rejected" && (r.reason as { status?: number }).status === 409);
+    expect(done).toHaveLength(1);
+    expect(conflict).toHaveLength(1);
+    const final = (await cases.loadManifest(caseId))?.materials.find((m) => m.id === mid);
+    expect(final?.status).toBe("done");
+    expect((await s.loadCaseChunks(caseId))).toHaveLength(3); // 未重复入库
   });
 });

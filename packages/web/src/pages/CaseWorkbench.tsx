@@ -137,18 +137,33 @@ function fmtTime(sec: number): string {
 async function playCitedSegment(materialId: string, timecode: string): Promise<void> {
   const tc = parseTimecode(timecode);
   if (!tc) return;
-  const url = await fetchMaterialRawUrl(materialId);
+  let url: string;
+  try {
+    url = await fetchMaterialRawUrl(materialId);
+  } catch {
+    return; // 回放加载失败（无内联 UI 上下文）：静默放弃，不抛未处理拒绝。
+  }
   const audio = new Audio(url);
+  // 单次 revoke 守卫：到段尾 / 自然结束 / 出错 / 播放被拒，任一终态都释放 blob，杜绝泄漏。
+  let revoked = false;
+  const release = () => {
+    if (!revoked) {
+      revoked = true;
+      URL.revokeObjectURL(url);
+    }
+  };
   audio.addEventListener("loadedmetadata", () => {
     audio.currentTime = tc[0];
-    void audio.play();
+    void audio.play().catch(release);
   });
   audio.addEventListener("timeupdate", () => {
     if (audio.currentTime >= tc[1]) {
       audio.pause();
-      URL.revokeObjectURL(url);
+      release();
     }
   });
+  audio.addEventListener("ended", release);
+  audio.addEventListener("error", release);
 }
 
 export function MaterialsPanel() {
@@ -553,7 +568,7 @@ function CitationChips({ claim }: { claim: ApiClaim }) {
         // 音频引用带时间码 → 可点击回听被引用片段（硬验收，二期 §6）。
         const tc = c.modality === "audio" ? c.locator.timecode : undefined;
         const loc = c.locator.timecode
-          ? ` · ${c.locator.timecode}s${c.locator.speaker ? ` · ${c.locator.speaker}` : ""}`
+          ? ` · ⏱ ${c.locator.timecode} 秒${c.locator.speaker ? ` · ${c.locator.speaker}` : ""}`
           : c.locator.paragraph
             ? ` · 第${c.locator.paragraph}段`
             : "";

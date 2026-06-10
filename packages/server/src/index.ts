@@ -32,11 +32,18 @@ async function reconcileAtStartup(services: AppServices): Promise<string> {
     : `  对账:         ⚠ ${orphanCases.length} 个专题缺审计：${orphanCases.join(", ")}`;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   assertCoreWiring();
 
   const app = createApp();
   const services = app.locals.services as AppServices;
+
+  // 崩溃清扫先于服务（§4.1）：把上次中断遗留的 `processing` 素材翻 `failed` 可重试。
+  const swept = await services.cases.sweepInterrupted();
+  const sweptLine = swept.length
+    ? `  崩溃清扫:     ⚠ ${swept.length} 件中断素材已转 failed（可重试）`
+    : `  崩溃清扫:     无中断素材`;
+
   const server = app.listen(PORT, HOST, () => {
     void reconcileAtStartup(services).then((reconcileLine) => {
       // eslint-disable-next-line no-console
@@ -49,6 +56,7 @@ function main(): void {
           `  数据根:       ${services.paths.root}`,
           `  文本模型:     ${services.modelConfigured ? "已配置" : "未配置（问答降级）"}`,
           `  外发白名单:   ${services.egressAllowlist.length ? services.egressAllowlist.join(", ") : "（空，全断）"}`,
+          sweptLine,
           reconcileLine,
           `  绑定:         ${HOST}（仅 loopback，无对外监听）`,
         ].join("\n"),
@@ -63,4 +71,4 @@ function main(): void {
   process.on("SIGTERM", shutdown);
 }
 
-main();
+void main();

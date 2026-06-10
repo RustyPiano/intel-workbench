@@ -21,8 +21,12 @@ const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, 
  * 音频/视频/图像）按"暂不可用"降级，状态 pending 并附原因（产品 spec §10）。
  */
 
-const TEXT_EXTS = new Set(["txt", "md", "markdown", "text", "csv", "tsv", "log", "json", "yaml", "yml", "htm", "html"]);
 const DOC_BINARY_EXTS = new Set(["pdf", "doc", "docx", "rtf", "odt", "ppt", "pptx", "xls", "xlsx"]);
+
+/** doc 模态中可做实 UTF-8 文本切块的扩展名（排除已知二进制文档）。base64/流式两路共用，避免分叉。 */
+function isTextDocExt(ext: string): boolean {
+  return !DOC_BINARY_EXTS.has(ext);
+}
 const AUDIO_EXTS = new Set(["mp3", "wav", "m4a", "flac", "aac", "ogg", "amr", "wma"]);
 const VIDEO_EXTS = new Set(["mp4", "mov", "mkv", "avi", "wmv", "flv", "webm"]);
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "svg"]);
@@ -161,7 +165,7 @@ export class MaterialService {
     };
 
     // 仅 UTF-8 文本文档做实加工；其余降级。
-    const isProcessableDoc = modality === "doc" && encoding === "utf8" && !DOC_BINARY_EXTS.has(ext);
+    const isProcessableDoc = modality === "doc" && encoding === "utf8" && isTextDocExt(ext);
     if (isProcessableDoc) {
       base.chunk_count = await this.writeDocChunks(caseDir, id, buffer.toString("utf8"));
       base.status = "done";
@@ -225,8 +229,8 @@ export class MaterialService {
       status: "pending",
     };
 
-    // 文本文档读回切块 done；PDF/Office/媒体降级 pending（媒体待 process）。
-    if (modality === "doc" && TEXT_EXTS.has(ext)) {
+    // 文本文档读回切块 done；PDF/Office/媒体降级 pending（媒体待 process）。与 base64 路同一判据。
+    if (modality === "doc" && isTextDocExt(ext)) {
       base.chunk_count = await this.writeDocChunks(caseDir, id, await readFile(dest, "utf8"));
       base.status = "done";
     } else {

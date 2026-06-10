@@ -94,12 +94,6 @@ export interface MaterialContent {
   note?: string;
 }
 
-export interface IngestFile {
-  filename: string;
-  content: string;
-  encoding: "utf8" | "base64";
-}
-
 export interface ApiCitation {
   material_id: string;
   material_name: string;
@@ -254,14 +248,6 @@ export function listMaterials(caseId: string): Promise<ApiMaterial[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, { headers: headers() }).then((r) =>
     unwrap<ApiMaterial[]>(r, "materials"),
   );
-}
-
-export function ingestMaterials(caseId: string, files: IngestFile[]): Promise<ApiMaterial[]> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, {
-    method: "POST",
-    headers: headers(true),
-    body: JSON.stringify({ files }),
-  }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
 }
 
 /** 流式上传单个文件（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节。 */
@@ -428,25 +414,6 @@ export function exportAudit(): Promise<{ exportedAt: string; count: number; even
       throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
     }
     return { exportedAt: body.exportedAt, count: body.count, events: body.events } as { exportedAt: string; count: number; events: AuditEvent[] };
-  });
-}
-
-/** 浏览器侧读取文件：文本走 utf8，其余走 base64（媒体在服务端降级）。 */
-const TEXT_EXTS = new Set(["txt", "md", "markdown", "text", "csv", "tsv", "log", "json", "yaml", "yml", "htm", "html"]);
-
-export function readFileForUpload(file: File): Promise<IngestFile> {
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const isText = TEXT_EXTS.has(ext);
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
-    if (isText) {
-      reader.onload = () => resolve({ filename: file.name, content: String(reader.result), encoding: "utf8" });
-      reader.readAsText(file);
-    } else {
-      reader.onload = () => resolve({ filename: file.name, content: String(reader.result).split(",")[1] ?? "", encoding: "base64" });
-      reader.readAsDataURL(file);
-    }
   });
 }
 

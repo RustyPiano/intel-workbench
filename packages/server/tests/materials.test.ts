@@ -126,6 +126,13 @@ describe("MaterialService 汇入与加工（M2）", () => {
     expect(raw).toContain("第二段含线索");
   });
 
+  it("ingestStream 与 base64 路同判据：非二进制文档扩展名（.srt）→ done（不分叉）", async () => {
+    const m = await materials.ingestStream(OPERATOR, caseId, "subs.srt", Readable.from(Buffer.from("字幕第一段。\n\n字幕第二段。", "utf8")));
+    expect(m.modality).toBe("doc");
+    expect(m.status).toBe("done"); // 旧 allow-list 会误降级 pending
+    expect(m.chunk_count).toBe(2);
+  });
+
   it("ingestStream 音频 → pending（待 process）+ basename 去穿越", async () => {
     const m = await materials.ingestStream(OPERATOR, caseId, "../../evil/clip.mp3", Readable.from(Buffer.from("fake-bytes")));
     expect(m.modality).toBe("audio");

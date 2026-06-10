@@ -18,7 +18,8 @@ import type {
 
 /** mock embedding 维度（确定性 hash 向量；P2.4 .vec 版本戳记此 dim）。 */
 export const MOCK_EMBED_DIM = 8;
-export const MOCK_ENGINE = "mock";
+/** mock embedding 模型标识（P2.4 .vec 版本戳 embed_model）。 */
+export const MOCK_EMBED_MODEL = "mock-embed";
 
 const SEG_SECONDS = 5;
 
@@ -51,6 +52,8 @@ export class MockOcr implements OcrAdapter {
 }
 
 export class MockEmbed implements EmbeddingAdapter {
+  readonly dim = MOCK_EMBED_DIM;
+  readonly modelId = MOCK_EMBED_MODEL;
   async embed(texts: string[]): Promise<Float32Array[]> {
     return texts.map((t) => embedOne(t));
   }

@@ -111,4 +111,50 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
     expect(list).toHaveLength(1);
     expect(list[0].question).toBe("问题一");
   });
+
+  describe("token 预算路由（二期 §5.1）", () => {
+    const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
+    let saved: string | undefined;
+    beforeEach(() => {
+      saved = process.env[KEY];
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env[KEY];
+      else process.env[KEY] = saved;
+    });
+
+    // "请汇总所有信息" 与单条素材无任何分词重叠 → 检索路必空。
+    const NO_OVERLAP_Q = "请汇总所有信息";
+
+    it("全上下文模式：BM25 漏掉的无重叠问题也能答（消除召回瓶颈）", async () => {
+      process.env[KEY] = "100000";
+      const json = JSON.stringify({ claims: [{ text: "发现可疑舰船活动", type: "fact", citations: [chunkId] }], insufficient: false });
+      const inq = await service(stubAdapter(json)).ask(OPERATOR, caseId, NO_OVERLAP_Q);
+      expect(inq.status).toBe("answered");
+      expect(inq.claims[0].citations[0].material_name).toBe("intel.txt");
+    });
+
+    it("未设预算：同一无重叠问题退检索路 → 无命中拒答（一期行为不退化）", async () => {
+      delete process.env[KEY];
+      let called = false;
+      const adapter: ModelAdapter = {
+        name: "stub",
+        generate: async () => {
+          called = true;
+          return { message: { role: "assistant", content: "{}" }, stopReason: "end_turn" };
+        },
+      };
+      const inq = await service(adapter).ask(OPERATOR, caseId, NO_OVERLAP_Q);
+      expect(inq.status).toBe("insufficient");
+      expect(called).toBe(false);
+    });
+
+    it("全上下文下第③条拒答仍守红线：模型引用不存在 chunk → 整体拒答", async () => {
+      process.env[KEY] = "100000";
+      const json = JSON.stringify({ claims: [{ text: "捏造结论", type: "fact", citations: ["m#999"] }], insufficient: false });
+      const inq = await service(stubAdapter(json)).ask(OPERATOR, caseId, "任意问题");
+      expect(inq.status).toBe("insufficient");
+      expect(inq.claims[0].status).toBe("unverified");
+    });
+  });
 });

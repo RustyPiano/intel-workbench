@@ -55,3 +55,63 @@ export function retrieve(query: string, chunks: Chunk[], k = 6): ScoredChunk[] {
     .sort((a, b) => b.score - a.score)
     .slice(0, k);
 }
+
+/**
+ * Token 预算路由（二期 Spec §5.1）。小数据走全上下文（消除召回瓶颈），
+ * 大数据才检索。估算 fail-safe：宁可保守也不撑爆真实窗口。
+ */
+
+/** 近边界即走检索（评审：低估→撑爆窗口属不对称风险，留 20% 安全垫）。 */
+const BUDGET_SAFETY = 0.8;
+
+/** 粗估 token：CJK/全角字符≈1，其余（拉丁/数字/标点）≈chars/4（Spec §5.1）。 */
+function estStringTokens(s: string): number {
+  let wide = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) > 0x2e7f) wide++; // CJK 部首起点；含中文标点（保守计 1）
+  }
+  return wide + Math.ceil((s.length - wide) / 4);
+}
+
+/** 单 chunk 估算，计入 `callModel` 每片段的 `[chunk_id] ` 框架与分隔开销（评审）。 */
+export function estChunkTokens(c: Chunk): number {
+  return estStringTokens(`[${c.chunk_id}] ${c.text}`) + 1;
+}
+
+/** 一批 chunk 进上下文的估算 token 总量。 */
+export function estTokens(chunks: Chunk[]): number {
+  return chunks.reduce((sum, c) => sum + estChunkTokens(c), 0);
+}
+
+export interface ContextSelection {
+  used: Chunk[];
+  mode: "full" | "retrieval";
+}
+
+/**
+ * 问答取材（query 驱动）：预算内 → 全上下文（used=全集，零召回风险）；
+ * 否则 / 未设预算 → BM25 检索 top-k（Spec §5.1）。预算 opt-in：未配置即退一期路径。
+ */
+export function selectContext(query: string, chunks: Chunk[], budget: number | null, k = 6): ContextSelection {
+  if (budget !== null && estTokens(chunks) <= budget * BUDGET_SAFETY) {
+    return { used: chunks, mode: "full" };
+  }
+  return { used: retrieve(query, chunks, k).map((h) => h.chunk), mode: "retrieval" };
+}
+
+/**
+ * 要素抽取取材（无 query，扫全量）：预算内全取，超预算按文档序贪心截到预算内
+ * （Spec §5.1，取代 element-service 的 MAX_CHUNKS 静默截断；至少保留 1 块）。
+ */
+export function fitToBudget(chunks: Chunk[], budget: number): { used: Chunk[]; truncated: boolean } {
+  const limit = budget * BUDGET_SAFETY;
+  const used: Chunk[] = [];
+  let acc = 0;
+  for (const c of chunks) {
+    const t = estChunkTokens(c);
+    if (used.length > 0 && acc + t > limit) break;
+    used.push(c);
+    acc += t;
+  }
+  return { used, truncated: used.length < chunks.length };
+}

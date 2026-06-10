@@ -7,10 +7,11 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
+import { readCtxBudgetTokens } from "../model/rag-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { shortId } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
-import { retrieve } from "./retrieval.js";
+import { selectContext } from "./retrieval.js";
 
 /**
  * 问答带溯源（工程方案 §7.3）。受控管线，不走开放工具循环：
@@ -49,17 +50,20 @@ export class InquiryService {
     const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
 
     const chunks = await this.materials.loadCaseChunks(caseId);
-    const hits = retrieve(q, chunks, TOP_K);
+    // token 预算路由（§5.1）：预算内全上下文、超预算 BM25 检索；未设预算退一期 top-k。
+    const { used, mode } = selectContext(q, chunks, readCtxBudgetTokens(), TOP_K);
 
-    const inquiry =
-      hits.length === 0
-        ? this.make(actor, q, "insufficient", `${INSUFFICIENT}（未检索到相关素材片段）`, [])
-        : await this.generateAndValidate(
-            actor,
-            q,
-            hits.map((h) => h.chunk),
-            nameById,
-          );
+    let inquiry: Inquiry;
+    if (chunks.length === 0) {
+      // ① 专题无任何 chunk（全上下文下原 hits===0 判据改此，§5.1）。
+      inquiry = this.make(actor, q, "insufficient", `${INSUFFICIENT}（专题暂无已加工素材）`, []);
+    } else if (used.length === 0) {
+      // 检索路无命中（全上下文下 used 必非空，此分支仅检索路触发）。
+      inquiry = this.make(actor, q, "insufficient", `${INSUFFICIENT}（未检索到相关素材片段）`, []);
+    } else {
+      // ②③ 拒答（模型 insufficient / 全 claim 失效）仍在 generateAndValidate 内守红线。
+      inquiry = await this.generateAndValidate(actor, q, used, nameById);
+    }
 
     await this.persist(caseId, inquiry);
     await this.audit.append({
@@ -67,7 +71,7 @@ export class InquiryService {
       action: "inquiry.create",
       object: `inquiry:${inquiry.id}`,
       caseId,
-      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, hits: hits.length },
+      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, mode, used: used.length },
     });
     return inquiry;
   }

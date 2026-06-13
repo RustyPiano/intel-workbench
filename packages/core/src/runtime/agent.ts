@@ -4,11 +4,11 @@ import type { ModelAdapter } from "../model/types.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { createDefaultToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
-import type { ToolExecutionResult, ToolRuntimeConfig } from "../tools/types.js";
+import type { RuntimeTool, ToolExecutionResult, ToolRuntimeConfig } from "../tools/types.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
 import { RuntimeError } from "./errors.js";
 import { EventBus } from "./events.js";
-import { formatToolMessageContent, runAgentLoop } from "./loop.js";
+import { formatToolMessageContent, runAgentLoop, type ToolMiddleware } from "./loop.js";
 import { createPolicyEngine, type PolicyEngine } from "./policy.js";
 import { buildActiveSkillsBlock, buildBaseSystemPrompt } from "./prompt.js";
 import { RunManager } from "./run-manager.js";
@@ -40,6 +40,11 @@ export interface RuntimeRunResult {
   finalMessage: AssistantMessage;
 }
 
+export interface RunOverrides {
+  extraTools?: RuntimeTool[];
+  toolMiddleware?: ToolMiddleware;
+}
+
 export class RuntimeConversation {
   private messages: RuntimeMessage[];
   // Serialize concurrent send() invocations so the shared `messages` array
@@ -62,8 +67,12 @@ export class RuntimeConversation {
     this.messages = messages;
   }
 
-  send(prompt: string, signal: AbortSignal = new AbortController().signal): Promise<RuntimeRunResult> {
-    const next = this.sendQueue.then(() => this.sendInternal(prompt, signal));
+  send(
+    prompt: string,
+    signal: AbortSignal = new AbortController().signal,
+    overrides?: RunOverrides,
+  ): Promise<RuntimeRunResult> {
+    const next = this.sendQueue.then(() => this.sendInternal(prompt, signal, overrides));
     this.sendQueue = next.catch(() => {});
     return next;
   }
@@ -78,7 +87,10 @@ export class RuntimeConversation {
     return this.cachedBaseSystemPrompt;
   }
 
-  private async sendInternal(prompt: string, signal: AbortSignal): Promise<RuntimeRunResult> {
+  private async sendInternal(prompt: string, signal: AbortSignal, overrides?: RunOverrides): Promise<RuntimeRunResult> {
+    const toolRegistry = overrides?.extraTools?.length
+      ? this.agent.toolRegistry.withExtraTools(overrides.extraTools)
+      : this.agent.toolRegistry;
     const runManager = await RunManager.start({
       workspaceRoot: this.agent.workspaceRoot,
       sessionId: this.sessionId,
@@ -93,7 +105,8 @@ export class RuntimeConversation {
 
     const loopResult = await runAgentLoop(prompt, this.sessionId, {
       modelAdapter: this.agent.modelAdapter,
-      toolRegistry: this.agent.toolRegistry,
+      toolRegistry,
+      toolMiddleware: overrides?.toolMiddleware,
       sessionStore: this.agent.sessionStore,
       signal,
       maxTurns: this.agent.maxTurns,
@@ -194,9 +207,9 @@ export class RuntimeAgent {
     return new RuntimeAgent(options, skillRegistry, policy);
   }
 
-  async run(prompt: string, signal?: AbortSignal): Promise<RuntimeRunResult> {
+  async run(prompt: string, signal?: AbortSignal, overrides?: RunOverrides): Promise<RuntimeRunResult> {
     const conversation = await this.createConversation();
-    return conversation.send(prompt, signal);
+    return conversation.send(prompt, signal, overrides);
   }
 
   async createConversation(

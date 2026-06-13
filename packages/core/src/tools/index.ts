@@ -1,6 +1,6 @@
 import type { ZodError } from "zod";
 
-import { toRuntimeErrorShape } from "../runtime/errors.js";
+import { RuntimeError, toRuntimeErrorShape } from "../runtime/errors.js";
 import type { ToolCall } from "../runtime/types.js";
 import { activateSkillTool } from "./activate-skill.js";
 import { analyzeAudioTool } from "./analyze-audio.js";
@@ -53,12 +53,22 @@ export class ToolRegistry {
 
   constructor(tools: RuntimeTool[]) {
     for (const tool of tools) {
+      if (this.tools.has(tool.name)) {
+        throw new RuntimeError({
+          code: "INVALID_ARGS",
+          message: `Duplicate tool name: ${tool.name}`,
+        });
+      }
       this.tools.set(tool.name, tool);
     }
   }
 
   list(): RuntimeTool[] {
     return [...this.tools.values()];
+  }
+
+  withExtraTools(extra: RuntimeTool[]): ToolRegistry {
+    return new ToolRegistry([...this.list(), ...extra]);
   }
 
   async execute(toolCall: ToolCall, ctx: ToolContext) {

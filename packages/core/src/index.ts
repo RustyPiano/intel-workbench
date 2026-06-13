@@ -10,9 +10,12 @@
 
 export { RuntimeAgent, RuntimeConversation } from "./runtime/agent.js";
 export type {
+  RunOverrides,
   RuntimeAgentOptions,
   RuntimeRunResult,
 } from "./runtime/agent.js";
+export type { ToolMiddleware } from "./runtime/loop.js";
+export type { ToolCall } from "./runtime/types.js";
 
 export { RUNTIME_VERSION } from "./runtime/version.js";
 
@@ -28,3 +31,9 @@ export type {
   GenerateResult,
   ToolSpec,
 } from "./model/types.js";
+export type {
+  RuntimeTool,
+  ToolArtifact,
+  ToolContext,
+  ToolExecutionResult,
+} from "./tools/types.js";

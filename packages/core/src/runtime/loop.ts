@@ -7,9 +7,15 @@ import { getToolJsonSchema, type ToolContext, type ToolExecutionResult } from ".
 import { isRuntimeError, RuntimeError, toRuntimeErrorShape } from "./errors.js";
 import type { RunManager } from "./run-manager.js";
 
+export type ToolMiddleware = (
+  toolCall: ToolCall,
+  next: () => Promise<ToolExecutionResult>,
+) => Promise<ToolExecutionResult>;
+
 export interface LoopDependencies {
   modelAdapter: ModelAdapter;
   toolRegistry: ToolRegistry;
+  toolMiddleware?: ToolMiddleware;
   sessionStore: SessionStore;
   runManager: RunManager;
   signal?: AbortSignal;
@@ -193,7 +199,24 @@ export async function runAgentLoop(
           runId: dependencies.runManager.runId,
         });
 
-        const result = await dependencies.toolRegistry.execute(toolCall, dependencies.createToolContext(toolCall));
+        const runTool = () => dependencies.toolRegistry.execute(toolCall, dependencies.createToolContext(toolCall));
+        let result: ToolExecutionResult;
+        let invocationError: unknown = null;
+        try {
+          result = dependencies.toolMiddleware ? await dependencies.toolMiddleware(toolCall, runTool) : await runTool();
+        } catch (error) {
+          // toolMiddleware threw (e.g. an audit write-ahead append failed). The tool_call
+          // entry was already journaled above; leaving it unanswered corrupts the session
+          // on resume (session.ts flags a message after an open tool_call). Synthesize a
+          // failed result so the existing journaling closes the tool_call, then rethrow
+          // below to fail the run.
+          invocationError = error;
+          result = {
+            ok: false,
+            content: error instanceof Error ? error.message : "Tool middleware failed",
+            error: toRuntimeErrorShape(error, isRuntimeError(error) ? error.code : "INTERNAL_ERROR"),
+          };
+        }
         const toolResultEntry: ToolResultEntry = {
           type: "tool_result",
           toolCallId: toolCall.id,
@@ -236,6 +259,11 @@ export async function runAgentLoop(
         }
 
         await dependencies.runManager.recordToolCompleted(toolCall, result);
+        if (invocationError !== null) {
+          // MINOR: classify a bare middleware failure as INTERNAL_ERROR, not the catch-all MODEL_ERROR.
+          if (isRuntimeError(invocationError)) throw invocationError;
+          throw new RuntimeError({ code: "INTERNAL_ERROR", message: result.content });
+        }
         if (result.error?.code === "RUN_ABORTED") {
           throw new RuntimeError(result.error);
         }

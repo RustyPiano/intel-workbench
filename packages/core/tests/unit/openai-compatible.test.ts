@@ -2,7 +2,22 @@ import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 
 import { OpenAICompatibleModelAdapter } from "../../src/model/openai-compatible.js";
+import type { ModelStreamEvent } from "../../src/model/types.js";
 import { getToolJsonSchema, type RuntimeTool } from "../../src/tools/types.js";
+
+async function* chunks(...items: unknown[]): AsyncIterable<unknown> {
+  for (const item of items) {
+    yield item;
+  }
+}
+
+async function collectStreamEvents(stream: AsyncIterable<ModelStreamEvent>): Promise<ModelStreamEvent[]> {
+  const events: ModelStreamEvent[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
 
 describe("OpenAICompatibleModelAdapter", () => {
   test("rejects malformed provider responses that omit the choices array", async () => {
@@ -425,5 +440,267 @@ describe("OpenAICompatibleModelAdapter", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+
+  test("streams multi-chunk text and completes with the assembled message", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      model: "any-model",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return chunks(
+              { choices: [{ delta: { content: "hello " }, finish_reason: null }] },
+              { choices: [{ delta: { content: "stream" }, finish_reason: "stop" }] },
+            );
+          },
+        },
+      },
+    };
+
+    const events = await collectStreamEvents(adapter.stream({
+      systemPrompt: "You are a test.",
+      messages: [],
+      tools: [],
+    }));
+
+    const text = events
+      .filter((event): event is Extract<ModelStreamEvent, { type: "text_delta" }> => event.type === "text_delta")
+      .map((event) => event.text)
+      .join("");
+    const complete = events.at(-1);
+
+    expect(text).toBe("hello stream");
+    expect(complete).toMatchObject({
+      type: "complete",
+      result: {
+        message: { content: "hello stream" },
+        stopReason: "end_turn",
+      },
+    });
+  });
+
+  test("assembles split streamed tool calls and maps tool_calls finish reason", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      model: "any-model",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return chunks(
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "call_split",
+                          type: "function",
+                          function: { name: "read", arguments: "{\"path\":" },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              },
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          function: { arguments: "\"/tmp/a\"}" },
+                        },
+                      ],
+                    },
+                    finish_reason: "tool_calls",
+                  },
+                ],
+              },
+            );
+          },
+        },
+      },
+    };
+
+    const events = await collectStreamEvents(adapter.stream({
+      systemPrompt: "You are a test.",
+      messages: [],
+      tools: [],
+    }));
+    const complete = events.at(-1);
+
+    expect(complete).toMatchObject({
+      type: "complete",
+      result: {
+        message: {
+          toolCalls: [
+            {
+              id: "call_split",
+              name: "read",
+              arguments: { path: "/tmp/a" },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+    });
+  });
+
+  test("captures trailing usage-only streamed chunks", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      model: "any-model",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return chunks(
+              { choices: [{ delta: { content: "usage" }, finish_reason: "stop" }] },
+              { choices: [], usage: { prompt_tokens: 7, completion_tokens: 11 } },
+            );
+          },
+        },
+      },
+    };
+
+    const events = await collectStreamEvents(adapter.stream({
+      systemPrompt: "You are a test.",
+      messages: [],
+      tools: [],
+    }));
+
+    expect(events.at(-1)).toMatchObject({
+      type: "complete",
+      result: {
+        usage: { inputTokens: 7, outputTokens: 11 },
+      },
+    });
+  });
+
+  test("maps provider errors thrown while starting a stream", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      provider: "openai-compatible",
+      model: "google/gemma-4-31b-it:free",
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<never> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            const error = new Error("429 Provider returned error") as Error & {
+              status: number;
+              request_id: string;
+              error: {
+                message: string;
+                code: number;
+                metadata: {
+                  raw: string;
+                  provider_name: string;
+                  is_byok: boolean;
+                };
+              };
+            };
+            error.status = 429;
+            error.request_id = "req_stream_429";
+            error.error = {
+              message: "Provider returned error",
+              code: 429,
+              metadata: {
+                raw: JSON.stringify({
+                  error: {
+                    code: 429,
+                    message: "Your prepayment credits are depleted.",
+                    status: "RESOURCE_EXHAUSTED",
+                  },
+                }),
+                provider_name: "Google AI Studio",
+                is_byok: true,
+              },
+            };
+            throw error;
+          },
+        },
+      },
+    };
+
+    await expect(
+      collectStreamEvents(adapter.stream({
+        systemPrompt: "You are a test.",
+        messages: [],
+        tools: [],
+      })),
+    ).rejects.toMatchObject({
+      code: "MODEL_ERROR",
+      retriable: true,
+      details: {
+        category: "quota",
+        status: 429,
+        provider: "Google AI Studio",
+        providerStatus: "RESOURCE_EXHAUSTED",
+        isByok: true,
+        requestId: "req_stream_429",
+      },
+    });
+  });
+
+  test("rejects streamed tool calls whose accumulated arguments are invalid JSON", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      model: "any-model",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return chunks({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_bad_json",
+                        type: "function",
+                        function: { name: "edit", arguments: "{not json" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+            });
+          },
+        },
+      },
+    };
+
+    await expect(
+      collectStreamEvents(adapter.stream({
+        systemPrompt: "You are a test.",
+        messages: [],
+        tools: [],
+      })),
+    ).rejects.toMatchObject({
+      code: "MODEL_ERROR",
+      details: {
+        category: "incompatible_response",
+        name: "edit",
+      },
+    });
   });
 });

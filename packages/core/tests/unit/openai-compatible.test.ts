@@ -703,4 +703,44 @@ describe("OpenAICompatibleModelAdapter", () => {
       },
     });
   });
+
+  test("generate() classifies an aborted request as RUN_ABORTED, not MODEL_ERROR", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<never> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            throw new Error("The operation was aborted");
+          },
+        },
+      },
+    };
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      adapter.generate({ systemPrompt: "You are a test.", messages: [], tools: [], signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "RUN_ABORTED" });
+  });
+
+  test("stream() classifies an aborted request as RUN_ABORTED, not MODEL_ERROR", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<never> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            throw new Error("The operation was aborted");
+          },
+        },
+      },
+    };
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      collectStreamEvents(adapter.stream({ systemPrompt: "You are a test.", messages: [], tools: [], signal: controller.signal })),
+    ).rejects.toMatchObject({ code: "RUN_ABORTED" });
+  });
 });

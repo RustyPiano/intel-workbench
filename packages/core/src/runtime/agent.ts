@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ModelAdapter } from "../model/types.js";
+import type { ModelAdapter, ModelStreamEvent } from "../model/types.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { createDefaultToolRegistry, ToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
@@ -45,6 +45,7 @@ export interface RunOverrides {
   extraTools?: RuntimeTool[];
   toolMiddleware?: ToolMiddleware;
   modelAdapter?: ModelAdapter;
+  onModelStreamEvent?: (event: ModelStreamEvent) => void;
 }
 
 export class RuntimeConversation {
@@ -109,6 +110,7 @@ export class RuntimeConversation {
       modelAdapter: overrides?.modelAdapter ?? this.agent.modelAdapter,
       toolRegistry,
       toolMiddleware: overrides?.toolMiddleware,
+      onModelStreamEvent: overrides?.onModelStreamEvent,
       sessionStore: this.agent.sessionStore,
       signal,
       maxTurns: this.agent.maxTurns,

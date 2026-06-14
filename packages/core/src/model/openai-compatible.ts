@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type {
+  ChatCompletionChunk,
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionTool,
@@ -7,7 +8,7 @@ import type {
 
 import { RuntimeError } from "../runtime/errors.js";
 import type { AssistantMessage, RuntimeMessage, ToolCall } from "../runtime/types.js";
-import type { GenerateInput, GenerateResult, ModelAdapter } from "./types.js";
+import type { GenerateInput, GenerateResult, ModelAdapter, ModelStreamEvent } from "./types.js";
 
 export interface OpenAICompatibleModelAdapterOptions {
   provider?: string;
@@ -369,6 +370,117 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
           }
         : undefined,
       rawResponse: response,
+    };
+  }
+
+  async *stream(input: GenerateInput): AsyncIterable<ModelStreamEvent> {
+    let content = "";
+    const toolCalls = new Map<number, { id?: string; name?: string; args: string }>();
+    let finishReason: ChatCompletionChunk.Choice["finish_reason"] = null;
+    let usage: ChatCompletionChunk["usage"];
+
+    try {
+      const stream = await this.client.chat.completions.create({
+        model: this.options.model,
+        messages: [
+          {
+            role: "system",
+            content: input.systemPrompt,
+          },
+          ...input.messages.map(mapMessage),
+        ],
+        tools: mapTools(input),
+        tool_choice: input.tools.length ? "auto" : undefined,
+        temperature: input.temperature,
+        max_completion_tokens: input.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+      }, {
+        signal: input.signal,
+      });
+
+      for await (const chunk of stream) {
+        const choice = chunk.choices?.[0];
+        const text = choice?.delta?.content;
+        if (typeof text === "string" && text.length > 0) {
+          content += text;
+          yield { type: "text_delta", text };
+        }
+
+        for (const toolCall of choice?.delta?.tool_calls ?? []) {
+          const entry = toolCalls.get(toolCall.index) ?? { args: "" };
+          const name = toolCall.function?.name;
+          const argumentsDelta = toolCall.function?.arguments;
+
+          if (toolCall.id !== undefined) {
+            entry.id = toolCall.id;
+          }
+          if (name !== undefined) {
+            entry.name = name;
+          }
+          if (argumentsDelta !== undefined) {
+            entry.args += argumentsDelta;
+          }
+
+          toolCalls.set(toolCall.index, entry);
+          yield {
+            type: "tool_call_delta",
+            index: toolCall.index,
+            ...(toolCall.id !== undefined ? { id: toolCall.id } : {}),
+            ...(name !== undefined ? { name } : {}),
+            ...(argumentsDelta !== undefined ? { argumentsDelta } : {}),
+          };
+        }
+
+        if (choice?.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
+      }
+    } catch (error) {
+      throw extractProviderError(error);
+    }
+
+    const assembledToolCalls: ChatCompletionMessageToolCall[] = [...toolCalls.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, entry]) => {
+        if (!entry.id || !entry.name) {
+          throw new RuntimeError({
+            code: "MODEL_ERROR",
+            message: "Provider streamed a tool call without id/name",
+            details: { category: "incompatible_response" },
+          });
+        }
+
+        return {
+          id: entry.id,
+          type: "function",
+          function: {
+            name: entry.name,
+            arguments: entry.args,
+          },
+        };
+      });
+
+    const message = mapAssistantMessage({
+      content: content.length ? content : null,
+      tool_calls: assembledToolCalls.length ? assembledToolCalls : undefined,
+    });
+
+    yield {
+      type: "complete",
+      result: {
+        message,
+        stopReason: mapStopReason(finishReason),
+        usage: usage
+          ? {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+            }
+          : undefined,
+      },
     };
   }
 }

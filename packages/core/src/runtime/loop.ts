@@ -1,4 +1,4 @@
-import type { ModelAdapter } from "../model/types.js";
+import type { GenerateResult, ModelAdapter, ModelStreamEvent } from "../model/types.js";
 import type { SessionStore } from "./session.js";
 import type { AssistantMessage, RuntimeMessage, ToolCall, ToolResultEntry } from "./types.js";
 import { createId } from "../utils/ids.js";
@@ -16,6 +16,7 @@ export interface LoopDependencies {
   modelAdapter: ModelAdapter;
   toolRegistry: ToolRegistry;
   toolMiddleware?: ToolMiddleware;
+  onModelStreamEvent?: (event: ModelStreamEvent) => void;
   sessionStore: SessionStore;
   runManager: RunManager;
   signal?: AbortSignal;
@@ -144,16 +145,48 @@ export async function runAgentLoop(
 
       const systemPrompt = await buildSystemPrompt();
       await dependencies.runManager.recordModelRequest(turn);
-      const assistant = await dependencies.modelAdapter.generate({
-        systemPrompt,
-        messages,
-        signal: dependencies.signal,
-        tools: dependencies.toolRegistry.list().map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: getToolJsonSchema(tool),
-        })),
-      });
+      const tools = dependencies.toolRegistry.list().map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: getToolJsonSchema(tool),
+      }));
+      const wantsStream = Boolean(dependencies.onModelStreamEvent && dependencies.modelAdapter.stream);
+      let assistant: GenerateResult;
+      if (wantsStream) {
+        const sink = dependencies.onModelStreamEvent!;
+        let completed: GenerateResult | null = null;
+        for await (const event of dependencies.modelAdapter.stream!({
+          systemPrompt,
+          messages,
+          signal: dependencies.signal,
+          tools,
+        })) {
+          if (event.type === "complete") {
+            completed = event.result;
+          } else {
+            try {
+              sink(event);
+            } catch {
+              // A UI/sink write failure must not corrupt the agent run, matching EventBus listener safety.
+            }
+          }
+        }
+        if (!completed) {
+          throw new RuntimeError({
+            code: "MODEL_ERROR",
+            message: "Model stream ended without a complete event",
+            details: { category: "incompatible_response" },
+          });
+        }
+        assistant = completed;
+      } else {
+        assistant = await dependencies.modelAdapter.generate({
+          systemPrompt,
+          messages,
+          signal: dependencies.signal,
+          tools,
+        });
+      }
       throwIfAborted(dependencies.signal);
       await dependencies.runManager.recordModelResponse(turn, assistant);
 

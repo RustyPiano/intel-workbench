@@ -29,6 +29,7 @@ export type {
   ModelAdapter,
   GenerateInput,
   GenerateResult,
+  ModelStreamEvent,
   ToolSpec,
 } from "./model/types.js";
 export type {

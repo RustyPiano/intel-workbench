@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { ModelAdapter } from "../model/types.js";
 import { SkillRegistry } from "../skills/registry.js";
-import { createDefaultToolRegistry } from "../tools/index.js";
+import { createDefaultToolRegistry, ToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
 import type { RuntimeTool, ToolExecutionResult, ToolRuntimeConfig } from "../tools/types.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
@@ -22,6 +22,7 @@ export interface RuntimeAgentOptions {
   modelName: string;
   providerName?: string;
   modelAdapter: ModelAdapter;
+  baseTools?: RuntimeTool[];
   explicitSkillDirs?: string[];
   globalSkillDirs?: string[];
   maxTurns?: number;
@@ -43,6 +44,7 @@ export interface RuntimeRunResult {
 export interface RunOverrides {
   extraTools?: RuntimeTool[];
   toolMiddleware?: ToolMiddleware;
+  modelAdapter?: ModelAdapter;
 }
 
 export class RuntimeConversation {
@@ -104,7 +106,7 @@ export class RuntimeConversation {
     });
 
     const loopResult = await runAgentLoop(prompt, this.sessionId, {
-      modelAdapter: this.agent.modelAdapter,
+      modelAdapter: overrides?.modelAdapter ?? this.agent.modelAdapter,
       toolRegistry,
       toolMiddleware: overrides?.toolMiddleware,
       sessionStore: this.agent.sessionStore,
@@ -154,7 +156,7 @@ export class RuntimeAgent {
   readonly runStore: RunStore;
   readonly maxTurns: number;
   readonly toolConfig: ToolRuntimeConfig;
-  readonly toolRegistry = createDefaultToolRegistry();
+  readonly toolRegistry: ToolRegistry;
   readonly fileMutationQueue = new FileMutationQueue();
   readonly skillRegistry: SkillRegistry;
   readonly policy: PolicyEngine;
@@ -180,6 +182,7 @@ export class RuntimeAgent {
       workspaceRoot: this.workspaceRoot,
     });
     this.maxTurns = options.maxTurns ?? 30;
+    this.toolRegistry = options.baseTools ? new ToolRegistry(options.baseTools) : createDefaultToolRegistry();
     this.toolConfig = options.toolConfig ?? {
       toolTimeoutMs: 60_000,
       bashTimeoutMs: 120_000,

@@ -355,6 +355,17 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         signal: input.signal,
       });
     } catch (error) {
+      // A user/run abort surfaces here as the SDK's AbortError. Classify it as
+      // RUN_ABORTED (not a provider MODEL_ERROR) so the loop journals a cancel,
+      // not a failure. generate() and stream() share this so abort is identical
+      // on both paths (the streaming UI's interactive cancel relies on it).
+      if (input.signal?.aborted) {
+        throw new RuntimeError({
+          code: "RUN_ABORTED",
+          message: "Run aborted by signal",
+          retriable: true,
+        });
+      }
       throw extractProviderError(error);
     }
 
@@ -440,6 +451,17 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         }
       }
     } catch (error) {
+      // A user/run abort surfaces here as the SDK's AbortError. Classify it as
+      // RUN_ABORTED (not a provider MODEL_ERROR) so the loop journals a cancel,
+      // not a failure. generate() and stream() share this so abort is identical
+      // on both paths (the streaming UI's interactive cancel relies on it).
+      if (input.signal?.aborted) {
+        throw new RuntimeError({
+          code: "RUN_ABORTED",
+          message: "Run aborted by signal",
+          retriable: true,
+        });
+      }
       throw extractProviderError(error);
     }
 

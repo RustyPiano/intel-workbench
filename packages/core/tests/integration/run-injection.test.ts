@@ -63,6 +63,43 @@ function customTool(
 }
 
 describe("run-level tool injection", () => {
+  test("baseTools empty creates an empty base registry while extraTools stay run-scoped", async () => {
+    const model = new ScriptedModelAdapter([scriptedFinal("done")]);
+    const agent = await RuntimeAgent.create({
+      workspaceRoot: await createWorkspace(),
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: model,
+      baseTools: [],
+    });
+
+    await agent.run("only custom", undefined, {
+      extraTools: [customTool("custom_only")],
+    });
+
+    expect(agent.toolRegistry.list()).toHaveLength(0);
+    expect(model.inputs[0]!.tools.map((tool) => tool.name)).toEqual(["custom_only"]);
+  });
+
+  test("run-level modelAdapter override is used instead of the agent adapter", async () => {
+    let baseCalled = false;
+    const base: ModelAdapter = {
+      name: "base",
+      async generate(): Promise<GenerateResult> {
+        baseCalled = true;
+        return scriptedFinal("base");
+      },
+    };
+    const override = new ScriptedModelAdapter([scriptedFinal("override")]);
+    const agent = await createAgent(base);
+
+    const result = await agent.run("override model", undefined, { modelAdapter: override });
+
+    expect(result.finalMessage.content).toBe("override");
+    expect(baseCalled).toBe(false);
+    expect(override.inputs).toHaveLength(1);
+  });
+
   test("extraTools are advertised to the model and callable for the run", async () => {
     let ran = false;
     const model = new ScriptedModelAdapter([scriptedToolCall("custom_echo", { value: "hello" }), scriptedFinal()]);

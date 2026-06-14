@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { createModelAdapter, type ModelAdapter } from "mini-agent";
+import { createModelAdapter, RUNTIME_VERSION, type ModelAdapter } from "mini-agent";
 import express, { type ErrorRequestHandler, type Express } from "express";
 
 import { AdminService } from "./admin/admin-service.js";
@@ -105,7 +105,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
   // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
   const rerank = { reranker: slots.rerank, rerankEndpoint: slotConfigs.rerank.configured ? slotConfigs.rerank.baseURL : "" };
-  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense, rerank);
+  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense, rerank, {
+    agentWorkspaceRoot: path.join(paths.root, ".agent-scratch"),
+    runtimeVersion: RUNTIME_VERSION,
+    modelName: model.model || "unconfigured",
+    providerName: model.provider,
+  });
   const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users);

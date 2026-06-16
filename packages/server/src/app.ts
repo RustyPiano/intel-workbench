@@ -6,6 +6,7 @@ import { createModelAdapter, RUNTIME_VERSION, type ModelAdapter } from "mini-age
 import express, { type ErrorRequestHandler, type Express } from "express";
 
 import { AdminService } from "./admin/admin-service.js";
+import { PromptStore } from "./admin/prompt-store.js";
 import { AuditService } from "./audit/audit-service.js";
 import { AuthService } from "./auth/auth-service.js";
 import { UserStore } from "./auth/user-store.js";
@@ -84,6 +85,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const paths = resolveDataPaths(options.dataDir ?? defaultDataDir());
   const devMode = options.devMode ?? process.env.WORKBENCH_DEV_MODE !== "false";
   const audit = new AuditService(paths);
+  const promptStore = new PromptStore(paths, audit);
   const users = new UserStore(paths);
   const auth = new AuthService(users, audit);
   const cases = new CaseService(paths, audit, devMode);
@@ -140,10 +142,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
       providerName: model.provider,
     },
     media,
+    promptStore,
   );
-  const elements = new ElementService(paths, audit, cases, materials, llm);
+  const elements = new ElementService(paths, audit, cases, materials, llm, promptStore);
   const reports = new ReportService(paths, audit, cases);
-  const admin = new AdminService(paths, audit, model, guard.allowlist, users);
+  const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
 
   const services: AppServices = {
     paths,

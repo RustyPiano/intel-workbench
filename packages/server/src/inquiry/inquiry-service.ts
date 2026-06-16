@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { RuntimeAgent, RUNTIME_VERSION, type ModelStreamEvent, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
 
+import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
@@ -76,11 +77,8 @@ const MAX_ONDEMAND_MEDIA_BYTES = 64 * 1024 * 1024;
 const TOP_K = 6;
 /** 重排候选过取回深度（§5.2 二阶段）：启用重排时先取宽候选，再由 Reranker 精排回 TOP_K。 */
 const RERANK_CANDIDATES = 24;
-const AGENT_METHODOLOGY = [
-  "你是情报分析助手。只依据本专题检索到并引用的素材片段作答，不得使用片段之外的知识。",
-  "流程：search_chunks 检索→read_chunk 读全文→对每条结论 cite(chunk_id,claim) 接地（仅哈希校验通过的引用有效）→最后调一次 finalize_answer 提交所有 claims 及其 cite_ids。",
-  "材料不足就如实说明，不要编造。",
-].join("\n");
+const AGENT_METHODOLOGY = DEFAULT_PROMPT_BODIES["inquiry-methodology"];
+const INQUIRY_STRUCTURED_PROMPT = DEFAULT_PROMPT_BODIES["inquiry-structured"];
 
 interface RawClaim {
   text?: unknown;
@@ -115,6 +113,7 @@ export class InquiryService {
       vlmEndpoint: "",
       ocrEndpoint: "",
     },
+    private readonly promptStore?: PromptStore,
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
@@ -432,13 +431,7 @@ export class InquiryService {
 
   private async callModel(question: string, retrieved: Chunk[]): Promise<RawOutput> {
     const context = retrieved.map((c) => `[${c.chunk_id}] ${c.text}`).join("\n\n");
-    const systemPrompt = [
-      "你是情报分析助手。只能依据下方带编号的素材片段回答，不得使用片段之外的任何知识或常识。",
-      "每条结论必须在 citations 中引用支撑它的片段编号（chunk_id）。",
-      "若给定片段不足以支撑任何结论，置 insufficient=true。",
-      "只输出 JSON，不要任何额外文字。schema：",
-      '{"claims":[{"text":"结论文本","type":"fact|inference","citations":["chunk_id"]}],"insufficient":false}',
-    ].join("\n");
+    const systemPrompt = await this.promptBody("inquiry-structured", INQUIRY_STRUCTURED_PROMPT);
     const userContent = `素材片段：\n${context}\n\n问题：${question}\n\n请只输出 JSON。`;
     return (await generateJson(this.deps.adapter!, systemPrompt, userContent, { timeoutMs: TIMEOUT_MS })) as RawOutput;
   }
@@ -481,7 +474,9 @@ export class InquiryService {
     }
     const workspaceRoot = this.agentConfig.agentWorkspaceRoot ?? path.join(this.paths.root, ".agent-scratch");
     await mkdir(workspaceRoot, { recursive: true });
-    await writeFile(path.join(workspaceRoot, "AGENTS.md"), `${AGENT_METHODOLOGY}\n`, "utf8");
+    // inquiry agent 为缓存单例；方法论编辑会在 agent 重建/服务重启后生效。
+    const methodology = await this.promptBody("inquiry-methodology", AGENT_METHODOLOGY);
+    await writeFile(path.join(workspaceRoot, "AGENTS.md"), `${methodology}\n`, "utf8");
     return RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: this.agentConfig.runtimeVersion ?? RUNTIME_VERSION,
@@ -512,6 +507,10 @@ export class InquiryService {
 
   private perReadCapBytes(): number {
     return this.agentConfig.perReadCapBytes ?? 8 * 1024;
+  }
+
+  private async promptBody(id: "inquiry-methodology" | "inquiry-structured", fallback: string): Promise<string> {
+    return this.promptStore ? this.promptStore.getBody(id) : fallback;
   }
 
   private async persistAgentInquiry(

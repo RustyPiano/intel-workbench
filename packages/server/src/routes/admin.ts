@@ -56,8 +56,27 @@ export function createAdminRouter(admin: AdminService): Router {
     res.json({ ok: true });
   });
 
-  router.get("/prompts", (_req, res) => {
-    res.json({ ok: true, prompts: admin.listPrompts() });
+  router.get("/prompts", async (_req, res) => {
+    res.json({ ok: true, prompts: await admin.listPrompts() });
+  });
+
+  router.get("/prompts/:id", async (req, res) => {
+    res.json({ ok: true, prompt: await admin.getPrompt(req.params.id) });
+  });
+
+  router.put("/prompts/:id", async (req, res) => {
+    const { body } = (req.body ?? {}) as { body?: unknown };
+    if (typeof body !== "string") throw new AppError(400, "提示词正文不能为空");
+    await admin.updatePrompt(req.identity, req.params.id, body);
+    res.json({ ok: true, prompt: await admin.getPrompt(req.params.id) });
+  });
+
+  router.get("/prompts/:id/versions", async (req, res) => {
+    res.json({ ok: true, versions: await admin.listPromptVersions(req.params.id) });
+  });
+
+  router.get("/prompts/:id/versions/:ts", async (req, res) => {
+    res.json({ ok: true, body: await admin.getPromptVersion(req.params.id, req.params.ts) });
   });
 
   return router;

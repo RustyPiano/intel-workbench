@@ -7,10 +7,10 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Identity, Inquiry, InquiryClaim } from "../domain/types.js";
+import type { Chunk, Identity, Inquiry, InquiryClaim, Modality } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readCtxBudgetTokens, readRerankMinCandidates } from "../model/rag-config.js";
-import type { EmbeddingAdapter, RerankerAdapter } from "../model/slots.js";
+import type { AsrAdapter, EmbeddingAdapter, OcrAdapter, RerankerAdapter, VlmAdapter } from "../model/slots.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { guardModelAdapter } from "../security/guarded-adapter.js";
 import { shortId } from "../util/hash.js";
@@ -30,6 +30,16 @@ export interface RerankDeps {
   reranker: RerankerAdapter | null;
   /** rerank 端点（real 适配器出站前授权用；mock 在进程内为 ""，跳过授权）。 */
   rerankEndpoint: string;
+}
+
+/** 按需媒体工具依赖（三期 P3.B-2）。槽为 null → 对应工具不暴露；端点为空 → mock 跳过闸 b。 */
+export interface MediaDeps {
+  asr: AsrAdapter | null;
+  vlm: VlmAdapter | null;
+  ocr: OcrAdapter | null;
+  asrEndpoint: string;
+  vlmEndpoint: string;
+  ocrEndpoint: string;
 }
 
 export interface InquiryAgentConfig {
@@ -61,6 +71,8 @@ export type InquiryStreamEvent =
 
 const INSUFFICIENT = "现有材料不足以判断";
 const TIMEOUT_MS = 60_000;
+/** 按需媒体工具单次 readFile 的体量上限（agent 循环触发，封顶进程内存；真实大媒体流式留 P3.D）。 */
+const MAX_ONDEMAND_MEDIA_BYTES = 64 * 1024 * 1024;
 const TOP_K = 6;
 /** 重排候选过取回深度（§5.2 二阶段）：启用重排时先取宽候选，再由 Reranker 精排回 TOP_K。 */
 const RERANK_CANDIDATES = 24;
@@ -94,6 +106,15 @@ export class InquiryService {
     /** 重排依赖（二期 P2.5）；缺省无 reranker → 不重排，默认路径不变。 */
     private readonly rerank: RerankDeps = { reranker: null, rerankEndpoint: "" },
     private readonly agentConfig: InquiryAgentConfig = {},
+    /** 按需媒体工具依赖；缺省全 null → agent 仍只暴露原四个只读工具。 */
+    private readonly mediaDeps: MediaDeps = {
+      asr: null,
+      vlm: null,
+      ocr: null,
+      asrEndpoint: "",
+      vlmEndpoint: "",
+      ocrEndpoint: "",
+    },
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
@@ -217,6 +238,28 @@ export class InquiryService {
       retrieve,
       readBudgetBytes: this.readBudgetBytes(),
       perReadCapBytes: this.perReadCapBytes(),
+      media: {
+        ...this.mediaDeps,
+        guard: this.deps.guard,
+        loadMaterial: async (materialId: string): Promise<{ bytes: Buffer; modality: Modality } | null> => {
+          if (!nameById.has(materialId)) return null;
+          try {
+            const manifest = await this.cases.get(actor, caseId);
+            const material = manifest.materials.find((m) => m.id === materialId);
+            if (!material) return null;
+            // 体量封顶：agent 可反复触发按需读取，超限直接拒读，避免整文件载入撑爆进程内存。
+            if (material.size > MAX_ONDEMAND_MEDIA_BYTES) return null;
+            const raw = await this.materials.getRawFile(actor, materialId);
+            const expectedFilename = nameById.get(materialId);
+            const caseMaterialsDir = `${path.resolve(this.paths.caseDir(caseId), "materials")}${path.sep}`;
+            const rawPath = path.resolve(raw.path);
+            if (raw.filename !== expectedFilename || !rawPath.startsWith(caseMaterialsDir)) return null;
+            return { bytes: await readFile(rawPath), modality: material.modality };
+          } catch {
+            return null;
+          }
+        },
+      },
     });
     const guardedAdapter = guardModelAdapter(this.deps.adapter!, this.deps.guard, {
       endpoint: this.deps.modelEndpoint,

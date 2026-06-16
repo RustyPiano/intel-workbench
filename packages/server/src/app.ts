@@ -116,12 +116,31 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
   // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
   const rerank = { reranker: slots.rerank, rerankEndpoint: slotConfigs.rerank.configured ? slotConfigs.rerank.baseURL : "" };
-  const inquiries = new InquiryService(paths, audit, cases, materials, llm, dense, rerank, {
-    agentWorkspaceRoot: path.join(paths.root, ".agent-scratch"),
-    runtimeVersion: RUNTIME_VERSION,
-    modelName: model.model || "unconfigured",
-    providerName: model.provider,
-  });
+  // 按需媒体工具（三期 P3.B-2）：real 端点出站前授权；mock 端点为空，沿用 embed/rerank 的跳过模式。
+  const media = {
+    asr: slots.asr,
+    vlm: slots.vlm,
+    ocr: slots.ocr,
+    asrEndpoint: slotConfigs.asr.configured ? slotConfigs.asr.baseURL : "",
+    vlmEndpoint: slotConfigs.vlm.configured ? slotConfigs.vlm.baseURL : "",
+    ocrEndpoint: slotConfigs.ocr.configured ? slotConfigs.ocr.baseURL : "",
+  };
+  const inquiries = new InquiryService(
+    paths,
+    audit,
+    cases,
+    materials,
+    llm,
+    dense,
+    rerank,
+    {
+      agentWorkspaceRoot: path.join(paths.root, ".agent-scratch"),
+      runtimeVersion: RUNTIME_VERSION,
+      modelName: model.model || "unconfigured",
+      providerName: model.provider,
+    },
+    media,
+  );
   const elements = new ElementService(paths, audit, cases, materials, llm);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users);

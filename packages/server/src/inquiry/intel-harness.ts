@@ -1,7 +1,10 @@
 import type { RuntimeTool } from "mini-agent";
 import { z } from "zod";
 
-import type { Citation, Chunk, Identity } from "../domain/types.js";
+import type { Citation, Chunk, ChunkLocator, Identity, Modality } from "../domain/types.js";
+import type { AsrAdapter, OcrAdapter, VlmAdapter } from "../model/slots.js";
+import type { OfflineGuard } from "../security/offline-guard.js";
+import { sha256 } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
 
 export interface CitationLedger {
@@ -23,6 +26,16 @@ export interface IntelToolDeps {
   retrieve: (query: string, k: number) => Promise<Chunk[]>;
   readBudgetBytes: number;
   perReadCapBytes: number;
+  media?: {
+    asr: AsrAdapter | null;
+    vlm: VlmAdapter | null;
+    ocr: OcrAdapter | null;
+    asrEndpoint: string;
+    vlmEndpoint: string;
+    ocrEndpoint: string;
+    guard: OfflineGuard;
+    loadMaterial: (materialId: string) => Promise<{ bytes: Buffer; modality: Modality } | null>;
+  };
 }
 
 function sliceByUtf8Bytes(text: string, maxBytes: number): { text: string; bytes: number } {
@@ -37,8 +50,22 @@ function sliceByUtf8Bytes(text: string, maxBytes: number): { text: string; bytes
   return { text: out, bytes };
 }
 
+function overlaps(segStart: number, segEnd: number, t0?: number, t1?: number): boolean {
+  const start = t0 ?? Number.NEGATIVE_INFINITY;
+  const end = t1 ?? Number.POSITIVE_INFINITY;
+  return segEnd > start && segStart < end;
+}
+
+function isMediaReadable(modality: Modality, allowed: readonly Modality[]): boolean {
+  return allowed.includes(modality);
+}
+
+function unavailable() {
+  return { ok: false, content: "材料不在本专题或不可读" };
+}
+
 export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
-  return [
+  const tools: RuntimeTool[] = [
     {
       name: "search_chunks",
       description: "检索本专题已加工片段；只回 id+摘要，需全文请用 read_chunk；只能引用检索到的片段。",
@@ -116,4 +143,112 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
       },
     },
   ];
+
+  const media = deps.media;
+  if (!media) return tools;
+
+  let onDemandSeq = 0;
+  const synthesize = (materialId: string, modality: Modality, kind: string, text: string, locator: ChunkLocator) => {
+    onDemandSeq += 1;
+    const chunk: Chunk = {
+      chunk_id: `${materialId}.ondemand.${kind}#${onDemandSeq}`,
+      material_id: materialId,
+      modality,
+      locator,
+      text,
+      content_hash: sha256(text),
+    };
+    deps.ledger.retrieved.set(chunk.chunk_id, chunk);
+    return { chunk_id: chunk.chunk_id, snippet: text.slice(0, 200), locator, modality };
+  };
+
+  if (media.asr) {
+    tools.push({
+      name: "transcribe",
+      description: "按需读取本专题音/视频原始素材并转写；产出的片段可继续 cite。",
+      inputSchema: z.object({
+        material_id: z.string(),
+        t0: z.number().optional(),
+        t1: z.number().optional(),
+      }),
+      async execute(args) {
+        const { material_id, t0, t1 } = args as { material_id: string; t0?: number; t1?: number };
+        const loaded = await media.loadMaterial(material_id);
+        if (!loaded || !isMediaReadable(loaded.modality, ["audio", "video"])) return unavailable();
+        if (media.asrEndpoint) {
+          await media.guard.authorize(media.asrEndpoint, { user: deps.actor.id, purpose: "asr-transcribe" });
+        }
+        const result = await media.asr!.transcribe(loaded.bytes);
+        return {
+          ok: true,
+          content: JSON.stringify(
+            result.segments
+              .filter((seg) => overlaps(seg.start, seg.end, t0, t1))
+              .map((seg) =>
+                synthesize(material_id, loaded.modality, "transcribe", seg.text, {
+                  timecode: `${seg.start}-${seg.end}`,
+                  speaker: seg.speaker,
+                }),
+              ),
+          ),
+        };
+      },
+    });
+  }
+
+  if (media.vlm) {
+    tools.push({
+      name: "caption_frame",
+      description: "按需读取本专题图像/视频素材并生成画面配文；产出的片段可继续 cite。",
+      inputSchema: z.object({
+        material_id: z.string(),
+        t: z.number(),
+      }),
+      async execute(args) {
+        const { material_id, t } = args as { material_id: string; t: number };
+        const loaded = await media.loadMaterial(material_id);
+        if (!loaded || !isMediaReadable(loaded.modality, ["video", "image"])) return unavailable();
+        if (media.vlmEndpoint) {
+          await media.guard.authorize(media.vlmEndpoint, { user: deps.actor.id, purpose: "vlm-caption" });
+        }
+        const text = await media.vlm!.caption([loaded.bytes]);
+        return {
+          ok: true,
+          content: JSON.stringify(
+            synthesize(material_id, loaded.modality, "caption_frame", text, { timecode: `${t}-${t}` }),
+          ),
+        };
+      },
+    });
+  }
+
+  if (media.ocr) {
+    tools.push({
+      name: "ocr_region",
+      description: "按需读取本专题图像/视频素材并 OCR 指定归一化区域；产出的片段可继续 cite。",
+      inputSchema: z.object({
+        material_id: z.string(),
+        bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+      }),
+      async execute(args) {
+        const { material_id, bbox } = args as { material_id: string; bbox: [number, number, number, number] };
+        const loaded = await media.loadMaterial(material_id);
+        if (!loaded || !isMediaReadable(loaded.modality, ["video", "image"])) return unavailable();
+        if (media.ocrEndpoint) {
+          await media.guard.authorize(media.ocrEndpoint, { user: deps.actor.id, purpose: "ocr-region" });
+        }
+        const result = await media.ocr!.ocr(loaded.bytes);
+        // locator 取本次请求的归一化区域：真实 OCR（P3.D）会先裁剪到该 bbox，故区域即出处；
+        // mock 整图 OCR、无语义，locator 仍记请求区域作为人工复核的定位锚点。
+        return {
+          ok: true,
+          content: JSON.stringify(
+            result.lines.map((line) => synthesize(material_id, loaded.modality, "ocr_region", line.text, { bbox })),
+          ),
+        };
+      },
+    });
+  }
+
+  return tools;
 }

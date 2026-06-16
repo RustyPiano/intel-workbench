@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { RuntimeAgent, RUNTIME_VERSION, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
+import { RuntimeAgent, RUNTIME_VERSION, type ModelStreamEvent, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
 
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
@@ -43,6 +43,14 @@ export interface InquiryAgentConfig {
   /** 测试缝：单次 read_chunk 默认 8 KiB。 */
   perReadCapBytes?: number;
 }
+
+export type InquiryStreamEvent =
+  | { type: "token"; text: string }
+  | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
+  | { type: "tool_start"; name: string; args: Record<string, unknown> }
+  | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "done"; inquiry: Inquiry }
+  | { type: "error"; message: string };
 
 /**
  * 问答带溯源（工程方案 §7.3）。受控管线，不走开放工具循环：
@@ -155,6 +163,44 @@ export class InquiryService {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
     }
 
+    return this.runAgentInquiry(actor, caseId, q, nameById);
+  }
+
+  async askStream(
+    actor: Identity,
+    caseId: string,
+    question: string,
+    onEvent: (event: InquiryStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<Inquiry> {
+    const q = question?.trim();
+    if (!q) throw new AppError(400, "问题不能为空");
+    const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
+
+    const chunks = await this.materials.loadCaseChunks(caseId);
+    if (chunks.length === 0) {
+      const inquiry = this.make(actor, q, "insufficient", `${INSUFFICIENT}（专题暂无已加工素材）`, []);
+      await this.persistAgentInquiry(actor, caseId, inquiry, { mode: "agent", used: 0 });
+      onEvent({ type: "done", inquiry });
+      return inquiry;
+    }
+    if (!this.deps.adapter || !this.deps.modelEndpoint) {
+      throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
+    }
+
+    const inquiry = await this.runAgentInquiry(actor, caseId, q, nameById, { signal, onEvent });
+    onEvent({ type: "done", inquiry });
+    return inquiry;
+  }
+
+  private async runAgentInquiry(
+    actor: Identity,
+    caseId: string,
+    q: string,
+    nameById: Map<string, string>,
+    hooks?: { signal?: AbortSignal; onEvent?: (event: InquiryStreamEvent) => void },
+  ): Promise<Inquiry> {
     const ledger = createCitationLedger();
     const retrieve = async (query: string, k: number): Promise<Chunk[]> => {
       const current = await this.materials.loadCaseChunks(caseId);
@@ -172,7 +218,7 @@ export class InquiryService {
       readBudgetBytes: this.readBudgetBytes(),
       perReadCapBytes: this.perReadCapBytes(),
     });
-    const guardedAdapter = guardModelAdapter(this.deps.adapter, this.deps.guard, {
+    const guardedAdapter = guardModelAdapter(this.deps.adapter!, this.deps.guard, {
       endpoint: this.deps.modelEndpoint,
       user: actor.id,
       purpose: "text-llm-inquiry",
@@ -180,6 +226,7 @@ export class InquiryService {
 
     let seq = 0;
     const auditMW: ToolMiddleware = async (toolCall, next) => {
+      hooks?.onEvent?.({ type: "tool_start", name: toolCall.name, args: toolCall.arguments });
       const result = await next();
       seq += 1;
       // tool.* 暂无 runId：ToolMiddleware 只暴露 toolCall；需核心上下文扩展，当前用 caseId+seq+inquiry.create 锚点关联。
@@ -191,6 +238,8 @@ export class InquiryService {
         result: result.ok ? "ok" : "error",
         detail: { caseId, tool: toolCall.name, args: toolCall.arguments, ok: result.ok, seq, toolCallId: toolCall.id },
       });
+      // 审计落盘后再向 UI 暴露 tool_result（审计先于外部可见，便于事后取证一致）。
+      hooks?.onEvent?.({ type: "tool_result", name: toolCall.name, ok: result.ok });
       return result;
     };
 
@@ -198,8 +247,29 @@ export class InquiryService {
     // 把 cases.get/配置错误上抛一致；try 只包模型调用，仅其非 AppError 失败降级为 error。
     const agent = await this.getInquiryAgent();
     let runResult: RuntimeRunResult | undefined;
+    const onModelStreamEvent = hooks?.onEvent
+      ? (event: ModelStreamEvent): void => {
+          if (event.type === "text_delta") {
+            hooks.onEvent!({ type: "token", text: event.text });
+          } else if (event.type === "tool_call_delta") {
+            hooks.onEvent!({
+              type: "tool_call_delta",
+              index: event.index,
+              id: event.id,
+              name: event.name,
+              argumentsDelta: event.argumentsDelta,
+            });
+          }
+        }
+      : undefined;
+    let inquiry: Inquiry;
     try {
-      runResult = await agent.run(q, undefined, { extraTools: intelTools, toolMiddleware: auditMW, modelAdapter: guardedAdapter });
+      runResult = await agent.run(q, hooks?.signal, {
+        extraTools: intelTools,
+        toolMiddleware: auditMW,
+        modelAdapter: guardedAdapter,
+        onModelStreamEvent,
+      });
       inquiry = this.makeFromLedger(actor, q, ledger);
     } catch (e) {
       if (e instanceof AppError) throw e;

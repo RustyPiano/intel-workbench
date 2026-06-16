@@ -36,6 +36,10 @@ export interface CreateAppOptions {
   dataDir?: string;
   /** 开发模式（§7.5）。默认开启，置 `WORKBENCH_DEV_MODE=false` 关闭。 */
   devMode?: boolean;
+  /** 测试缝：注入文本 LLM 适配器（替代 env 构建），按已配置处理，端点取 `modelEndpoint`。 */
+  modelAdapter?: ModelAdapter;
+  /** 测试缝：注入适配器时的端点（并入白名单），默认 `https://test.local/v1`。 */
+  modelEndpoint?: string;
 }
 
 /** 暴露给入口的服务集合（启动时对账用），挂在 `app.locals.services`。 */
@@ -87,20 +91,27 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // 文本 LLM + 零外发闸门（M3）。开发期白名单仅模型端点 host；未配置则白名单为空
   // → 任何出站皆被拒并落审计（生产置空即一键全断，§7.1）。
   const model = readModelConfig();
-  const adapter: ModelAdapter | null = model.configured
-    ? createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey })
-    : null;
+  // 测试缝：注入 modelAdapter 时按"已配置"处理，端点取 options.modelEndpoint（默认 test 哨兵）。
+  const injected = options.modelAdapter;
+  const adapter: ModelAdapter | null = injected
+    ? injected
+    : model.configured
+      ? createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey })
+      : null;
+  const modelConfigured = injected ? true : model.configured;
+  const modelEndpoint = injected ? (options.modelEndpoint ?? "https://test.local/v1") : model.configured ? model.baseURL : "";
+  const modelHosts = injected ? [new URL(modelEndpoint).host] : model.configured ? [model.host] : [];
   // 模型槽（Embedding/Reranker/ASR/VLM/OCR，二期 P2.2）：已配置槽 host 并入白名单
   // （真实接入 P2.6 时"插上即用"），适配器本期 mock-first（开关 MINI_AGENT_USE_MOCK_MEDIA）。
   const slotConfigs = readSlotConfigs();
   const guard = new OfflineGuard(
-    [...(model.configured ? [model.host] : []), ...slotAllowlistHosts(slotConfigs)],
+    [...modelHosts, ...slotAllowlistHosts(slotConfigs)],
     audit,
   );
   const slots: ModelSlots = buildSlots(useMockMedia());
   // 素材服务依赖模型槽（媒体加工取 slots.asr，二期 P2.3a），故在槽构建之后装配。
   const materials = new MaterialService(paths, audit, cases, slots);
-  const llm: LlmDeps = { adapter, guard, modelEndpoint: model.configured ? model.baseURL : "" };
+  const llm: LlmDeps = { adapter, guard, modelEndpoint };
   // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
   const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
   // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
@@ -125,7 +136,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     reports,
     admin,
     slots,
-    modelConfigured: model.configured,
+    modelConfigured,
     egressAllowlist: guard.allowlist,
   };
   app.locals.services = services;
@@ -148,7 +159,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
 }
 
 /** 统一错误出口：AppError 用其状态码，其余视作 500，均回 JSON。 */
-const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  // 流式响应已写出头（SSE）后再抛错：交给 Express 默认处理，避免二次写头崩溃。
+  if (res.headersSent) {
+    return next(err);
+  }
   const status = err instanceof AppError ? err.status : 500;
   const message = err instanceof Error ? err.message : "服务器错误";
   res.status(status).json({

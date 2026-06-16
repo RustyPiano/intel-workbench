@@ -147,11 +147,25 @@ export class PromptStore {
 
   async update(actor: Identity, id: string, body: string): Promise<void> {
     const prompt = this.registered(id);
+    // 空提示词会让系统提示形同虚设（非技术管理员易误操作）——直接拒绝。
+    if (body.trim().length === 0) throw new AppError(400, "提示词内容不能为空");
     const previous = await this.getBody(prompt.id);
     const versionDir = this.versionDir(prompt.id);
     await mkdir(versionDir, { recursive: true });
-    const ts = await this.nextVersionTs(prompt.id);
-    await writeFile(path.join(versionDir, `${ts}.md`), previous, "utf8");
+    // 归档旧版：独占创建（flag "wx"）+ 时间戳递增重试，避免同毫秒并发编辑互相覆盖历史。
+    let ms = Date.now();
+    for (;;) {
+      try {
+        await writeFile(path.join(versionDir, `${new Date(ms).toISOString()}.md`), previous, { encoding: "utf8", flag: "wx" });
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+          ms += 1;
+          continue;
+        }
+        throw e;
+      }
+    }
 
     await mkdir(this.promptsDir(), { recursive: true });
     await writeFile(this.currentPath(prompt.id), body, "utf8");
@@ -220,12 +234,4 @@ export class PromptStore {
     }
   }
 
-  private async nextVersionTs(id: ManagedPromptId): Promise<string> {
-    let ms = Date.now();
-    for (;;) {
-      const ts = new Date(ms).toISOString();
-      if ((await this.tryStat(path.join(this.versionDir(id), `${ts}.md`))) === null) return ts;
-      ms += 1;
-    }
-  }
 }

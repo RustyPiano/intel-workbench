@@ -320,14 +320,6 @@ export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   );
 }
 
-export function askInquiry(caseId: string, question: string): Promise<ApiInquiry> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
-    method: "POST",
-    headers: headers(true),
-    body: JSON.stringify({ question }),
-  }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
-}
-
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }

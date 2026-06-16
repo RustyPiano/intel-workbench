@@ -13,9 +13,10 @@ function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
 
 function splitUtf8Payload(payload: string): Uint8Array[] {
   const encoded = new TextEncoder().encode(payload);
-  const firstSplit = payload.indexOf("研判") + 1;
-  const splitAt = new TextEncoder().encode(payload.slice(0, firstSplit)).length;
-  return [encoded.slice(0, splitAt), encoded.slice(splitAt, splitAt + 3), encoded.slice(splitAt + 3)];
+  // 在多字节字符 "判" 内部切开（"研"后再进 1 字节），真正考验 TextDecoder stream 模式跨块重组半个码点。
+  const beforeChar = payload.indexOf("研判") + 1; // 到 "判" 之前的字符数
+  const splitAt = new TextEncoder().encode(payload.slice(0, beforeChar)).length + 1; // 进入 "判" 1 字节
+  return [encoded.slice(0, splitAt), encoded.slice(splitAt)];
 }
 
 describe("askInquiryStream", () => {

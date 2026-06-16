@@ -8,10 +8,11 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Clearance, Identity, Role } from "../domain/types.js";
 import type { ModelConfig } from "../model/model-config.js";
+import { PromptStore, type ManagedPromptDetail, type PromptVersionInfo } from "./prompt-store.js";
 
 /**
  * 管理后台服务（M5，breadth-first 骨架做实）：Skill 列表/启停/自检、模型自检
- * （doctor，脱敏）、用户最简（config/users.json，预置三角色）、提示词内置基线只读。
+ * （doctor，脱敏）、用户最简（config/users.json，预置三角色）、受管提示词。
  */
 
 export interface SkillInfo {
@@ -46,11 +47,6 @@ export interface PromptInfo {
   description: string;
 }
 
-const BUILTIN_PROMPTS: PromptInfo[] = [
-  { id: "inquiry.system", name: "问答系统基座（溯源约束）", role: "system", description: "只依据检索片段作答、每条结论须引用 chunk_id、无支撑则拒答（§7.3）。" },
-  { id: "report.format", name: "公文通报排版", role: "report", description: "intel-bulletin render_report.py 的公文结构（标题/密级/分节/落款）。" },
-];
-
 function skillsDir(): string {
   if (process.env.WORKBENCH_SKILLS_DIR) return process.env.WORKBENCH_SKILLS_DIR;
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +67,7 @@ export class AdminService {
     private readonly model: ModelConfig,
     private readonly egressAllowlist: readonly string[],
     private readonly users: UserStore,
+    private readonly promptStore: PromptStore = new PromptStore(paths, audit),
   ) {}
 
   async listSkills(): Promise<SkillInfo[]> {
@@ -164,8 +161,24 @@ export class AdminService {
     await this.audit.append({ user: actor.id, action: "user.password", object: `user:${id}` });
   }
 
-  listPrompts(): PromptInfo[] {
-    return BUILTIN_PROMPTS;
+  async listPrompts(): Promise<PromptInfo[]> {
+    return (await this.promptStore.list()).map(({ id, name, role, description }) => ({ id, name, role, description }));
+  }
+
+  async getPrompt(id: string): Promise<ManagedPromptDetail> {
+    return this.promptStore.getDetail(id);
+  }
+
+  async updatePrompt(actor: Identity, id: string, body: string): Promise<void> {
+    await this.promptStore.update(actor, id, body);
+  }
+
+  async listPromptVersions(id: string): Promise<PromptVersionInfo[]> {
+    return this.promptStore.listVersions(id);
+  }
+
+  async getPromptVersion(id: string, ts: string): Promise<string> {
+    return this.promptStore.getVersion(id, ts);
   }
 
   // ---- 内部存储 ----

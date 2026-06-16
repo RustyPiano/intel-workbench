@@ -82,9 +82,9 @@ describe("AdminService 管理后台（M5）", () => {
     expect(JSON.stringify(users)).not.toContain("pwd_hash");
   });
 
-  it("listPrompts 返回内置只读基线", () => {
+  it("listPrompts 返回内置只读基线", async () => {
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
-    expect(admin.listPrompts().length).toBeGreaterThan(0);
+    expect((await admin.listPrompts()).length).toBeGreaterThan(0);
   });
 
   it("createUser → 列表可见 + 入审计 + 新账号可登录", async () => {

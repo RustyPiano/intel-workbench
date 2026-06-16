@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
@@ -21,6 +22,7 @@ import { shortId } from "../util/hash.js";
 
 const ELEMENT_TYPES: readonly ElementType[] = ["person", "org", "location", "event", "equipment", "time"];
 const MAX_CHUNKS = 60;
+const ELEMENT_EXTRACT_PROMPT = DEFAULT_PROMPT_BODIES["element-extract"];
 
 interface RawMention {
   chunk_id?: unknown;
@@ -47,6 +49,7 @@ export class ElementService {
     private readonly cases: CaseService,
     private readonly materials: MaterialService,
     private readonly deps: LlmDeps,
+    private readonly promptStore?: PromptStore,
   ) {}
 
   /** 对专题已加工切块做一次要素抽取，覆盖写 elements.json。 */
@@ -121,13 +124,7 @@ export class ElementService {
 
   private async callModel(chunks: Chunk[]): Promise<Record<string, unknown>> {
     const context = chunks.map((c) => `[${c.chunk_id}] ${c.text}`).join("\n\n");
-    const systemPrompt = [
-      "你是情报分析助手。只能依据下方带编号的素材片段，抽取其中明确出现的情报要素（实体）。",
-      "要素类型仅限：person(人物) org(组织/机构) location(地点) event(事件) equipment(装备) time(时间)。",
-      "每个要素必须在 mentions 中给出支撑它的片段编号 chunk_id（必须来自给定片段）。",
-      "不得臆造给定片段之外的要素。只输出 JSON，不要任何额外文字。schema：",
-      '{"elements":[{"name":"名称","type":"person|org|location|event|equipment|time","aliases":["别名"],"mentions":[{"chunk_id":"<chunk_id>"}]}]}',
-    ].join("\n");
+    const systemPrompt = this.promptStore ? await this.promptStore.getBody("element-extract") : ELEMENT_EXTRACT_PROMPT;
     const userContent = `素材片段：\n${context}\n\n请只输出 JSON。`;
     return generateJson(this.deps.adapter!, systemPrompt, userContent, { maxTokens: 2000 });
   }

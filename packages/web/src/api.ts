@@ -217,6 +217,24 @@ export interface ApiPrompt {
   description: string;
 }
 
+export interface ApiPromptVersion {
+  ts: string;
+  bytes: number;
+}
+
+export interface ApiPromptDetail {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  body: string;
+  isDefault: boolean;
+  version: number;
+  healthy: boolean;
+  updatedAt?: string;
+  versions: ApiPromptVersion[];
+}
+
 function headers(json = false): Record<string, string> {
   const h: Record<string, string> = {};
   if (sessionToken) h.authorization = `Bearer ${sessionToken}`;
@@ -440,6 +458,27 @@ export async function resetUserPassword(id: string, password: string): Promise<v
 
 export function listPrompts(): Promise<ApiPrompt[]> {
   return fetch(`${BASE}/admin/prompts`, { headers: headers() }).then((r) => unwrap<ApiPrompt[]>(r, "prompts"));
+}
+
+export function getPromptDetail(id: string): Promise<ApiPromptDetail> {
+  return fetch(`${BASE}/admin/prompts/${encodeURIComponent(id)}`, { headers: headers() }).then((r) =>
+    unwrap<ApiPromptDetail>(r, "prompt"),
+  );
+}
+
+export async function updatePrompt(id: string, body: string): Promise<void> {
+  const res = await fetch(`${BASE}/admin/prompts/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: headers(true),
+    body: JSON.stringify({ body }),
+  });
+  await unwrap<boolean>(res, "ok");
+}
+
+export function getPromptVersion(id: string, ts: string): Promise<string> {
+  return fetch(`${BASE}/admin/prompts/${encodeURIComponent(id)}/versions/${encodeURIComponent(ts)}`, { headers: headers() }).then(
+    (r) => unwrap<string>(r, "body"),
+  );
 }
 
 export function exportAudit(): Promise<{ exportedAt: string; count: number; events: AuditEvent[] }> {

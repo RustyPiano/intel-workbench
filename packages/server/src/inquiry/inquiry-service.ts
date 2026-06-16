@@ -92,6 +92,8 @@ interface RawOutput {
 
 export class InquiryService {
   private inquiryAgentPromise?: Promise<RuntimeAgent>;
+  /** 已写入缓存 agent 的 AGENTS.md 方法论体，用于侦测后台编辑后作废重建。 */
+  private bakedMethodology?: string;
 
   constructor(
     private readonly paths: DataPaths,
@@ -285,6 +287,13 @@ export class InquiryService {
       return result;
     };
 
+    // 方法论提示词可在后台编辑：若较已缓存 agent 写入的版本有变更，则作废缓存，
+    // 下次 getInquiryAgent 重建并写入新 AGENTS.md（使编辑即时生效，与其余两条提示一致）。
+    if (this.inquiryAgentPromise && this.bakedMethodology !== undefined) {
+      const current = await this.promptBody("inquiry-methodology", AGENT_METHODOLOGY);
+      if (current !== this.bakedMethodology) this.inquiryAgentPromise = undefined;
+    }
+
     // agent 创建（scratch/skill 装配）失败属基础设施错误，应直接上抛——与单发路
     // 把 cases.get/配置错误上抛一致；try 只包模型调用，仅其非 AppError 失败降级为 error。
     const agent = await this.getInquiryAgent();
@@ -474,8 +483,9 @@ export class InquiryService {
     }
     const workspaceRoot = this.agentConfig.agentWorkspaceRoot ?? path.join(this.paths.root, ".agent-scratch");
     await mkdir(workspaceRoot, { recursive: true });
-    // inquiry agent 为缓存单例；方法论编辑会在 agent 重建/服务重启后生效。
+    // inquiry agent 为缓存单例；方法论编辑由 runAgentInquiry 侦测变更作废缓存，下次创建写入新 AGENTS.md。
     const methodology = await this.promptBody("inquiry-methodology", AGENT_METHODOLOGY);
+    this.bakedMethodology = methodology;
     await writeFile(path.join(workspaceRoot, "AGENTS.md"), `${methodology}\n`, "utf8");
     return RuntimeAgent.create({
       workspaceRoot,

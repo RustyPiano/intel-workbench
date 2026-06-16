@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -12,6 +12,7 @@ import type { Identity, Inquiry } from "../src/domain/types.js";
 import { type InquiryStreamEvent, InquiryService } from "../src/inquiry/inquiry-service.js";
 import { MaterialService } from "../src/materials/material-service.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
+import { PromptStore } from "../src/admin/prompt-store.js";
 import { StreamingInquiryAdapter } from "./helpers/streaming-adapter.js";
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
@@ -37,7 +38,7 @@ async function createFixture(): Promise<Fixture> {
 function createService(
   fixture: Fixture,
   adapter: ModelAdapter | null,
-  options: { allowlist?: string[]; endpoint?: string; maxTurns?: number } = {},
+  options: { allowlist?: string[]; endpoint?: string; maxTurns?: number; promptStore?: PromptStore } = {},
 ): InquiryService {
   const guard = new OfflineGuard(options.allowlist ?? ["stub.local"], fixture.audit);
   return new InquiryService(
@@ -55,6 +56,8 @@ function createService(
       providerName: "scripted",
       maxTurns: options.maxTurns ?? 12,
     },
+    undefined,
+    options.promptStore,
   );
 }
 
@@ -203,5 +206,25 @@ describe.sequential("InquiryService askStream", () => {
       .askStream(OPERATOR, caseId, "舰船线索", () => {});
 
     expect(stableInquiry(viaAsk)).toEqual(stableInquiry(viaStream));
+  });
+
+  it("方法论提示词后台编辑后即时生效（作废缓存 agent + 重写 AGENTS.md）", async () => {
+    const caseId = await createCaseWithDocs(fixture, "stream 方法论编辑", [
+      { filename: "intel.txt", content: "舰船线索：码头新增可疑集装箱。" },
+    ]);
+    const promptStore = new PromptStore(fixture.paths, fixture.audit);
+    const service = createService(fixture, new StreamingInquiryAdapter("valid"), { promptStore });
+    const agentsMd = path.join(fixture.root, ".agent-scratch", "AGENTS.md");
+
+    // 首次问答：创建缓存 agent，写入默认方法论。
+    await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
+    expect(await readFile(agentsMd, "utf8")).toContain("search_chunks 检索→read_chunk");
+
+    // 后台改方法论 → 下次问答应作废缓存、按新方法论重写 AGENTS.md（即时生效）。
+    await promptStore.update(OPERATOR, "inquiry-methodology", "【已改写】只用最精炼的语言回答。");
+    await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
+    const after = await readFile(agentsMd, "utf8");
+    expect(after).toContain("【已改写】只用最精炼的语言回答。");
+    expect(after).not.toContain("search_chunks 检索→read_chunk");
   });
 });

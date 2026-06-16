@@ -3,7 +3,7 @@ import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import {
   approveReport,
-  askInquiry,
+  askInquiryStream,
   draftReport,
   exportReport,
   extractElements,
@@ -23,6 +23,7 @@ import {
   type ApiClaim,
   type ApiElement,
   type ApiInquiry,
+  type ApiInquiryStreamEvent,
   type ApiMaterial,
   type ApiReport,
   type ElementType,
@@ -783,6 +784,12 @@ function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c:
   );
 }
 
+interface ToolTraceEntry {
+  key: string;
+  name: string;
+  status: "running" | "ok" | "failed";
+}
+
 export function InquiryPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
@@ -791,6 +798,13 @@ export function InquiryPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const [liveQuestion, setLiveQuestion] = useState<string | null>(null);
+  const [liveText, setLiveText] = useState("");
+  const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
+  const streamControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const userStoppedRef = useRef(false);
+  const toolOrderRef = useRef(0);
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -803,27 +817,97 @@ export function InquiryPanel() {
     };
   }, [user, caseId]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      userStoppedRef.current = true;
+      streamControllerRef.current?.abort();
+    };
+  }, []);
+
+  const clearLiveState = () => {
+    setLiveQuestion(null);
+    setLiveText("");
+    setToolTrace([]);
+  };
+
+  const handleStreamEvent = (event: ApiInquiryStreamEvent) => {
+    if (!mountedRef.current || userStoppedRef.current) return;
+    if (event.type === "token") {
+      setLiveText((prev) => prev + event.text);
+      return;
+    }
+    if (event.type === "tool_start") {
+      const key = `${event.name}:${toolOrderRef.current}`;
+      toolOrderRef.current += 1;
+      setToolTrace((prev) => [...prev, { key, name: event.name, status: "running" }]);
+      return;
+    }
+    if (event.type === "tool_result") {
+      setToolTrace((prev) => {
+        const runningIndex = prev.findIndex((entry) => entry.name === event.name && entry.status === "running");
+        const status = event.ok ? "ok" : "failed";
+        if (runningIndex === -1) {
+          const key = `${event.name}:${toolOrderRef.current}`;
+          toolOrderRef.current += 1;
+          return [...prev, { key, name: event.name, status }];
+        }
+        return prev.map((entry, index) => (index === runningIndex ? { ...entry, status } : entry));
+      });
+      return;
+    }
+    if (event.type === "done") {
+      setHistory((prev) => [...prev, event.inquiry]);
+      clearLiveState();
+      return;
+    }
+    if (event.type === "error") {
+      setError(event.message);
+      clearLiveState();
+    }
+  };
+
+  const handleStop = () => {
+    userStoppedRef.current = true;
+    streamControllerRef.current?.abort();
+    clearLiveState();
+    setBusy(false);
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = input.trim();
     if (!q || !user || !caseId || busy) return;
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
+    userStoppedRef.current = false;
+    toolOrderRef.current = 0;
     setBusy(true);
     setError(null);
     setInput("");
+    setLiveQuestion(q);
+    setLiveText("");
+    setToolTrace([]);
     try {
-      const inquiry = await askInquiry(caseId, q);
-      setHistory((prev) => [...prev, inquiry]);
+      await askInquiryStream(caseId, q, handleStreamEvent, controller.signal);
     } catch (err) {
-      setError((err as Error).message);
+      if (!userStoppedRef.current && mountedRef.current) {
+        setError((err as Error).message);
+        clearLiveState();
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) {
+        if (streamControllerRef.current === controller) streamControllerRef.current = null;
+        setBusy(false);
+      }
     }
   };
 
   return (
     <div className="inquiry-layout">
       <div className="chat-messages">
-        {history.length === 0 && !busy ? (
+        {history.length === 0 && !busy && !liveQuestion ? (
           <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7", padding: "8px" }}>
             向 AI 提问本专题已加工素材中的关联线索。每条结论都会绑定到素材出处；无支撑时系统回「现有材料不足以判断」，不臆造。
           </div>
@@ -844,11 +928,37 @@ export function InquiryPanel() {
             </div>
           </div>
         ))}
-        {busy ? (
-          <div className="chat-bubble chat-bubble--ai">
+        {liveQuestion ? (
+          <>
+            <div className="chat-bubble chat-bubble--user">
+              <div className="chat-avatar">👤</div>
+              <div className="chat-content">
+                <p>{liveQuestion}</p>
+              </div>
+            </div>
+            <div className="chat-bubble chat-bubble--ai chat-bubble--live">
+              <div className="chat-avatar">🤖</div>
+              <div className="chat-content">
+                <p className="live-narration">{liveText || "研判中…"}</p>
+                {toolTrace.length > 0 ? (
+                  <div className="tool-trace" aria-label="工具调用轨迹">
+                    {toolTrace.map((entry) => (
+                      <div key={entry.key} className={`tool-trace__item tool-trace__item--${entry.status}`}>
+                        <span>🔧 调用 {entry.name}…</span>
+                        <span>{entry.status === "running" ? "进行中" : entry.status === "ok" ? "✓ ok" : "✗ 失败"}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </>
+        ) : null}
+        {busy && !liveQuestion ? (
+          <div className="chat-bubble chat-bubble--ai chat-bubble--live">
             <div className="chat-avatar">🤖</div>
             <div className="chat-content">
-              <p style={{ color: "var(--text-dim)" }}>检索素材并研判中…</p>
+              <p className="live-narration">研判中…</p>
             </div>
           </div>
         ) : null}
@@ -872,6 +982,11 @@ export function InquiryPanel() {
         <button type="submit" className="btn btn--primary" disabled={busy}>
           发送
         </button>
+        {busy ? (
+          <button type="button" className="btn btn--danger" onClick={handleStop}>
+            停止
+          </button>
+        ) : null}
       </form>
     </div>
   );

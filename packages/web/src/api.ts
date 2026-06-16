@@ -147,6 +147,14 @@ export interface ApiInquiry {
   claims: ApiClaim[];
 }
 
+export type ApiInquiryStreamEvent =
+  | { type: "token"; text: string }
+  | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
+  | { type: "tool_start"; name: string; args: Record<string, unknown> }
+  | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "done"; inquiry: ApiInquiry }
+  | { type: "error"; message: string };
+
 export type ElementType = "person" | "org" | "location" | "event" | "equipment" | "time";
 
 export interface ApiElement {
@@ -318,6 +326,80 @@ export function askInquiry(caseId: string, question: string): Promise<ApiInquiry
     headers: headers(true),
     body: JSON.stringify({ question }),
   }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
+function parseSseFrame(frame: string): ApiInquiryStreamEvent | null {
+  const data = frame
+    .split(/\r?\n/u)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n")
+    .trim();
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as ApiInquiryStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+export async function askInquiryStream(
+  caseId: string,
+  question: string,
+  onEvent: (e: ApiInquiryStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries/stream`, {
+      method: "POST",
+      headers: headers(true),
+      body: JSON.stringify({ question }),
+      signal,
+    });
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!res.ok || !contentType.toLowerCase().includes("text/event-stream")) {
+      noteStatus(res);
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      throw new Error(body.message || `请求失败(${res.status})`);
+    }
+    if (!res.body) throw new Error("流式响应为空");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let finished = false;
+
+    while (!finished) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const event = parseSseFrame(frame);
+        if (!event) continue;
+        onEvent(event);
+        if (event.type === "done" || event.type === "error") {
+          finished = true;
+          await reader.cancel().catch(() => undefined);
+          break;
+        }
+      }
+    }
+    buffer += decoder.decode();
+    if (!finished && buffer) {
+      const event = parseSseFrame(buffer);
+      if (event) onEvent(event);
+    }
+  } catch (err) {
+    if (isAbortError(err)) return;
+    throw err;
+  }
 }
 
 export function getMaterialContent(materialId: string): Promise<MaterialContent> {

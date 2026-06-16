@@ -1,16 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createUser,
+  getPromptDetail,
+  getPromptVersion,
   listAdminUsers,
   listPrompts,
   listSkills,
   modelDoctor,
   resetUserPassword,
   setSkillEnabled,
+  updatePrompt,
   updateUser,
   type ApiModelDoctor,
   type ApiPrompt,
+  type ApiPromptDetail,
   type ApiSkill,
   type ApiUser,
 } from "../api";
@@ -44,46 +48,282 @@ function useAdminData<T>(load: (user: ReturnType<typeof useSession>["user"]) => 
   return { user, data, error, reload: () => setReloadKey((k) => k + 1) };
 }
 
-/** 提示词模板（内置基线只读，产品 spec §8.11）。 */
+type PromptVersionMode = "preview" | "rollback";
+type PromptVersionBusy = { ts: string; mode: PromptVersionMode } | null;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "请求失败";
+}
+
+/** 提示词模板（产品 spec §8.11）。 */
 export function AdminPromptsPage() {
-  const { data: prompts, error } = useAdminData<ApiPrompt[]>((u) => (u ? listPrompts() : undefined));
+  const { data: prompts, error: listError } = useAdminData<ApiPrompt[]>((u) => (u ? listPrompts() : undefined));
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const [detail, setDetail] = useState<ApiPromptDetail | null>(null);
+  const [draftBody, setDraftBody] = useState("");
+  const [loadedBody, setLoadedBody] = useState("");
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [versionBusy, setVersionBusy] = useState<PromptVersionBusy>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ ts: string; body: string } | null>(null);
+
+  useEffect(() => {
+    if (!prompts) return;
+    if (prompts.length === 0) {
+      selectedIdRef.current = null;
+      setSelectedId(null);
+      return;
+    }
+    if (!selectedId || !prompts.some((p) => p.id === selectedId)) {
+      selectedIdRef.current = prompts[0].id;
+      setSelectedId(prompts[0].id);
+    }
+  }, [prompts, selectedId]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      setDraftBody("");
+      setLoadedBody("");
+      setPreview(null);
+      setDetailError(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let alive = true;
+    setDetailLoading(true);
+    setDetailError(null);
+    setActionError(null);
+    setPreview(null);
+    setDetail(null);
+    setDraftBody("");
+    setLoadedBody("");
+
+    void getPromptDetail(selectedId)
+      .then((next) => {
+        if (!alive) return;
+        setDetail(next);
+        setDraftBody(next.body);
+        setLoadedBody(next.body);
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        setDetailError(errorMessage(error));
+      })
+      .finally(() => {
+        if (alive) setDetailLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedId]);
+
+  const versions = useMemo(() => {
+    if (!detail) return [];
+    return [...detail.versions].sort((a, b) => b.ts.localeCompare(a.ts));
+  }, [detail]);
+
+  const saveDisabled = saving || detailLoading || !detail || draftBody.trim().length === 0 || draftBody === loadedBody;
+
+  const selectPrompt = (id: string) => {
+    selectedIdRef.current = id;
+    setSelectedId(id);
+  };
+
+  const handleSave = async () => {
+    if (!selectedId || saveDisabled) return;
+    const id = selectedId;
+    setSaving(true);
+    setActionError(null);
+    try {
+      await updatePrompt(id, draftBody);
+      const next = await getPromptDetail(id);
+      if (selectedIdRef.current !== id) return;
+      setDetail(next);
+      setDraftBody(next.body);
+      setLoadedBody(next.body);
+      setPreview(null);
+    } catch (error: unknown) {
+      if (selectedIdRef.current === id) setActionError(errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loadVersionBody = async (ts: string, mode: PromptVersionMode) => {
+    if (!selectedId || versionBusy) return;
+    const id = selectedId;
+    setVersionBusy({ ts, mode });
+    setActionError(null);
+    try {
+      const body = await getPromptVersion(id, ts);
+      if (selectedIdRef.current !== id) return;
+      if (mode === "preview") {
+        setPreview({ ts, body });
+      } else {
+        setDraftBody(body);
+        setPreview(null);
+      }
+    } catch (error: unknown) {
+      if (selectedIdRef.current === id) setActionError(errorMessage(error));
+    } finally {
+      setVersionBusy(null);
+    }
+  };
+
   return (
     <div className="page">
       <div className="page__head">
         <h1 className="page__title">提示词模板</h1>
-        <span className="badge badge--offline" style={{ padding: "4px 10px", fontSize: "11px" }}>内置基线 · 只读</span>
       </div>
-      {error ? <p style={{ color: "var(--danger-light)" }}>{error}</p> : null}
-      <div style={{ marginTop: "16px", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
-        <table className="elements-table">
-          <thead>
-            <tr>
-              <th>模板名称</th>
-              <th>用途</th>
-              <th>说明</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(prompts ?? []).map((p) => (
-              <tr key={p.id}>
-                <td style={{ fontWeight: "700" }}>{p.name}</td>
-                <td style={{ fontFamily: "monospace", fontSize: "12px" }}>{p.role}</td>
-                <td style={{ color: "var(--text-dim)", fontSize: "13px" }}>{p.description}</td>
-                <td>
-                  <button type="button" className="btn" style={{ padding: "4px 10px", fontSize: "11px" }} disabled>
-                    只读
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {prompts && prompts.length === 0 ? (
+      {listError ? <p style={{ color: "var(--danger-light)", marginBottom: "12px" }}>{listError}</p> : null}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)", gap: "16px", alignItems: "start" }}>
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
+          <table className="elements-table">
+            <thead>
               <tr>
-                <td colSpan={4} style={{ textAlign: "center", color: "var(--text-muted)", padding: "24px" }}>暂无模板</td>
+                <th>模板名称</th>
+                <th>用途</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(prompts ?? []).map((p) => {
+                const selected = p.id === selectedId;
+                return (
+                  <tr key={p.id} onClick={() => selectPrompt(p.id)} style={{ cursor: "pointer", background: selected ? "rgba(99, 102, 241, 0.12)" : undefined }}>
+                    <td style={{ fontWeight: "700" }}>{p.name}</td>
+                    <td style={{ fontFamily: "monospace", fontSize: "12px", color: selected ? "var(--accent-light)" : "var(--text-dim)" }}>{p.role}</td>
+                  </tr>
+                );
+              })}
+              {!prompts ? (
+                <tr>
+                  <td colSpan={2} style={{ textAlign: "center", color: "var(--text-muted)", padding: "24px" }}>正在加载模板…</td>
+                </tr>
+              ) : null}
+              {prompts && prompts.length === 0 ? (
+                <tr>
+                  <td colSpan={2} style={{ textAlign: "center", color: "var(--text-muted)", padding: "24px" }}>暂无模板</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "18px", background: "rgba(0,0,0,0.15)", minHeight: "420px" }}>
+          {!selectedId ? <p style={{ color: "var(--text-muted)" }}>选择左侧模板后编辑正文。</p> : null}
+          {detailLoading ? <p style={{ color: "var(--text-dim)", marginBottom: "12px" }}>正在加载模板详情…</p> : null}
+          {detailError ? <p style={{ color: "var(--danger-light)", marginBottom: "12px" }}>{detailError}</p> : null}
+          {actionError ? <p style={{ color: "var(--danger-light)", marginBottom: "12px" }}>{actionError}</p> : null}
+
+          {detail ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
+                <div>
+                  <h2 style={{ fontSize: "18px", marginBottom: "6px" }}>{detail.name}</h2>
+                  <p style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.6" }}>{detail.description}</p>
+                  <p style={{ color: "var(--text-muted)", fontSize: "12px", marginTop: "8px" }}>
+                    用途：<code style={{ color: "var(--accent-light)" }}>{detail.role}</code>
+                    {detail.updatedAt ? <span style={{ marginLeft: "12px" }}>最后更新：{detail.updatedAt}</span> : null}
+                  </p>
+                </div>
+                <span className={`badge ${detail.isDefault ? "badge--offline" : "badge--devmode"}`} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                  {detail.isDefault ? "默认（未编辑）" : `已编辑 · v${detail.version}`}
+                </span>
+              </div>
+
+              <label style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <span style={{ color: "var(--text-dim)", fontSize: "12px", fontWeight: 700 }}>提示词正文</span>
+                <textarea
+                  className="input-text"
+                  value={draftBody}
+                  onChange={(e) => setDraftBody(e.target.value)}
+                  disabled={saving || detailLoading}
+                  style={{ minHeight: "260px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "12px", lineHeight: "1.6", resize: "vertical" }}
+                />
+              </label>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <button type="button" className="btn btn--primary" disabled={saveDisabled} onClick={() => void handleSave()}>
+                  {saving ? "保存中…" : "保存"}
+                </button>
+                {draftBody === loadedBody ? <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>当前无未保存修改</span> : null}
+                {draftBody.trim().length === 0 ? <span style={{ color: "var(--warn-light)", fontSize: "12px" }}>正文不能为空</span> : null}
+              </div>
+
+              <section style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+                <h3 style={{ fontSize: "14px", marginBottom: "10px" }}>版本历史</h3>
+                {versionBusy ? <p style={{ color: "var(--text-dim)", fontSize: "12px", marginBottom: "8px" }}>正在读取历史版本…</p> : null}
+                <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden" }}>
+                  <table className="elements-table">
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>大小</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {versions.map((v) => (
+                        <tr key={v.ts}>
+                          <td style={{ fontFamily: "monospace", fontSize: "12px" }}>{v.ts}</td>
+                          <td style={{ color: "var(--text-dim)" }}>{v.bytes} bytes</td>
+                          <td style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={versionBusy !== null || saving}
+                              onClick={() => void loadVersionBody(v.ts, "preview")}
+                              style={{ padding: "4px 10px", fontSize: "11px" }}
+                            >
+                              {versionBusy?.ts === v.ts && versionBusy.mode === "preview" ? "读取中…" : "查看"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={versionBusy !== null || saving}
+                              onClick={() => void loadVersionBody(v.ts, "rollback")}
+                              style={{ padding: "4px 10px", fontSize: "11px" }}
+                            >
+                              {versionBusy?.ts === v.ts && versionBusy.mode === "rollback" ? "读取中…" : "回滚到此版本"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {versions.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} style={{ textAlign: "center", color: "var(--text-muted)", padding: "18px" }}>暂无历史版本</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              {preview ? (
+                <section style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+                  <h3 style={{ fontSize: "14px", marginBottom: "8px" }}>历史版本预览</h3>
+                  <p style={{ color: "var(--text-muted)", fontSize: "12px", marginBottom: "8px" }}>{preview.ts}</p>
+                  <textarea
+                    className="input-text"
+                    value={preview.body}
+                    readOnly
+                    style={{ minHeight: "180px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "12px", lineHeight: "1.6", resize: "vertical" }}
+                  />
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

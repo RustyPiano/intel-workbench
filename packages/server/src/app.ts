@@ -110,14 +110,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     [...modelHosts, ...slotAllowlistHosts(slotConfigs)],
     audit,
   );
-  const slots: ModelSlots = buildSlots(useMockMedia());
-  // 素材服务依赖模型槽（媒体加工取 slots.asr，二期 P2.3a），故在槽构建之后装配。
-  const materials = new MaterialService(paths, audit, cases, slots);
-  const llm: LlmDeps = { adapter, guard, modelEndpoint };
-  // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
-  const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
-  // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
-  const rerank = { reranker: slots.rerank, rerankEndpoint: slotConfigs.rerank.configured ? slotConfigs.rerank.baseURL : "" };
+  const slots: ModelSlots = buildSlots(useMockMedia(), slotConfigs);
   // 按需媒体工具（三期 P3.B-2）：real 端点出站前授权；mock 端点为空，沿用 embed/rerank 的跳过模式。
   const media = {
     asr: slots.asr,
@@ -127,6 +120,17 @@ export function createApp(options: CreateAppOptions = {}): Express {
     vlmEndpoint: slotConfigs.vlm.configured ? slotConfigs.vlm.baseURL : "",
     ocrEndpoint: slotConfigs.ocr.configured ? slotConfigs.ocr.baseURL : "",
   };
+  // 素材服务依赖模型槽（媒体加工取 slots.asr，二期 P2.3a），故在槽构建之后装配。
+  const materials = new MaterialService(paths, audit, cases, slots, undefined, guard, {
+    asr: media.asrEndpoint,
+    vlm: media.vlmEndpoint,
+    ocr: media.ocrEndpoint,
+  });
+  const llm: LlmDeps = { adapter, guard, modelEndpoint };
+  // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
+  const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
+  // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。
+  const rerank = { reranker: slots.rerank, rerankEndpoint: slotConfigs.rerank.configured ? slotConfigs.rerank.baseURL : "" };
   const inquiries = new InquiryService(
     paths,
     audit,

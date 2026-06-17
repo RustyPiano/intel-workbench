@@ -2,13 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuditService } from "../src/audit/audit-service.js";
 import { resolveDataPaths } from "../src/data/paths.js";
 import { buildSlots, MockAsr, MockEmbed, MockOcr, MockReranker, MockVlm, MOCK_EMBED_DIM } from "../src/model/mock-slots.js";
 import { readSlotConfigs, slotAllowlistHosts, SLOT_NAMES, useMockMedia } from "../src/model/slot-config.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
+import { PaddleOcrAdapter, mapPaddleResponse } from "../src/model/paddle-ocr.js";
+import type { SlotConfigs } from "../src/model/slot-config.js";
 
 // 快照并清空所有槽相关 env，逐测试隔离（避免 shell/其他测试泄漏）。
 const SLOT_ENV_KEYS = [
@@ -80,6 +82,19 @@ describe("模型槽配置 slot-config（二期 §3.2 / §7）", () => {
 });
 
 describe("buildSlots 工厂（二期 P2.2）", () => {
+  function configs(ocrConfigured: boolean): SlotConfigs {
+    const empty = { configured: false, host: "", model: "", baseURL: "", apiKey: "" };
+    return {
+      asr: empty,
+      vlm: empty,
+      ocr: ocrConfigured
+        ? { configured: true, host: "127.0.0.1:8000", model: "paddle", baseURL: "http://127.0.0.1:8000", apiKey: "" }
+        : empty,
+      embed: empty,
+      rerank: empty,
+    };
+  }
+
   it("mock 关 → 全槽 null（降级）", () => {
     const s = buildSlots(false);
     expect([s.asr, s.vlm, s.ocr, s.embed, s.rerank].every((x) => x === null)).toBe(true);
@@ -87,6 +102,61 @@ describe("buildSlots 工厂（二期 P2.2）", () => {
   it("mock 开 → 全槽就绪", () => {
     const s = buildSlots(true);
     expect([s.asr, s.vlm, s.ocr, s.embed, s.rerank].every((x) => x !== null)).toBe(true);
+  });
+
+  it("OCR 配置优先于 mock；未配置时按 mock 开关降级", () => {
+    const real = buildSlots(true, configs(true));
+    expect(real.ocr).toBeInstanceOf(PaddleOcrAdapter);
+    expect(real.ocr?.engine).toBe("paddleocr:paddle");
+    expect(real.asr).toBeInstanceOf(MockAsr);
+    expect(real.vlm).toBeInstanceOf(MockVlm);
+
+    const mock = buildSlots(true, configs(false));
+    expect(mock.ocr).toBeInstanceOf(MockOcr);
+
+    const disabled = buildSlots(false, configs(false));
+    expect(disabled.ocr).toBeNull();
+  });
+});
+
+describe("PaddleOcrAdapter（P3 OCR real slot）", () => {
+  const paddleJson = {
+    filename: "image.png",
+    width: 1000,
+    height: 2000,
+    count: 3,
+    results: [
+      { text: "甲", score: 0.9, box: [100, 200, 300, 260] },
+      { text: "乙", box: null },
+      { text: "", box: [0, 0, 1, 1] },
+    ],
+  };
+
+  it("mapPaddleResponse：像素 box 归一化，null box 用整图，空文本丢弃", () => {
+    expect(mapPaddleResponse(paddleJson)).toEqual({
+      lines: [
+        { text: "甲", bbox: [0.1, 0.1, 0.2, 0.03] },
+        { text: "乙", bbox: [0, 0, 1, 1] },
+      ],
+    });
+  });
+
+  it("ocr：POST 到 /ocr 并复用纯映射逻辑", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => paddleJson,
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const adapter = new PaddleOcrAdapter("http://127.0.0.1:8000/");
+      await expect(adapter.ocr(Buffer.from("png"))).resolves.toEqual(mapPaddleResponse(paddleJson));
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0][0]).toBe("http://127.0.0.1:8000/ocr");
+      expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

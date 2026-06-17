@@ -9,6 +9,7 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Material, MaterialStatus, Modality } from "../domain/types.js";
 import type { AsrResult, EmbeddingAdapter, ModelSlots } from "../model/slots.js";
+import type { OfflineGuard } from "../security/offline-guard.js";
 import { sha256, shortId } from "../util/hash.js";
 import { writeFileAtomic } from "../util/atomic.js";
 import { type DocParser, LitDocParser, type DocPage } from "./doc-parser.js";
@@ -73,6 +74,7 @@ const DEGRADE_NOTE: Record<Exclude<Modality, "doc"> | "doc-binary", string> = {
   video: "视频转写/解析暂不可用，待接入本地多模态（降级占位）",
   image: "图像 OCR 暂不可用，待接入本地 OCR（降级占位）",
 };
+const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）";
 
 function normalize(text: string): string {
   return text
@@ -132,6 +134,8 @@ export class MaterialService {
     /** 模型槽（二期 P2.2）；媒体加工取 slots.asr 等。缺省全 null=媒体降级。 */
     private readonly slots: ModelSlots = EMPTY_SLOTS,
     private readonly docParser: DocParser = new LitDocParser(),
+    private readonly guard?: OfflineGuard,
+    private readonly mediaEndpoints: { asr: string; vlm: string; ocr: string } = { asr: "", vlm: "", ocr: "" },
   ) {}
 
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
@@ -146,6 +150,13 @@ export class MaterialService {
       results.push(material);
     }
     return results;
+  }
+
+  private async authorizeMedia(actor: Identity, endpoints: string[], purpose: string): Promise<void> {
+    if (!this.guard) return;
+    for (const endpoint of endpoints) {
+      if (endpoint) await this.guard.authorize(endpoint, { user: actor.id, purpose });
+    }
   }
 
   private async ingestOne(actor: Identity, caseId: string, file: IngestFile): Promise<Material> {
@@ -174,7 +185,7 @@ export class MaterialService {
     };
 
     if (modality === "doc") {
-      const processed = await this.processDocAtIngest(caseDir, id, rawFilePath, ext);
+      const processed = await this.processDocAtIngest(actor, caseDir, id, rawFilePath, ext);
       base.status = processed.status;
       base.chunk_count = processed.chunk_count;
       base.note = processed.note;
@@ -211,6 +222,13 @@ export class MaterialService {
     return chunks.length;
   }
 
+  /**
+   * 多页文档（PDF/Office）→ 切块 + 合并文本。
+   * 契约（勿误用）：`char_start/char_end` 是**页内**偏移，相对该页归一化文本，不变量为
+   * `normalize(page.text).slice(char_start,char_end)===chunk.text`（须配 `locator.page` 定位到页）。
+   * 返回的 `text` 仅是各页文本 `join("\n\n")` 的**展示用**拼接（供 getContent），**不可**用页内
+   * 偏移去 slice 它（跨页会错位）。引用接地只依赖 `sha256(chunk.text)===content_hash`，与此无关。
+   */
   private chunkDocPages(materialId: string, pages: DocPage[]): { chunks: Chunk[]; text: string } {
     const chunks: Chunk[] = [];
     const texts: string[] = [];
@@ -244,8 +262,8 @@ export class MaterialService {
     return { chunks, text: texts.join("\n\n") };
   }
 
-  private async writeDocChunksFromPages(caseDir: string, id: string, pages: DocPage[]): Promise<number> {
-    const { chunks, text } = this.chunkDocPages(id, pages);
+  private async writeDocChunksFromPages(caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<number> {
+    const { chunks, text } = built;
     const processed = path.join(caseDir, "processed");
     await mkdir(processed, { recursive: true });
     await writeFile(path.join(processed, `${id}.txt`), text, "utf8");
@@ -259,6 +277,7 @@ export class MaterialService {
   }
 
   private async processDocAtIngest(
+    actor: Identity,
     caseDir: string,
     id: string,
     rawFilePath: string,
@@ -270,10 +289,27 @@ export class MaterialService {
     }
     try {
       const pages = (await this.docParser.parse(rawFilePath)).pages;
-      if (this.chunkDocPages(id, pages).chunks.length === 0) {
-        return { status: "pending", note: "未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）" };
+      const built = this.chunkDocPages(id, pages); // 算一次：空判 + 写盘共用，避免重复 normalize/split/hash
+      if (built.chunks.length === 0) {
+        const ocr = this.slots.ocr;
+        if (!ocr || !this.mediaEndpoints.ocr) return { status: "pending", note: SCANNED_DOC_NOTE };
+        try {
+          await this.authorizeMedia(actor, [this.mediaEndpoints.ocr], "doc-ocr");
+          const images = await this.docParser.rasterize(rawFilePath);
+          const ocrPages: DocPage[] = [];
+          for (const { page, image } of images) {
+            const r = await ocr.ocr(image);
+            ocrPages.push({ page, text: r.lines.map((line) => line.text).join("\n") });
+          }
+          const ocrBuilt = this.chunkDocPages(id, ocrPages);
+          if (ocrBuilt.chunks.length === 0) return { status: "pending", note: SCANNED_DOC_NOTE };
+          const count = await this.writeDocChunksFromPages(caseDir, id, ocrBuilt);
+          return { status: "done", chunk_count: count, engine: "liteparse+paddleocr" };
+        } catch {
+          return { status: "pending", note: SCANNED_DOC_NOTE };
+        }
       }
-      const count = await this.writeDocChunksFromPages(caseDir, id, pages);
+      const count = await this.writeDocChunksFromPages(caseDir, id, built);
       return { status: "done", chunk_count: count, engine: "liteparse" };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -321,7 +357,7 @@ export class MaterialService {
     };
 
     if (modality === "doc") {
-      const processed = await this.processDocAtIngest(caseDir, id, dest, ext);
+      const processed = await this.processDocAtIngest(actor, caseDir, id, dest, ext);
       base.status = processed.status;
       base.chunk_count = processed.chunk_count;
       base.note = processed.note;
@@ -425,6 +461,15 @@ export class MaterialService {
     try {
       const bytes = await readFile(path.join(this.paths.caseDir(caseId), "materials", `${materialId}-${material.filename}`));
       const version = (material.chunk_version ?? 0) + 1;
+      await this.authorizeMedia(
+        actor,
+        material.modality === "audio"
+          ? [this.mediaEndpoints.asr]
+          : material.modality === "video"
+            ? [this.mediaEndpoints.asr, this.mediaEndpoints.vlm, this.mediaEndpoints.ocr]
+            : [this.mediaEndpoints.vlm, this.mediaEndpoints.ocr],
+        "media-ingest",
+      );
       const out = await this.runPipeline(material.modality, materialId, version, bytes);
 
       if (out.chunks.length === 0) {

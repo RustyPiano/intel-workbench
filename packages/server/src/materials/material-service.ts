@@ -305,7 +305,11 @@ export class MaterialService {
           if (ocrBuilt.chunks.length === 0) return { status: "pending", note: SCANNED_DOC_NOTE };
           const count = await this.writeDocChunksFromPages(caseDir, id, ocrBuilt);
           return { status: "done", chunk_count: count, engine: "liteparse+paddleocr" };
-        } catch {
+        } catch (e) {
+          // 区分零外发拦截（authorize 抛 403）与真·空扫描件，便于运维定位。
+          if (e instanceof AppError && e.status === 403) {
+            return { status: "pending", note: "OCR 端点未授权或被零外发拦截，未执行扫描件识别" };
+          }
           return { status: "pending", note: SCANNED_DOC_NOTE };
         }
       }

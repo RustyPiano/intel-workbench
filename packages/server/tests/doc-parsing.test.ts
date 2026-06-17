@@ -11,7 +11,7 @@ import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { type DocPage, type DocPageImage, type DocParseResult, type DocParser, LitDocParser, parseLitJson } from "../src/materials/doc-parser.js";
 import { MaterialService } from "../src/materials/material-service.js";
-import type { ModelSlots, OcrAdapter, OcrResult } from "../src/model/slots.js";
+import type { ModelSlots, OcrAdapter, OcrResult, VlmAdapter } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { sha256 } from "../src/util/hash.js";
 
@@ -73,6 +73,15 @@ class FakeOcrAdapter implements OcrAdapter {
     this.order.push(`ocr:${image.toString("utf8")}`);
     this.calls.push(image);
     return { lines: [{ text: `OCR 第 ${this.calls.length} 页`, bbox: [0, 0, 1, 1] }] };
+  }
+}
+
+class FakeVlm implements VlmAdapter {
+  readonly engine = "fake-vlm";
+  constructor(private readonly order: string[] = []) {}
+  async caption(): Promise<string> {
+    this.order.push("vlm");
+    return "（fake 配文）";
   }
 }
 
@@ -257,7 +266,8 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     ]);
 
     expect(m.status).toBe("pending");
-    expect(m.note).toBe("未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）");
+    // 区分零外发拦截 vs 真扫描件：deny（403）应给出"被拦截"提示而非"疑扫描件"。
+    expect(m.note).toBe("OCR 端点未授权或被零外发拦截，未执行扫描件识别");
     expect(ocr.calls).toHaveLength(0);
     expect(order).toEqual(["authorize:doc-ocr:http://ocr.denied:8000"]);
   });
@@ -316,5 +326,42 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       if (savedMaxPages === undefined) delete process.env.MINI_AGENT_DOC_MAX_PAGES;
       else process.env.MINI_AGENT_DOC_MAX_PAGES = savedMaxPages;
     }
+  });
+
+  it("媒体 process()：真槽（vlm/ocr）出站前先经 OfflineGuard 授权（authorize 先于调用）", async () => {
+    const order: string[] = [];
+    const slots: ModelSlots = { ...EMPTY_SLOTS, vlm: new FakeVlm(order), ocr: new FakeOcrAdapter(order) };
+    const guard = new RecordingGuard(["vlm.local:8000", "ocr.local:8000"], audit, order);
+    const materials = svc(new FakeDocParser([]), slots, guard, { asr: "", vlm: "http://vlm.local:8000", ocr: "http://ocr.local:8000" });
+
+    const [img] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "scene.png", content: Buffer.from("fake-img").toString("base64"), encoding: "base64" },
+    ]);
+    expect(img.status).toBe("pending");
+    const done = await materials.process(OPERATOR, caseId, img.id);
+    expect(done.status).toBe("done");
+
+    // 两个真槽端点都被 media-ingest 授权，且所有 authorize 都先于首次 vlm/ocr 出站。
+    expect(order).toContain("authorize:media-ingest:http://vlm.local:8000");
+    expect(order).toContain("authorize:media-ingest:http://ocr.local:8000");
+    const firstEgress = order.findIndex((e) => e === "vlm" || e.startsWith("ocr:"));
+    const lastAuth = order.reduce((acc, e, i) => (e.startsWith("authorize:") ? i : acc), -1);
+    expect(firstEgress).toBeGreaterThan(-1);
+    expect(lastAuth).toBeLessThan(firstEgress);
+  });
+
+  it("媒体 process()：OfflineGuard 拒绝 → 不外发、状态 failed", async () => {
+    const order: string[] = [];
+    const slots: ModelSlots = { ...EMPTY_SLOTS, vlm: new FakeVlm(order), ocr: new FakeOcrAdapter(order) };
+    const guard = new RecordingGuard([], audit, order); // 空白名单 → authorize 抛 403
+    const materials = svc(new FakeDocParser([]), slots, guard, { asr: "", vlm: "http://vlm.denied:8000", ocr: "http://ocr.denied:8000" });
+
+    const [img] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "scene.png", content: Buffer.from("fake-img").toString("base64"), encoding: "base64" },
+    ]);
+    const failed = await materials.process(OPERATOR, caseId, img.id);
+    expect(failed.status).toBe("failed");
+    // 授权在 runPipeline 之前抛出，任何 vlm/ocr 出站都不应发生。
+    expect(order.some((e) => e === "vlm" || e.startsWith("ocr:"))).toBe(false);
   });
 });

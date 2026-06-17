@@ -27,6 +27,26 @@ describe("mapPaddleResponse（PaddleOCR JSON → 归一化 OcrResult）", () => 
     expect(mapPaddleResponse({}).lines).toEqual([]);
     expect(mapPaddleResponse({ results: "nonsense" }).lines).toEqual([]);
   });
+
+  it("几何非法 box（反向 / 越界 / 负坐标）被吸收/夹紧/兜底，绝不输出负值或 >1", () => {
+    const probe = (box: number[]) => mapPaddleResponse({ width: 100, height: 100, results: [{ text: "x", box }] }).lines[0].bbox;
+    // 反向框（x2<x1）→ min/abs 吸收为正向
+    expect(probe([80, 10, 20, 30])).toEqual([0.2, 0.1, 0.6, 0.2]);
+    // 越界 → 原点夹到 [0,1]、宽高裁到不出帧
+    const over = probe([0, 0, 5000, 5000]);
+    expect(over).toEqual([0, 0, 1, 1]);
+    // 负坐标 → 原点夹到 0
+    const neg = probe([-50, -50, 40, 40]);
+    expect(neg[0]).toBe(0);
+    expect(neg[1]).toBe(0);
+    // 任何输出都不得为负或 >1
+    for (const b of [probe([80, 10, 20, 30]), over, neg]) {
+      for (const v of b) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
+    }
+  });
 });
 
 describe("PaddleOcrAdapter.ocr（mock fetch，不连真服务）", () => {

@@ -111,6 +111,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     audit,
   );
   const slots: ModelSlots = buildSlots(useMockMedia(), slotConfigs);
+  // 零外发不变量（勿破）：真槽 ⟺ 非空端点。槽（buildSlots）与下面各 *Endpoint 都由同一
+  // slotConfigs.<slot>.configured 派生，且 configured=Boolean(baseURL&&model&&host)（slot-config.ts），
+  // 故"真适配器"必然带非空端点 → authorizeMedia 的"端点为空即跳过"对真槽永不跳过、必先授权。
+  // 不要让这两者从不同来源派生，否则会出现真槽配空端点而绕过 authorize 的 fail-open（评审 #1/#2）。
   // 按需媒体工具（三期 P3.B-2）：real 端点出站前授权；mock 端点为空，沿用 embed/rerank 的跳过模式。
   const media = {
     asr: slots.asr,

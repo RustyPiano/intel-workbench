@@ -7,19 +7,20 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Identity, Material, Modality } from "../domain/types.js";
+import type { Chunk, Identity, Material, MaterialStatus, Modality } from "../domain/types.js";
 import type { AsrResult, EmbeddingAdapter, ModelSlots } from "../model/slots.js";
 import { sha256, shortId } from "../util/hash.js";
 import { writeFileAtomic } from "../util/atomic.js";
+import { type DocParser, LitDocParser, type DocPage } from "./doc-parser.js";
 import { processAudio, processImage, processVideo, type MediaFrame } from "./media-pipeline.js";
 import { readVec, writeVec } from "./vec-store.js";
 
 const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
 
 /**
- * 素材汇入与加工（M2）。一期仅**文档文本**模态做实：归一化 → 切块
- * （chunk_id + content_hash，§7.3 step 1）→ 状态 done；其余（PDF/Office、
- * 音频/视频/图像）按"暂不可用"降级，状态 pending 并附原因（产品 spec §10）。
+ * 素材汇入与加工（M2）。文档模态做实：文本直接归一化 → 切块，PDF/Office
+ * 先走本地 liteparse 提取页文本再切块；音频/视频/图像按"暂不可用"降级或进入
+ * 后续显式加工流程，状态 pending 并附原因（产品 spec §10）。
  */
 
 const DOC_BINARY_EXTS = new Set(["pdf", "doc", "docx", "rtf", "odt", "ppt", "pptx", "xls", "xlsx"]);
@@ -130,6 +131,7 @@ export class MaterialService {
     private readonly cases: CaseService,
     /** 模型槽（二期 P2.2）；媒体加工取 slots.asr 等。缺省全 null=媒体降级。 */
     private readonly slots: ModelSlots = EMPTY_SLOTS,
+    private readonly docParser: DocParser = new LitDocParser(),
   ) {}
 
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
@@ -157,7 +159,8 @@ export class MaterialService {
     // 原始素材拷入 materials/（§4.1）。
     const buffer = Buffer.from(file.content ?? "", encoding === "base64" ? "base64" : "utf8");
     await mkdir(path.join(caseDir, "materials"), { recursive: true });
-    await writeFile(path.join(caseDir, "materials", `${id}-${filename}`), buffer);
+    const rawFilePath = path.join(caseDir, "materials", `${id}-${filename}`);
+    await writeFile(rawFilePath, buffer);
 
     const base: Material = {
       id,
@@ -170,14 +173,15 @@ export class MaterialService {
       status: "pending",
     };
 
-    // 仅 UTF-8 文本文档做实加工；其余降级。
-    const isProcessableDoc = modality === "doc" && encoding === "utf8" && isTextDocExt(ext);
-    if (isProcessableDoc) {
-      base.chunk_count = await this.writeDocChunks(caseDir, id, buffer.toString("utf8"));
-      base.status = "done";
+    if (modality === "doc") {
+      const processed = await this.processDocAtIngest(caseDir, id, rawFilePath, ext);
+      base.status = processed.status;
+      base.chunk_count = processed.chunk_count;
+      base.note = processed.note;
+      base.engine = processed.engine;
     } else {
       base.status = "pending";
-      base.note = modality === "doc" ? DEGRADE_NOTE["doc-binary"] : DEGRADE_NOTE[modality];
+      base.note = DEGRADE_NOTE[modality];
     }
 
     await this.cases.attachMaterial(caseId, base);
@@ -205,6 +209,76 @@ export class MaterialService {
     );
     await this.writeIndex(caseDir, id, chunks); // 同提交写稠密索引（§5.3）
     return chunks.length;
+  }
+
+  private chunkDocPages(materialId: string, pages: DocPage[]): { chunks: Chunk[]; text: string } {
+    const chunks: Chunk[] = [];
+    const texts: string[] = [];
+    let idx = 0;
+    for (const page of pages) {
+      const pageText = normalize(page.text);
+      if (pageText.length === 0) continue;
+      texts.push(pageText);
+      const paragraphs = pageText
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      let cursor = 0;
+      paragraphs.forEach((para, pIdx) => {
+        for (const piece of splitLong(para)) {
+          const charStart = pageText.indexOf(piece, cursor);
+          const charEnd = charStart + piece.length;
+          cursor = charEnd;
+          chunks.push({
+            chunk_id: `${materialId}#${idx}`,
+            material_id: materialId,
+            modality: "doc",
+            locator: { page: page.page, paragraph: pIdx + 1, char_start: charStart, char_end: charEnd },
+            text: piece,
+            content_hash: sha256(piece),
+          });
+          idx++;
+        }
+      });
+    }
+    return { chunks, text: texts.join("\n\n") };
+  }
+
+  private async writeDocChunksFromPages(caseDir: string, id: string, pages: DocPage[]): Promise<number> {
+    const { chunks, text } = this.chunkDocPages(id, pages);
+    const processed = path.join(caseDir, "processed");
+    await mkdir(processed, { recursive: true });
+    await writeFile(path.join(processed, `${id}.txt`), text, "utf8");
+    await writeFile(
+      path.join(processed, `${id}.chunks.jsonl`),
+      chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
+      "utf8",
+    );
+    await this.writeIndex(caseDir, id, chunks);
+    return chunks.length;
+  }
+
+  private async processDocAtIngest(
+    caseDir: string,
+    id: string,
+    rawFilePath: string,
+    ext: string,
+  ): Promise<{ status: MaterialStatus; chunk_count?: number; note?: string; engine?: string }> {
+    if (isTextDocExt(ext)) {
+      const count = await this.writeDocChunks(caseDir, id, await readFile(rawFilePath, "utf8"));
+      return { status: "done", chunk_count: count };
+    }
+    try {
+      const pages = (await this.docParser.parse(rawFilePath)).pages;
+      if (this.chunkDocPages(id, pages).chunks.length === 0) {
+        return { status: "pending", note: "未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）" };
+      }
+      const count = await this.writeDocChunksFromPages(caseDir, id, pages);
+      return { status: "done", chunk_count: count, engine: "liteparse" };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { status: "pending", note: `${DEGRADE_NOTE["doc-binary"]}：${message}` };
+    }
   }
 
   /** 稠密索引：embed 切块文本 → 写 `index/<mid>.vec`（与 chunks 同序同提交，§5.3）。未配置 embed 即跳过。 */
@@ -246,12 +320,14 @@ export class MaterialService {
       status: "pending",
     };
 
-    // 文本文档读回切块 done；PDF/Office/媒体降级 pending（媒体待 process）。与 base64 路同一判据。
-    if (modality === "doc" && isTextDocExt(ext)) {
-      base.chunk_count = await this.writeDocChunks(caseDir, id, await readFile(dest, "utf8"));
-      base.status = "done";
+    if (modality === "doc") {
+      const processed = await this.processDocAtIngest(caseDir, id, dest, ext);
+      base.status = processed.status;
+      base.chunk_count = processed.chunk_count;
+      base.note = processed.note;
+      base.engine = processed.engine;
     } else {
-      base.note = modality === "doc" ? DEGRADE_NOTE["doc-binary"] : DEGRADE_NOTE[modality];
+      base.note = DEGRADE_NOTE[modality];
     }
 
     await this.cases.attachMaterial(caseId, base);

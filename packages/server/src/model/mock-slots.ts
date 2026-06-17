@@ -15,6 +15,8 @@ import type {
   RerankerAdapter,
   VlmAdapter,
 } from "./slots.js";
+import type { SlotConfigs } from "./slot-config.js";
+import { PaddleOcrAdapter } from "./paddle-ocr.js";
 
 /** mock embedding 维度（确定性 hash 向量；P2.4 .vec 版本戳记此 dim）。 */
 export const MOCK_EMBED_DIM = 8;
@@ -89,10 +91,23 @@ export class MockReranker implements RerankerAdapter {
 }
 
 /**
- * 槽工厂（二期 P2.2）。本期：开 `MINI_AGENT_USE_MOCK_MEDIA` 即全槽 mock，否则全 null
- * （真实适配器 P2.6，到位后此处加"configured→real"分支）。
+ * 槽工厂（二期 P2.2/P3.D）。逐槽优先级：configured→real，其次 mockEnabled→mock，
+ * 否则 null 降级。
  */
-export function buildSlots(mockEnabled: boolean): ModelSlots {
-  if (!mockEnabled) return { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
-  return { asr: new MockAsr(), vlm: new MockVlm(), ocr: new MockOcr(), embed: new MockEmbed(), rerank: new MockReranker() };
+export function buildSlots(mockEnabled: boolean, configs?: SlotConfigs): ModelSlots {
+  return {
+    // TODO P3.D: 同形接真
+    asr: mockEnabled ? new MockAsr() : null,
+    // TODO P3.D: 同形接真
+    vlm: mockEnabled ? new MockVlm() : null,
+    ocr: configs?.ocr.configured
+      ? new PaddleOcrAdapter(configs.ocr.baseURL, { model: configs.ocr.model, apiKey: configs.ocr.apiKey })
+      : mockEnabled
+        ? new MockOcr()
+        : null,
+    // TODO P3.D: 同形接真
+    embed: mockEnabled ? new MockEmbed() : null,
+    // TODO P3.D: 同形接真
+    rerank: mockEnabled ? new MockReranker() : null,
+  };
 }

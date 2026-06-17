@@ -110,7 +110,9 @@ export class LitDocParser implements DocParser {
           return m ? { page: Number.parseInt(m[1], 10), name } : null;
         })
         .filter((p): p is { page: number; name: string } => p !== null && Number.isFinite(p.page) && p.page > 0)
-        .sort((a, b) => a.page - b.page);
+        .sort((a, b) => a.page - b.page)
+        // 限页：裁到 maxPages 再读入内存 + 逐页 OCR，防超大扫描件 N 次出站 / 多 GB 峰值内存（评审 MAJOR）。
+        .slice(0, this.maxPages);
       const out: DocPageImage[] = [];
       for (const page of pages) {
         out.push({ page: page.page, image: await readFile(path.join(dir, page.name)) });

@@ -11,7 +11,12 @@ function normalizeBox(box: unknown, width: number, height: number): [number, num
   if (!Array.isArray(box) || box.length !== 4 || !(width > 0) || !(height > 0)) return WHOLE_FRAME;
   const [x1, y1, x2, y2] = box.map(numberOrNaN);
   if (![x1, y1, x2, y2].every(Number.isFinite)) return WHOLE_FRAME;
-  return [x1 / width, y1 / height, (x2 - x1) / width, (y2 - y1) / height];
+  // 反向框（x2<x1）用 min/abs 吸收；原点夹到 [0,1]、宽高裁到不出帧；退化框（w/h≤0）回落整帧。
+  const x = Math.min(Math.max(Math.min(x1, x2) / width, 0), 1);
+  const y = Math.min(Math.max(Math.min(y1, y2) / height, 0), 1);
+  const w = Math.min(Math.abs(x2 - x1) / width, 1 - x);
+  const h = Math.min(Math.abs(y2 - y1) / height, 1 - y);
+  return w > 0 && h > 0 ? [x, y, w, h] : WHOLE_FRAME;
 }
 
 /** PaddleOCR HTTP JSON → 槽统一 OCR 结果。纯函数，便于单测覆盖坐标归一化。 */

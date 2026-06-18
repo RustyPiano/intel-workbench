@@ -14,6 +14,7 @@ import { CloudEmbedAdapter } from "../src/model/cloud-embed.js";
 import { CloudRerankAdapter } from "../src/model/cloud-rerank.js";
 import { CloudVlmAdapter } from "../src/model/cloud-vlm.js";
 import { CloudAsrAdapter } from "../src/model/cloud-asr.js";
+import { FunAsrAdapter } from "../src/model/funasr-adapter.js";
 import type { SlotConfigs } from "../src/model/slot-config.js";
 
 // 快照并清空所有槽相关 env，逐测试隔离（避免 shell/其他测试泄漏）。
@@ -22,6 +23,8 @@ const SLOT_ENV_KEYS = [
     `MINI_AGENT_${p}_BASE_URL`,
     `MINI_AGENT_${p}_MODEL`,
     `MINI_AGENT_${p}_API_KEY`,
+    `MINI_AGENT_${p}_DIM`,
+    `MINI_AGENT_${p}_PROVIDER`,
   ]),
   "MINI_AGENT_USE_MOCK_MEDIA",
 ];
@@ -184,6 +187,19 @@ describe("buildSlots 工厂（二期 P2.2）", () => {
     expect(buildSlots(true, withAsr).asr?.engine).toBe("asr:FunAudioLLM/SenseVoiceSmall");
     expect(buildSlots(true, configs(false)).asr).toBeInstanceOf(MockAsr);
     expect(buildSlots(false, configs(false)).asr).toBeNull();
+  });
+
+  it("ASR provider=funasr → 本地 FunAsrAdapter（默认 provider→云 CloudAsrAdapter）", () => {
+    const base = { configured: false, host: "", model: "", baseURL: "", apiKey: "" };
+    const withFunasr: SlotConfigs = {
+      vlm: { ...base },
+      ocr: { ...base },
+      embed: { ...base },
+      rerank: { ...base },
+      asr: { configured: true, host: "127.0.0.1:8001", model: "paraformer-zh", baseURL: "http://127.0.0.1:8001", apiKey: "", provider: "funasr" },
+    };
+    expect(buildSlots(true, withFunasr).asr).toBeInstanceOf(FunAsrAdapter);
+    expect(buildSlots(true, withFunasr).asr?.engine).toBe("funasr:paraformer-zh");
   });
 });
 

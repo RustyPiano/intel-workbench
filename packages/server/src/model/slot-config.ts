@@ -20,6 +20,8 @@ export interface SlotConfig {
   apiKey: string;
   /** 向量维度（仅 embed 槽用，来自 `${PREFIX}_DIM`；缺省/非正→undefined，构造真适配器时 fail-fast）。 */
   dim?: number;
+  /** 服务商判别（目前仅 asr 用，来自 `${PREFIX}_PROVIDER`）：`funasr`=本地富响应，其余=OpenAI 转写。 */
+  provider?: string;
 }
 
 export type SlotConfigs = Record<SlotName, SlotConfig>;
@@ -38,6 +40,7 @@ function readOne(prefix: string): SlotConfig {
   const apiKey = process.env[`${prefix}_API_KEY`] ?? "";
   const dimRaw = Number(process.env[`${prefix}_DIM`] ?? "");
   const dim = Number.isFinite(dimRaw) && dimRaw > 0 ? dimRaw : undefined;
+  const provider = process.env[`${prefix}_PROVIDER`] || undefined;
   let host = "";
   if (baseURL) {
     try {
@@ -48,7 +51,7 @@ function readOne(prefix: string): SlotConfig {
   }
   // 本地气隙端点多为无鉴权，故 configured 不要求 apiKey；但需 host 可解析。
   const configured = Boolean(baseURL && model && host);
-  return { configured, host, model, baseURL, apiKey, dim };
+  return { configured, host, model, baseURL, apiKey, dim, provider };
 }
 
 export function readSlotConfigs(): SlotConfigs {

@@ -19,6 +19,10 @@ packages/web/node_modules/.vite/
 /tasks/
 /av-tasks/
 
+# 本地开发/测试环境变量（含 API key，绝不入库）
+/dev.env.sh
+*.env.local
+
 __pycache__/
 *.pyc
 .mini-agent/

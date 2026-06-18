@@ -135,7 +135,7 @@ export class MaterialService {
     private readonly slots: ModelSlots = EMPTY_SLOTS,
     private readonly docParser: DocParser = new LitDocParser(),
     private readonly guard?: OfflineGuard,
-    private readonly mediaEndpoints: { asr: string; vlm: string; ocr: string } = { asr: "", vlm: "", ocr: "" },
+    private readonly mediaEndpoints: { asr: string; vlm: string; ocr: string; embed: string } = { asr: "", vlm: "", ocr: "", embed: "" },
   ) {}
 
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
@@ -207,7 +207,7 @@ export class MaterialService {
   }
 
   /** 归一化文本 → 切块并落 `.txt` + `.chunks.jsonl`，返回切块数（base64/流式共用）。 */
-  private async writeDocChunks(caseDir: string, id: string, rawText: string): Promise<number> {
+  private async writeDocChunks(actor: Identity, caseDir: string, id: string, rawText: string): Promise<number> {
     const text = normalize(rawText);
     const chunks = chunkText(id, text);
     const processed = path.join(caseDir, "processed");
@@ -218,7 +218,7 @@ export class MaterialService {
       chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
       "utf8",
     );
-    await this.writeIndex(caseDir, id, chunks); // 同提交写稠密索引（§5.3）
+    await this.writeIndex(actor, caseDir, id, chunks); // 同提交写稠密索引（§5.3）
     return chunks.length;
   }
 
@@ -262,7 +262,7 @@ export class MaterialService {
     return { chunks, text: texts.join("\n\n") };
   }
 
-  private async writeDocChunksFromPages(caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<number> {
+  private async writeDocChunksFromPages(actor: Identity, caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<number> {
     const { chunks, text } = built;
     const processed = path.join(caseDir, "processed");
     await mkdir(processed, { recursive: true });
@@ -272,7 +272,7 @@ export class MaterialService {
       chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
       "utf8",
     );
-    await this.writeIndex(caseDir, id, chunks);
+    await this.writeIndex(actor, caseDir, id, chunks);
     return chunks.length;
   }
 
@@ -284,7 +284,7 @@ export class MaterialService {
     ext: string,
   ): Promise<{ status: MaterialStatus; chunk_count?: number; note?: string; engine?: string }> {
     if (isTextDocExt(ext)) {
-      const count = await this.writeDocChunks(caseDir, id, await readFile(rawFilePath, "utf8"));
+      const count = await this.writeDocChunks(actor, caseDir, id, await readFile(rawFilePath, "utf8"));
       return { status: "done", chunk_count: count };
     }
     try {
@@ -303,7 +303,7 @@ export class MaterialService {
           }
           const ocrBuilt = this.chunkDocPages(id, ocrPages);
           if (ocrBuilt.chunks.length === 0) return { status: "pending", note: SCANNED_DOC_NOTE };
-          const count = await this.writeDocChunksFromPages(caseDir, id, ocrBuilt);
+          const count = await this.writeDocChunksFromPages(actor, caseDir, id, ocrBuilt);
           return { status: "done", chunk_count: count, engine: "liteparse+paddleocr" };
         } catch (e) {
           // 区分零外发拦截（authorize 抛 403）与真·空扫描件，便于运维定位。
@@ -313,7 +313,7 @@ export class MaterialService {
           return { status: "pending", note: SCANNED_DOC_NOTE };
         }
       }
-      const count = await this.writeDocChunksFromPages(caseDir, id, built);
+      const count = await this.writeDocChunksFromPages(actor, caseDir, id, built);
       return { status: "done", chunk_count: count, engine: "liteparse" };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -322,9 +322,11 @@ export class MaterialService {
   }
 
   /** 稠密索引：embed 切块文本 → 写 `index/<mid>.vec`（与 chunks 同序同提交，§5.3）。未配置 embed 即跳过。 */
-  private async writeIndex(caseDir: string, materialId: string, chunks: Chunk[]): Promise<void> {
+  private async writeIndex(actor: Identity, caseDir: string, materialId: string, chunks: Chunk[]): Promise<void> {
     const embed = this.slots.embed;
     if (!embed || chunks.length === 0) return;
+    // 真 embed 槽出站前授权（零外发红线）：与 OCR/媒体摄入一致；mock/未配置端点为空→天然跳过。
+    await this.authorizeMedia(actor, [this.mediaEndpoints.embed], "embed-ingest");
     const vectors = await embed.embed(chunks.map((c) => c.text));
     const indexDir = path.join(caseDir, "index");
     await mkdir(indexDir, { recursive: true });
@@ -490,7 +492,7 @@ export class MaterialService {
         out.chunks.map((c) => JSON.stringify(c)).join("\n") + (out.chunks.length ? "\n" : ""),
       );
       if (out.frames) await this.writeFrames(processedDir, materialId, out.frames);
-      await this.writeIndex(this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3）
+      await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3）
 
       const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
         m.status = "done";

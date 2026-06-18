@@ -129,6 +129,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     asr: media.asrEndpoint,
     vlm: media.vlmEndpoint,
     ocr: media.ocrEndpoint,
+    embed: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "",
   });
   const llm: LlmDeps = { adapter, guard, modelEndpoint };
   // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。

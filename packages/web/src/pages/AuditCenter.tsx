@@ -88,7 +88,21 @@ export function AuditCenterPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
         <div style={{ background: verify?.ok ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", border: `1px solid ${verify?.ok ? "rgba(16, 185, 129, 0.25)" : "rgba(239, 68, 68, 0.25)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: verify?.ok ? "var(--ok-light)" : "var(--danger-light)", fontWeight: "700", fontSize: "14px" }}>
-            <span>{verify?.ok ? "✓" : "⚠️"}</span>
+            <span>
+              {verify === null ? (
+                <svg className="icon-svg" style={{ color: "var(--text-muted)", animation: "spin 1s linear infinite" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+                </svg>
+              ) : verify.ok ? (
+                <svg className="icon-svg" style={{ color: "var(--ok-light)", width: "16px", height: "16px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              ) : (
+                <svg className="icon-svg" style={{ color: "var(--danger-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              )}
+            </span>
             {verify === null ? "正在校验审计链…" : verify.ok ? "全局审计哈希链完整性校验通过" : `哈希链校验失败：第 ${verify.brokenAt} 条断链`}
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.5" }}>
@@ -102,7 +116,17 @@ export function AuditCenterPage() {
 
         <div style={{ background: alertCount > 0 ? "rgba(239, 68, 68, 0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${alertCount > 0 ? "rgba(239, 68, 68, 0.25)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: alertCount > 0 ? "var(--danger-light)" : "var(--text-dim)", fontWeight: "700", fontSize: "14px" }}>
-            <span>{alertCount > 0 ? "⚠️" : "○"}</span>
+            <span>
+              {alertCount > 0 ? (
+                <svg className="icon-svg" style={{ color: "var(--danger-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              ) : (
+                <svg className="icon-svg" style={{ color: "var(--text-muted)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                </svg>
+              )}
+            </span>
             {alertCount > 0 ? `发现拒止/异常类事件 (${alertCount})` : "无拒止/异常类事件"}
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.5" }}>
@@ -122,8 +146,11 @@ export function AuditCenterPage() {
           仅看拒止/异常 ({alertCount})
         </button>
         <div style={{ flex: 1 }} />
-        <button type="button" className="btn" onClick={() => void handleExport()} style={{ padding: "6px 14px", fontSize: "12px" }}>
-          📥 导出全量留存
+        <button type="button" className="btn" onClick={() => void handleExport()} style={{ padding: "6px 14px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          导出全量留存
         </button>
       </div>
 

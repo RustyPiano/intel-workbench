@@ -53,6 +53,9 @@ export function createApiRouter(services: ApiServices): Router {
         "GET/POST /api/cases",
         "GET/PATCH /api/cases/:id",
         "GET/POST /api/cases/:id/materials",
+        "POST /api/cases/:id/materials/:mid/{process,reindex}",
+        "DELETE /api/cases/:id/materials/:mid",
+        "GET /api/cases/:id/audit",
         "GET /api/materials/:mid",
         "GET/POST /api/cases/:id/inquiries",
         "GET/POST /api/cases/:id/elements",
@@ -69,7 +72,7 @@ export function createApiRouter(services: ApiServices): Router {
   });
 
   router.use("/auth", createAuthRouter(services.auth));
-  router.use("/cases", createCasesRouter(services.cases, services.materials));
+  router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
   router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/cases", createElementsRouter(services.elements));
   router.use("/cases", createReportsRouter(services.reports));

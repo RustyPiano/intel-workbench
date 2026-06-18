@@ -101,7 +101,9 @@ describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
     const saved = process.env[KEY];
     try {
       const c2 = (await cases.create(OPERATOR, { name: "多块专题", clearance: "internal" })).id;
-      await materials.ingest(OPERATOR, c2, [{ filename: "multi.txt", content: "第一段含目标甲。\n\n第二段含目标乙。" }]);
+      // 两个 ~400 字长段（>CHUNK_TARGET_CHARS 合并阈）→ 切成 2 块，才测得出"超预算截到首块"。
+      const content = `${"第一段含目标甲。".repeat(50)}\n\n${"第二段含目标乙。".repeat(50)}`;
+      await materials.ingest(OPERATOR, c2, [{ filename: "multi.txt", content }]);
       const all = await materials.loadCaseChunks(c2);
       expect(all.length).toBe(2);
       process.env[KEY] = "1"; // 极小预算 → 贪心仅保留首块

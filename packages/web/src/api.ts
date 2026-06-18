@@ -302,16 +302,67 @@ export function listMaterials(caseId: string): Promise<ApiMaterial[]> {
   );
 }
 
-/** 流式上传单个文件（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节。 */
-export function uploadMaterial(caseId: string, file: File): Promise<ApiMaterial> {
-  const h = headers();
-  h["content-type"] = "application/octet-stream";
-  h["x-upload-filename"] = encodeURIComponent(file.name);
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/upload`, {
+/**
+ * 流式上传单个文件（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节。
+ * 用 XHR 而非 fetch，以拿到 upload.onprogress 上传进度（fetch 无上传进度事件）。
+ */
+export function uploadMaterial(caseId: string, file: File, onProgress?: (fraction: number) => void): Promise<ApiMaterial> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/cases/${encodeURIComponent(caseId)}/materials/upload`);
+    if (sessionToken) xhr.setRequestHeader("authorization", `Bearer ${sessionToken}`);
+    xhr.setRequestHeader("content-type", "application/octet-stream");
+    xhr.setRequestHeader("x-upload-filename", encodeURIComponent(file.name));
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.total > 0 ? e.loaded / e.total : 0);
+      };
+    }
+    xhr.onload = () => {
+      let body: Record<string, unknown> & { message?: string } = {};
+      try {
+        body = JSON.parse(xhr.responseText) as typeof body;
+      } catch {
+        /* 非 JSON 响应 → 落到下方状态判定 */
+      }
+      if (xhr.status === 401) onUnauthorized?.();
+      if (xhr.status < 200 || xhr.status >= 300 || body.ok === false) {
+        reject(new Error(body.message ?? `上传失败（HTTP ${xhr.status}）`));
+        return;
+      }
+      resolve(body.material as ApiMaterial);
+    };
+    xhr.onerror = () => reject(new Error("上传失败（网络错误）"));
+    xhr.send(file);
+  });
+}
+
+/** 重建素材稠密索引（embed 端点恢复后手动建检索向量）。 */
+export function reindexMaterial(caseId: string, materialId: string): Promise<ApiMaterial> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/${encodeURIComponent(materialId)}/reindex`, {
     method: "POST",
-    headers: h,
-    body: file,
+    headers: headers(),
   }).then((r) => unwrap<ApiMaterial>(r, "material"));
+}
+
+/** 删除素材（清理落盘 + 从专题摘除）。 */
+export async function deleteMaterial(caseId: string, materialId: string): Promise<void> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/${encodeURIComponent(materialId)}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `删除失败（HTTP ${res.status}）`);
+  }
+}
+
+/** 本专题审计链（§7.2 镜像）：可读该专题者即可查其审计轨迹。 */
+export function listCaseAudit(caseId: string): Promise<AuditEvent[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/audit`, { headers: headers() }).then((r) =>
+    unwrap<AuditEvent[]>(r, "events"),
+  );
 }
 
 export function listInquiries(caseId: string): Promise<ApiInquiry[]> {

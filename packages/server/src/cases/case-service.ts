@@ -145,6 +145,15 @@ export class CaseService {
     });
   }
 
+  /** 从 manifest 摘除一件素材（删除用例调用；落盘清理与审计由调用方负责）。串行化避免与并发 ingest 互覆。 */
+  async detachMaterial(caseId: string, materialId: string): Promise<void> {
+    await this.mutateManifest(caseId, (m) => {
+      const before = m.materials.length;
+      m.materials = m.materials.filter((x) => x.id !== materialId);
+      if (m.materials.length === before) throw new AppError(404, "素材不存在");
+    });
+  }
+
   /**
    * 串行更新某素材字段（状态机/加工产物，二期 P2.3a）。读改写全程占独写锁，
    * 与并发 ingest/其他 process 互斥，杜绝丢状态。审计由调用方记。

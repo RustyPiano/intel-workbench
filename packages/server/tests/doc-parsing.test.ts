@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -11,6 +11,7 @@ import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { type DocPage, type DocPageImage, type DocParseResult, type DocParser, LitDocParser, parseLitJson } from "../src/materials/doc-parser.js";
 import { MaterialService } from "../src/materials/material-service.js";
+import { readVec } from "../src/materials/vec-store.js";
 import type { EmbeddingAdapter, ModelSlots, OcrAdapter, OcrResult, VlmAdapter } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { sha256 } from "../src/util/hash.js";
@@ -91,6 +92,19 @@ class FakeEmbed implements EmbeddingAdapter {
   constructor(private readonly order: string[] = []) {}
   async embed(texts: string[]): Promise<Float32Array[]> {
     this.order.push(`embed:${texts.length}`);
+    return texts.map(() => new Float32Array(this.dim));
+  }
+}
+
+/** 可切换成功/抛错的 embed（模拟云端点超时 → 恢复），覆盖 best-effort 索引 + reindex 恢复。 */
+class ToggleEmbed implements EmbeddingAdapter {
+  readonly dim = 4;
+  readonly modelId = "fake-embed";
+  fail = false;
+  constructor(private readonly order: string[] = []) {}
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    this.order.push(`embed:${texts.length}`);
+    if (this.fail) throw new Error("The operation was aborted due to timeout");
     return texts.map(() => new Float32Array(this.dim));
   }
 }
@@ -321,14 +335,94 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
     ]);
 
-    // 二进制文档路径：writeIndex 授权抛 403 → 外层降级 pending；embed 未被调用
-    expect(m.status).toBe("pending");
-    expect(order).toEqual(["authorize:embed-ingest:http://embed.denied:8002"]);
+    // 二进制文档路径：解析成功即 done（稠密索引尽力而为）。授权被零外发拦截（403）→ writeIndex
+    // 吞掉异常、挂索引降级 note、embed 绝不出站；文档仍可用（BM25 检索），不再被误降级成 pending。
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBeGreaterThan(0);
+    expect(m.note).toContain("稠密索引未建");
+    expect(order).toEqual(["authorize:embed-ingest:http://embed.denied:8002"]); // 仅授权，无 embed 出站
     const events = await audit.readAll();
     expect(events.some((e) => e.action === "egress.deny" && e.detail?.host === "embed.denied:8002")).toBe(true);
   });
 
-  it("文本文档路径不调用 parser，切块 locator 保持无 page 的旧行为", async () => {
+  it("入库稠密索引 embed 超时（best-effort）→ 文档仍 done + 索引降级 note，不误降级 pending（核心修复）", async () => {
+    const order: string[] = [];
+    const embed = new ToggleEmbed(order);
+    embed.fail = true; // 模拟云 embed 端点不可达/超时
+    const guard = new RecordingGuard(["embed.local:8002"], audit, order);
+    const materials = svc(new FakeDocParser(PDF_PAGES), { ...EMPTY_SLOTS, embed }, guard, { asr: "", vlm: "", ocr: "", embed: "http://embed.local:8002" });
+
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    // 旧 bug：embed 超时被误贴成"文档解析不可用"并回退 pending；现在解析成功即 done。
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBeGreaterThan(0);
+    expect(m.note).toContain("稠密索引未建");
+    expect(m.note).toContain("The operation was aborted due to timeout");
+    // 授权 → embed 确被调用（抛超时被吞，不阻断）。
+    expect(order[0]).toBe("authorize:embed-ingest:http://embed.local:8002");
+    expect(order.some((o) => o.startsWith("embed:"))).toBe(true);
+    // 文档已可 BM25 检索：切块落盘、done 素材纳入 loadCaseChunks。
+    const chunks = await materials.loadCaseChunks(caseId);
+    expect(chunks.length).toBe(m.chunk_count);
+    // 索引降级落审计。
+    const events = await audit.readAll();
+    expect(events.some((e) => e.action === "material.index" && e.result === "error")).toBe(true);
+  });
+
+  it("reindex：embed 恢复后重建稠密索引 .vec 并清除降级 note", async () => {
+    const order: string[] = [];
+    const embed = new ToggleEmbed(order);
+    embed.fail = true;
+    const guard = new RecordingGuard(["embed.local:8002"], audit, order);
+    const materials = svc(new FakeDocParser(PDF_PAGES), { ...EMPTY_SLOTS, embed }, guard, { asr: "", vlm: "", ocr: "", embed: "http://embed.local:8002" });
+
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+    expect(m.note).toContain("稠密索引未建");
+    await expect(stat(path.join(paths.caseDir(caseId), "index", `${m.id}.vec`))).rejects.toThrow(); // 尚无 .vec
+
+    embed.fail = false; // 端点恢复
+    const updated = await materials.reindex(OPERATOR, caseId, m.id);
+
+    expect(updated.status).toBe("done");
+    expect(updated.note).toBeUndefined(); // 降级提示清除
+    const vec = await readVec(path.join(paths.caseDir(caseId), "index", `${m.id}.vec`));
+    expect(vec?.count).toBe(m.chunk_count);
+    expect(vec?.embed_model).toBe("fake-embed");
+    const events = await audit.readAll();
+    expect(events.some((e) => e.action === "material.reindex" && e.result === "ok")).toBe(true);
+  });
+
+  it("remove：删除素材清理 raw/processed/index 落盘 + 从 manifest 摘除 + 审计，再删 404", async () => {
+    const materials = svc(new FakeDocParser(PDF_PAGES), { ...EMPTY_SLOTS, embed: new FakeEmbed() });
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    const rawPath = path.join(paths.caseDir(caseId), "materials", `${m.id}-report.pdf`);
+    const chunksPath = path.join(paths.caseDir(caseId), "processed", `${m.id}.chunks.jsonl`);
+    const vecPath = path.join(paths.caseDir(caseId), "index", `${m.id}.vec`);
+    await expect(stat(chunksPath)).resolves.toBeDefined();
+    await expect(stat(vecPath)).resolves.toBeDefined();
+
+    await materials.remove(OPERATOR, caseId, m.id);
+
+    // manifest 摘除 + 各产物清理。
+    expect((await materials.list(OPERATOR, caseId)).find((x) => x.id === m.id)).toBeUndefined();
+    await expect(stat(rawPath)).rejects.toThrow();
+    await expect(stat(chunksPath)).rejects.toThrow();
+    await expect(stat(vecPath)).rejects.toThrow();
+    const events = await audit.readAll();
+    expect(events.some((e) => e.action === "material.delete" && e.object === `material:${m.id}`)).toBe(true);
+    // 幂等护栏：再删不存在的素材 → 404。
+    await expect(materials.remove(OPERATOR, caseId, m.id)).rejects.toThrow();
+  });
+
+  it("文本文档路径不调用 parser，切块无 page locator（与 PDF 页级路径区分）", async () => {
     const parser = new FakeDocParser(PDF_PAGES);
     const materials = svc(parser);
     const rawText = "  第一段，含前导空白。\n\n\n第二段，含线索词。\n\n第三段收尾。  ";
@@ -336,15 +430,16 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
 
     expect(parser.calls).toBe(0);
     expect(m.status).toBe("done");
-    expect(m.chunk_count).toBe(3);
+    // 三个短段在新 size-target 打包器下合并为 1 块（合并块=归一化全文的 verbatim 子串）。
+    expect(m.chunk_count).toBe(1);
 
     const normalized = await readFile(path.join(paths.caseDir(caseId), "processed", `${m.id}.txt`), "utf8");
     expect(normalized).toBe(normalize(rawText));
     const chunks = (await materials.loadCaseChunks(caseId)).filter((c) => c.material_id === m.id);
-    expect(chunks.map((c) => c.text)).toEqual(["第一段，含前导空白。", "第二段，含线索词。", "第三段收尾。"]);
-    expect(chunks.map((c) => c.locator.paragraph)).toEqual([1, 2, 3]);
+    expect(chunks.map((c) => c.text)).toEqual([normalize(rawText)]);
+    expect(chunks.map((c) => c.locator.paragraph)).toEqual([1]);
     for (const chunk of chunks) {
-      expect(chunk.locator.page).toBeUndefined();
+      expect(chunk.locator.page).toBeUndefined(); // 文本路径无页号（PDF 路径才有 locator.page）
       expect(normalized.slice(chunk.locator.char_start, chunk.locator.char_end)).toBe(chunk.text);
       expect(chunk.content_hash).toBe(sha256(chunk.text));
     }

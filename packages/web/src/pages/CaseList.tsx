@@ -35,9 +35,17 @@ export function CaseListPage() {
       <div className="page__head">
         <h1 className="page__title">分析专题控制台</h1>
         <div className="page__actions">
-          <input className="search" type="search" placeholder="🔍 搜索专题（M5 启用）" disabled />
-          <Link to="/cases/new" className="btn btn--primary">
-            + 新建专题
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <svg className="icon-svg" style={{ position: "absolute", left: "12px", color: "var(--text-muted)", pointerEvents: "none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input className="search" type="search" placeholder="搜索专题（M5 启用）" style={{ paddingLeft: "34px" }} disabled />
+          </div>
+          <Link to="/cases/new" className="btn btn--primary" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            新建专题
           </Link>
         </div>
       </div>
@@ -77,8 +85,11 @@ export function CaseListPage() {
 
                   <div className="case-card__meta">
                     <span>更新时间: {c.updated_at.slice(0, 10)}</span>
-                    <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost" style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-light)", fontWeight: "600" }}>
-                      进入工作台 →
+                    <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost" style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-light)", fontWeight: "600", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      进入工作台
+                      <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 18 15 12 9 6"/>
+                      </svg>
                     </Link>
                   </div>
                 </div>

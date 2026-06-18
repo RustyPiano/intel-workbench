@@ -10,6 +10,7 @@ import { buildSlots, MockAsr, MockEmbed, MockOcr, MockReranker, MockVlm, MOCK_EM
 import { readSlotConfigs, slotAllowlistHosts, SLOT_NAMES, useMockMedia } from "../src/model/slot-config.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { PaddleOcrAdapter, mapPaddleResponse } from "../src/model/paddle-ocr.js";
+import { CloudEmbedAdapter } from "../src/model/cloud-embed.js";
 import type { SlotConfigs } from "../src/model/slot-config.js";
 
 // 快照并清空所有槽相关 env，逐测试隔离（避免 shell/其他测试泄漏）。
@@ -116,6 +117,26 @@ describe("buildSlots 工厂（二期 P2.2）", () => {
 
     const disabled = buildSlots(false, configs(false));
     expect(disabled.ocr).toBeNull();
+  });
+
+  it("Embed 配置（含 dim）优先于 mock；缺 dim 即构造期报错；未配按 mock 降级", () => {
+    const base = { configured: false, host: "", model: "", baseURL: "", apiKey: "" };
+    const withEmbed = (dim?: number): SlotConfigs => ({
+      asr: { ...base },
+      vlm: { ...base },
+      ocr: { ...base },
+      rerank: { ...base },
+      embed: { configured: true, host: "embed.local:8002", model: "Qwen3-Embedding-0.6B", baseURL: "http://embed.local:8002/v1", apiKey: "", dim },
+    });
+    const real = buildSlots(true, withEmbed(1024));
+    expect(real.embed).toBeInstanceOf(CloudEmbedAdapter);
+    expect(real.embed?.dim).toBe(1024);
+    expect(real.embed?.modelId).toBe("Qwen3-Embedding-0.6B");
+    // 配置真槽但缺 dim → 构造期 fail-fast（避免污染 .vec 版本戳）
+    expect(() => buildSlots(true, withEmbed(undefined))).toThrow(/维度/);
+    // 未配 embed → 按 mock 开关降级
+    expect(buildSlots(true, configs(false)).embed).toBeInstanceOf(MockEmbed);
+    expect(buildSlots(false, configs(false)).embed).toBeNull();
   });
 });
 

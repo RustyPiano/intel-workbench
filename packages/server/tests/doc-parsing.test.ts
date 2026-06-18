@@ -11,7 +11,7 @@ import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { type DocPage, type DocPageImage, type DocParseResult, type DocParser, LitDocParser, parseLitJson } from "../src/materials/doc-parser.js";
 import { MaterialService } from "../src/materials/material-service.js";
-import type { ModelSlots, OcrAdapter, OcrResult, VlmAdapter } from "../src/model/slots.js";
+import type { EmbeddingAdapter, ModelSlots, OcrAdapter, OcrResult, VlmAdapter } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { sha256 } from "../src/util/hash.js";
 
@@ -85,6 +85,16 @@ class FakeVlm implements VlmAdapter {
   }
 }
 
+class FakeEmbed implements EmbeddingAdapter {
+  readonly dim = 4;
+  readonly modelId = "fake-embed";
+  constructor(private readonly order: string[] = []) {}
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    this.order.push(`embed:${texts.length}`);
+    return texts.map(() => new Float32Array(this.dim));
+  }
+}
+
 class RecordingGuard extends OfflineGuard {
   constructor(
     allowedHosts: readonly string[],
@@ -119,7 +129,7 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     parser: DocParser,
     slots: ModelSlots = EMPTY_SLOTS,
     guard?: OfflineGuard,
-    endpoints: { asr: string; vlm: string; ocr: string } = { asr: "", vlm: "", ocr: "" },
+    endpoints: { asr: string; vlm: string; ocr: string; embed: string } = { asr: "", vlm: "", ocr: "", embed: "" },
   ): MaterialService {
     return new MaterialService(paths, audit, cases, slots, parser, guard, endpoints);
   }
@@ -227,6 +237,7 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       asr: "",
       vlm: "",
       ocr: "http://ocr.local:8000",
+      embed: "",
     });
 
     const [m] = await materials.ingest(OPERATOR, caseId, [
@@ -259,6 +270,7 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       asr: "",
       vlm: "",
       ocr: "http://ocr.denied:8000",
+      embed: "",
     });
 
     const [m] = await materials.ingest(OPERATOR, caseId, [
@@ -270,6 +282,50 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     expect(m.note).toBe("OCR 端点未授权或被零外发拦截，未执行扫描件识别");
     expect(ocr.calls).toHaveLength(0);
     expect(order).toEqual(["authorize:doc-ocr:http://ocr.denied:8000"]);
+  });
+
+  it("入库写稠密索引：真 embed 槽出站前先经 OfflineGuard 授权（embed-ingest），再调用 embed", async () => {
+    const order: string[] = [];
+    const embed = new FakeEmbed(order);
+    const guard = new RecordingGuard(["embed.local:8002"], audit, order);
+    const materials = svc(new FakeDocParser(PDF_PAGES), { ...EMPTY_SLOTS, embed }, guard, {
+      asr: "",
+      vlm: "",
+      ocr: "",
+      embed: "http://embed.local:8002",
+    });
+
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    expect(m.status).toBe("done");
+    // 授权必须在 embed 出站之前（与 OCR 摄入同形红线）
+    expect(order[0]).toBe("authorize:embed-ingest:http://embed.local:8002");
+    expect(order[1]).toMatch(/^embed:/);
+    expect(order).toHaveLength(2);
+  });
+
+  it("入库写稠密索引：embed 端点未授权被零外发拦截（egress.deny），不发起 embed 出站", async () => {
+    const order: string[] = [];
+    const embed = new FakeEmbed(order);
+    const guard = new RecordingGuard([], audit, order); // 空白名单 → deny
+    const materials = svc(new FakeDocParser(PDF_PAGES), { ...EMPTY_SLOTS, embed }, guard, {
+      asr: "",
+      vlm: "",
+      ocr: "",
+      embed: "http://embed.denied:8002",
+    });
+
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "report.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    // 二进制文档路径：writeIndex 授权抛 403 → 外层降级 pending；embed 未被调用
+    expect(m.status).toBe("pending");
+    expect(order).toEqual(["authorize:embed-ingest:http://embed.denied:8002"]);
+    const events = await audit.readAll();
+    expect(events.some((e) => e.action === "egress.deny" && e.detail?.host === "embed.denied:8002")).toBe(true);
   });
 
   it("文本文档路径不调用 parser，切块 locator 保持无 page 的旧行为", async () => {

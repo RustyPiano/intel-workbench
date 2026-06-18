@@ -13,6 +13,7 @@ import { PaddleOcrAdapter, mapPaddleResponse } from "../src/model/paddle-ocr.js"
 import { CloudEmbedAdapter } from "../src/model/cloud-embed.js";
 import { CloudRerankAdapter } from "../src/model/cloud-rerank.js";
 import { CloudVlmAdapter } from "../src/model/cloud-vlm.js";
+import { CloudAsrAdapter } from "../src/model/cloud-asr.js";
 import type { SlotConfigs } from "../src/model/slot-config.js";
 
 // 快照并清空所有槽相关 env，逐测试隔离（避免 shell/其他测试泄漏）。
@@ -168,6 +169,21 @@ describe("buildSlots 工厂（二期 P2.2）", () => {
     expect(buildSlots(true, withVlm).vlm?.engine).toBe("vlm:Qwen/Qwen3-VL-32B-Instruct");
     expect(buildSlots(true, configs(false)).vlm).toBeInstanceOf(MockVlm);
     expect(buildSlots(false, configs(false)).vlm).toBeNull();
+  });
+
+  it("ASR 配置优先于 mock；未配按 mock 降级", () => {
+    const base = { configured: false, host: "", model: "", baseURL: "", apiKey: "" };
+    const withAsr: SlotConfigs = {
+      vlm: { ...base },
+      ocr: { ...base },
+      embed: { ...base },
+      rerank: { ...base },
+      asr: { configured: true, host: "api.siliconflow.cn", model: "FunAudioLLM/SenseVoiceSmall", baseURL: "https://api.siliconflow.cn/v1", apiKey: "" },
+    };
+    expect(buildSlots(true, withAsr).asr).toBeInstanceOf(CloudAsrAdapter);
+    expect(buildSlots(true, withAsr).asr?.engine).toBe("asr:FunAudioLLM/SenseVoiceSmall");
+    expect(buildSlots(true, configs(false)).asr).toBeInstanceOf(MockAsr);
+    expect(buildSlots(false, configs(false)).asr).toBeNull();
   });
 });
 

@@ -20,6 +20,7 @@ import { PaddleOcrAdapter } from "./paddle-ocr.js";
 import { CloudEmbedAdapter } from "./cloud-embed.js";
 import { CloudRerankAdapter } from "./cloud-rerank.js";
 import { CloudVlmAdapter } from "./cloud-vlm.js";
+import { CloudAsrAdapter } from "./cloud-asr.js";
 
 /** mock embedding 维度（确定性 hash 向量；P2.4 .vec 版本戳记此 dim）。 */
 export const MOCK_EMBED_DIM = 8;
@@ -99,8 +100,11 @@ export class MockReranker implements RerankerAdapter {
  */
 export function buildSlots(mockEnabled: boolean, configs?: SlotConfigs): ModelSlots {
   return {
-    // TODO P3.D: 同形接真
-    asr: mockEnabled ? new MockAsr() : null,
+    asr: configs?.asr.configured
+      ? new CloudAsrAdapter(configs.asr.baseURL, { model: configs.asr.model, apiKey: configs.asr.apiKey })
+      : mockEnabled
+        ? new MockAsr()
+        : null,
     vlm: configs?.vlm.configured
       ? new CloudVlmAdapter(configs.vlm.baseURL, { model: configs.vlm.model, apiKey: configs.vlm.apiKey })
       : mockEnabled

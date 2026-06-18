@@ -19,6 +19,7 @@ import type { SlotConfigs } from "./slot-config.js";
 import { PaddleOcrAdapter } from "./paddle-ocr.js";
 import { CloudEmbedAdapter } from "./cloud-embed.js";
 import { CloudRerankAdapter } from "./cloud-rerank.js";
+import { CloudVlmAdapter } from "./cloud-vlm.js";
 
 /** mock embedding 维度（确定性 hash 向量；P2.4 .vec 版本戳记此 dim）。 */
 export const MOCK_EMBED_DIM = 8;
@@ -100,8 +101,11 @@ export function buildSlots(mockEnabled: boolean, configs?: SlotConfigs): ModelSl
   return {
     // TODO P3.D: 同形接真
     asr: mockEnabled ? new MockAsr() : null,
-    // TODO P3.D: 同形接真
-    vlm: mockEnabled ? new MockVlm() : null,
+    vlm: configs?.vlm.configured
+      ? new CloudVlmAdapter(configs.vlm.baseURL, { model: configs.vlm.model, apiKey: configs.vlm.apiKey })
+      : mockEnabled
+        ? new MockVlm()
+        : null,
     ocr: configs?.ocr.configured
       ? new PaddleOcrAdapter(configs.ocr.baseURL, { model: configs.ocr.model, apiKey: configs.ocr.apiKey })
       : mockEnabled

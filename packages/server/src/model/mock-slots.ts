@@ -18,6 +18,7 @@ import type {
 import type { SlotConfigs } from "./slot-config.js";
 import { PaddleOcrAdapter } from "./paddle-ocr.js";
 import { CloudEmbedAdapter } from "./cloud-embed.js";
+import { CloudRerankAdapter } from "./cloud-rerank.js";
 
 /** mock embedding 维度（确定性 hash 向量；P2.4 .vec 版本戳记此 dim）。 */
 export const MOCK_EMBED_DIM = 8;
@@ -111,7 +112,10 @@ export function buildSlots(mockEnabled: boolean, configs?: SlotConfigs): ModelSl
       : mockEnabled
         ? new MockEmbed()
         : null,
-    // TODO P3.D: 同形接真
-    rerank: mockEnabled ? new MockReranker() : null,
+    rerank: configs?.rerank.configured
+      ? new CloudRerankAdapter(configs.rerank.baseURL, { model: configs.rerank.model, apiKey: configs.rerank.apiKey })
+      : mockEnabled
+        ? new MockReranker()
+        : null,
   };
 }

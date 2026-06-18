@@ -139,10 +139,25 @@ export class InquiryService {
     let staleIndex = 0;
     // 检索路且 embed 可用 → 升级为 BM25 ⊕ dense 混合（§5.2）；否则保持 BM25。
     if (sel.mode === "retrieval" && this.dense.embed) {
-      const hybrid = await this.hybridRetrieve(actor, q, caseId, chunks);
-      used = hybrid.used;
-      staleIndex = hybrid.stale;
-      mode = hybrid.reranked ? "hybrid+rerank" : "hybrid";
+      try {
+        const hybrid = await this.hybridRetrieve(actor, q, caseId, chunks);
+        used = hybrid.used;
+        staleIndex = hybrid.stale;
+        mode = hybrid.reranked ? "hybrid+rerank" : "hybrid";
+      } catch (e) {
+        // embed/rerank query 出站失败（云端点不可达/超时）绝不能让整次问答失败：降级回已选 BM25 候选。
+        await this.audit
+          .append({
+            user: actor.id,
+            action: "inquiry.retrieve",
+            object: `case:${caseId}`,
+            result: "error",
+            caseId,
+            detail: { caseId, reason: "dense-degraded", message: e instanceof Error ? e.message : String(e) },
+          })
+          .catch(() => undefined);
+        mode = "bm25-degraded";
+      }
     }
 
     let inquiry: Inquiry;

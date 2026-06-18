@@ -358,9 +358,16 @@ export function AdminSkillsPage() {
               <input type="checkbox" checked={s.enabled} disabled={busy === s.name} onChange={() => void toggle(s)} style={{ width: "16px", height: "16px", accentColor: "var(--accent-light)", cursor: "pointer" }} />
             </div>
             <p style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.5", flex: 1 }}>{s.description || "（无描述）"}</p>
-            <p style={{ fontSize: "12px" }}>
-              自检：<span style={{ color: s.healthy ? "var(--ok-light)" : "var(--danger-light)" }}>{s.healthy ? "● 通过" : "● 异常"}</span>
-              <span style={{ marginLeft: "12px", color: s.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>{s.enabled ? "已启用" : "已停用"}</span>
+            <p style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "12px" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ color: s.healthy ? "var(--ok-light)" : "var(--danger-light)" }}>自检：</span>
+                <span className="status-dot" style={{ backgroundColor: s.healthy ? "var(--ok-light)" : "var(--danger-light)" }} />
+                <span style={{ color: s.healthy ? "var(--ok-light)" : "var(--danger-light)", fontWeight: "600" }}>{s.healthy ? "通过" : "异常"}</span>
+              </span>
+              <span style={{ color: s.enabled ? "var(--ok-light)" : "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                <span className="status-dot" style={{ backgroundColor: "currentColor" }} />
+                <span>{s.enabled ? "已启用" : "已停用"}</span>
+              </span>
             </p>
           </div>
         ))}
@@ -383,14 +390,18 @@ export function AdminModelsPage() {
       {doctor ? (
         <div style={{ background: "rgba(0,0,0,0.15)", padding: "20px", border: "1px solid var(--border)", borderRadius: "var(--radius)", maxWidth: "560px", display: "flex", flexDirection: "column", gap: "14px" }}>
           <Row label="文本研判模型">
-            <span style={{ color: doctor.configured ? "var(--ok-light)" : "var(--warn-light)" }}>{doctor.configured ? "● 已配置" : "○ 未配置（问答降级）"}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: doctor.configured ? "var(--ok-light)" : "var(--warn-light)" }}>
+              <span className={doctor.configured ? "status-dot" : "status-dot status-dot--empty"} style={{ backgroundColor: doctor.configured ? "currentColor" : "transparent" }} />
+              <span>{doctor.configured ? "已配置" : "未配置（问答降级）"}</span>
+            </span>
           </Row>
           <Row label="Provider">{doctor.provider}</Row>
           <Row label="模型代号">{doctor.model || "—"}</Row>
           <Row label="端点 host">{doctor.host || "—"}</Row>
           <Row label="零外发白名单">
-            <span style={{ color: doctor.allowlisted ? "var(--ok-light)" : "var(--text-muted)" }}>
-              {doctor.allowlisted ? "● 已放行该 host" : "○ 不在白名单（出站将被拦截）"}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: doctor.allowlisted ? "var(--ok-light)" : "var(--text-muted)" }}>
+              <span className={doctor.allowlisted ? "status-dot" : "status-dot status-dot--empty"} style={{ backgroundColor: doctor.allowlisted ? "currentColor" : "transparent" }} />
+              <span>{doctor.allowlisted ? "已放行该 host" : "不在白名单（出站将被拦截）"}</span>
             </span>
           </Row>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
@@ -500,7 +511,10 @@ export function AdminUsersPage() {
                     </select>
                   </td>
                   <td>
-                    <span style={{ color: u.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>● {u.enabled ? "活跃" : "停用"}</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: u.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>
+                      <span className="status-dot" style={{ backgroundColor: "currentColor" }} />
+                      <span>{u.enabled ? "活跃" : "停用"}</span>
+                    </span>
                   </td>
                   <td style={{ display: "flex", gap: "6px" }}>
                     <button type="button" className="btn" disabled={busy || isSelf} onClick={() => act(() => updateUser(u.id, { enabled: !u.enabled }))} style={{ padding: "4px 10px", fontSize: "11px" }}>

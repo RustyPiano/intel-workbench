@@ -48,7 +48,7 @@ describe("MaterialService 汇入与加工（M2）", () => {
     ]);
     expect(m.status).toBe("done");
     expect(m.modality).toBe("doc");
-    expect(m.chunk_count).toBe(2);
+    expect(m.chunk_count).toBe(1); // 两个短段合并为 1 块（新 size-target 打包器）
 
     // 切块文件存在，content_hash 可复算。
     const raw = await readFile(path.join(paths.caseDir(caseId), "processed", `${m.id}.chunks.jsonl`), "utf8");
@@ -63,14 +63,15 @@ describe("MaterialService 汇入与加工（M2）", () => {
   });
 
   it("文档切块带 char 偏移：归一化文本 slice(char_start,char_end)===chunk.text，modality=doc（二期 Spec §2.1）", async () => {
-    const [m] = await materials.ingest(OPERATOR, caseId, [
-      { filename: "multi.txt", content: "  第一段，含前导空白。\n\n\n第二段，含线索词。\n\n第三段收尾。  " },
-    ]);
+    // 两个 ~400 字长段（合起来 >CHUNK_TARGET_CHARS）→ 打包器产出 2 块，验证多块 char 偏移不变量。
+    const longA = "甲段".repeat(200);
+    const longB = "乙段".repeat(200);
+    const [m] = await materials.ingest(OPERATOR, caseId, [{ filename: "multi.txt", content: `${longA}\n\n${longB}` }]);
     const dir = path.join(paths.caseDir(caseId), "processed");
     const normalized = await readFile(path.join(dir, `${m.id}.txt`), "utf8");
     const raw = await readFile(path.join(dir, `${m.id}.chunks.jsonl`), "utf8");
     const chunks = raw.trim().split("\n").map((l) => JSON.parse(l));
-    expect(chunks.length).toBe(3);
+    expect(chunks.length).toBe(2);
     for (const c of chunks) {
       expect(c.modality).toBe("doc");
       expect(typeof c.locator.char_start).toBe("number");
@@ -78,6 +79,8 @@ describe("MaterialService 汇入与加工（M2）", () => {
       // 不变量：偏移切片严格等于切块原文（UI 高亮依赖此）。
       expect(normalized.slice(c.locator.char_start, c.locator.char_end)).toBe(c.text);
     }
+    // 第二块偏移确在第一块之后（真实推进，非全 0）。
+    expect(chunks[1].locator.char_start).toBeGreaterThanOrEqual(chunks[0].locator.char_end);
   });
 
   it("音频素材：降级为 pending 并附原因", async () => {
@@ -121,7 +124,7 @@ describe("MaterialService 汇入与加工（M2）", () => {
     const m = await materials.ingestStream(OPERATOR, caseId, "stream.txt", Readable.from(Buffer.from("第一段内容。\n\n第二段含线索。", "utf8")));
     expect(m.status).toBe("done");
     expect(m.modality).toBe("doc");
-    expect(m.chunk_count).toBe(2);
+    expect(m.chunk_count).toBe(1); // 两短段合并为 1 块（新打包器）
     const content = await materials.getContent(OPERATOR, m.id);
     expect(content.text).toContain("第一段内容");
     // 原始素材按 <id>-<filename> 落盘。
@@ -133,7 +136,7 @@ describe("MaterialService 汇入与加工（M2）", () => {
     const m = await materials.ingestStream(OPERATOR, caseId, "subs.srt", Readable.from(Buffer.from("字幕第一段。\n\n字幕第二段。", "utf8")));
     expect(m.modality).toBe("doc");
     expect(m.status).toBe("done"); // 旧 allow-list 会误降级 pending
-    expect(m.chunk_count).toBe(2);
+    expect(m.chunk_count).toBe(1); // 两短段合并为 1 块（新打包器）
   });
 
   it("ingestStream 音频 → pending（待 process）+ basename 去穿越", async () => {
@@ -379,7 +382,8 @@ describe("MaterialService 稠密索引（二期 P2.4 §5.3）", () => {
 
   it("ingest 文档 → 同提交写 index/<mid>.vec，count 对齐 chunks + 版本戳", async () => {
     const s = svc();
-    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "第一段。\n\n第二段含线索。" }]);
+    // 两个长段→2 块，验证多向量与 chunks 对齐（短段会合并成 1 块，测不出对齐）。
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: `${"甲段".repeat(200)}\n\n${"乙段".repeat(200)}` }]);
     expect(m.chunk_count).toBe(2);
     const vec = await readVec(path.join(paths.caseDir(caseId), "index", `${m.id}.vec`));
     expect(vec?.count).toBe(2); // 与 chunks 对齐
@@ -395,7 +399,8 @@ describe("MaterialService 稠密索引（二期 P2.4 §5.3）", () => {
 
   it("loadCaseVectors：版本戳一致→byId 全覆盖；换模型/维度→stale 退 BM25（不报错）", async () => {
     const s = svc();
-    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: "第一段。\n\n第二段。" }]);
+    // 两个长段→2 块，验证 byId 多覆盖（短段合并成 1 块测不出）。
+    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "a.txt", content: `${"甲段".repeat(200)}\n\n${"乙段".repeat(200)}` }]);
 
     const ok = await s.loadCaseVectors(caseId, new MockEmbed());
     expect(ok.byId.size).toBe(2);

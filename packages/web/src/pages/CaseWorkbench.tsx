@@ -4,6 +4,7 @@ import { NavLink, Outlet, useParams } from "react-router-dom";
 import {
   approveReport,
   askInquiryStream,
+  deleteMaterial,
   draftReport,
   exportReport,
   extractElements,
@@ -12,10 +13,12 @@ import {
   getCase,
   getMaterialContent,
   getReport,
+  listCaseAudit,
   listElements,
   listInquiries,
   listMaterials,
   processMaterial,
+  reindexMaterial,
   submitReport,
   uploadMaterial,
   type ApiCase,
@@ -26,6 +29,7 @@ import {
   type ApiInquiryStreamEvent,
   type ApiMaterial,
   type ApiReport,
+  type AuditEvent,
   type ElementType,
   type ImageMedia,
   type MaterialContent,
@@ -129,7 +133,7 @@ function mediaStatusText(content: MaterialContent): string {
   if (mt.status !== "done") return mt.note ?? "尚未加工。点击「加工」生成可引用片段（带时间码/坐标）。";
   const eng = `引擎 ${mt.engine ?? "—"}`;
   const dur = mt.duration ? ` · ${mt.duration}s` : "";
-  const warn = mt.note ? ` · ⚠ ${mt.note}` : "";
+  const warn = mt.note ? ` · 警告：${mt.note}` : "";
   if (mt.modality === "audio") return `转写完成 · ${content.segments?.length ?? 0} 段 · ${eng}${dur}${warn}`;
   if (mt.modality === "video" && content.media?.kind === "video") return `解析完成 · ${content.media.shots.length} 镜头 · ${eng}${dur}${warn}`;
   return `解析完成 · ${eng}${warn}`;
@@ -290,8 +294,11 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
           引用出处：{cite.material_name}
           {cite.locator.timecode ? ` · ${cite.locator.timecode}s` : ""}
         </span>
-        <button type="button" className="btn" style={{ padding: "2px 8px", fontSize: "11px" }} onClick={onClose}>
-          ✕ 关闭
+        <button type="button" className="btn" style={{ padding: "2px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }} onClick={onClose}>
+          <svg className="icon-svg" style={{ width: "10px", height: "10px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          关闭
         </button>
       </div>
       <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
@@ -332,9 +339,13 @@ export function MaterialsPanel() {
   const [content, setContent] = useState<MaterialContent | null>(null);
   const [busy, setBusy] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [rawUrl, setRawUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ name: string; index: number; total: number; fraction: number } | null>(null);
+  const [uploadIssues, setUploadIssues] = useState<{ name: string; message: string }[]>([]);
 
   const refresh = () => {
     if (!user || !caseId) return;
@@ -364,21 +375,69 @@ export function MaterialsPanel() {
 
   const handleFiles = async (fileList: FileList | null) => {
     if (!user || !caseId || !fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
     setBusy(true);
     setError(null);
+    setUploadIssues([]);
+    // 逐个文件直传字节（二期 §4.6，绕 25MB base64 上限）；单个失败不拖垮整批，收集后单列。
+    const issues: { name: string; message: string }[] = [];
+    let firstOk: string | null = null;
     try {
-      // 流式上传（二期 §4.6）：逐个文件直传字节，绕 25MB base64 上限。
-      const ingested: ApiMaterial[] = [];
-      for (const file of Array.from(fileList)) {
-        ingested.push(await uploadMaterial(caseId, file));
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress({ name: file.name, index: i + 1, total: files.length, fraction: 0 });
+        try {
+          const m = await uploadMaterial(caseId, file, (fraction) =>
+            setUploadProgress({ name: file.name, index: i + 1, total: files.length, fraction }),
+          );
+          if (!firstOk) firstOk = m.id;
+        } catch (e) {
+          issues.push({ name: file.name, message: (e as Error).message });
+        }
       }
+    } finally {
+      setUploadProgress(null);
+      setUploadIssues(issues);
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       refresh();
-      if (ingested[0]) setActiveId(ingested[0].id);
+      if (firstOk) setActiveId(firstOk);
+    }
+  };
+
+  // 重建稠密索引（embed 端点恢复后）；完成后刷新列表与阅读区。
+  const handleReindex = async (mid: string) => {
+    if (!user || !caseId || reindexing) return;
+    setReindexing(true);
+    setError(null);
+    try {
+      await reindexMaterial(caseId, mid);
+      refresh();
+      setContent(await getMaterialContent(mid));
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setReindexing(false);
+    }
+  };
+
+  // 删除素材（清理落盘 + 从专题摘除）；删当前选中则清空阅读区，列表回落首项。
+  const handleDelete = async (mid: string) => {
+    if (!user || !caseId || deleting) return;
+    if (!window.confirm("确认删除该素材？将一并清除其解析文本、切块与检索索引，不可恢复。")) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteMaterial(caseId, mid);
+      if (activeId === mid) {
+        setActiveId(null);
+        setContent(null);
+      }
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -453,11 +512,42 @@ export function MaterialsPanel() {
 
         {error ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--danger-light)" }}>{error}</div> : null}
 
+        {uploadProgress ? (
+          <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ fontSize: "11px", color: "var(--text-dim)", marginBottom: "5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {uploadProgress.fraction >= 1
+                ? `服务端解析+建索引中… ${uploadProgress.index}/${uploadProgress.total} — ${uploadProgress.name}`
+                : `上传中 ${uploadProgress.index}/${uploadProgress.total} · ${Math.round(uploadProgress.fraction * 100)}% — ${uploadProgress.name}`}
+            </div>
+            <div style={{ height: "4px", background: "rgba(255,255,255,0.1)", borderRadius: "2px", overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.round(uploadProgress.fraction * 100)}%`,
+                  background: "var(--accent-light)",
+                  transition: "width 0.15s",
+                  // 字节已传完、等服务端解析/建索引（大文档 embed 需数十秒）：进度条脉动表示仍在进行。
+                  animation: uploadProgress.fraction >= 1 ? "iw-bar-pulse 1.2s ease-in-out infinite" : undefined,
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {uploadIssues.length > 0 ? (
+          <div style={{ padding: "10px 12px", fontSize: "11px", color: "var(--danger-light)", borderBottom: "1px solid var(--border)", lineHeight: "1.6" }}>
+            {uploadIssues.length} 个文件上传失败（其余已汇入）：
+            {uploadIssues.map((it, i) => (
+              <div key={i} style={{ marginTop: "2px" }}>· {it.name}：{it.message}</div>
+            ))}
+          </div>
+        ) : null}
+
         {materials === null ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
         ) : materials.length === 0 ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-            还没有素材。点击「+ 汇入」上传文档（TXT/MD/CSV/JSON/LOG 等可直接加工；音频可加工转写为带时间码/说话人的可引用片段；PDF/Office/视频/图片暂降级占位）。
+            还没有素材。点击「+ 汇入」上传：文档（TXT/MD/CSV/JSON/LOG 及 PDF/Word/PPT/Excel 均自动解析切块）；音频/视频/图片汇入后点「加工」转写/解析为带时间码/坐标的可引用片段。
           </div>
         ) : (
           materials.map((m) => {
@@ -487,8 +577,45 @@ export function MaterialsPanel() {
         ) : (
           <>
             <div className="materials-viewer__header">
-              <div className="materials-viewer__title">📄 {content.material.filename}</div>
-              <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+                <div className="materials-viewer__title" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                  <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                  </svg>
+                  {content.material.filename}
+                </div>
+                <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                  {content.material.status === "done" ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                      disabled={reindexing || deleting}
+                      onClick={() => void handleReindex(content.material.id)}
+                      title="重新计算并写入稠密检索向量（embed 端点恢复后用）"
+                    >
+                      <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                      </svg>
+                      {reindexing ? "重建中…" : "重建索引"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                    disabled={deleting || reindexing}
+                    onClick={() => void handleDelete(content.material.id)}
+                  >
+                    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+                    </svg>
+                    {deleting ? "删除中…" : "删除"}
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "4px" }}>
                 模态: <strong style={{ color: "#fff" }}>{MODALITY_LABELS[content.material.modality]}</strong> | 格式: {content.material.format} | 大小:{" "}
                 {formatSize(content.material.size)} | 汇入: {content.material.ingested_at.replace("T", " ").slice(0, 19)}
                 {content.chunkCount !== undefined ? ` | 切块: ${content.chunkCount}` : ""}
@@ -506,13 +633,35 @@ export function MaterialsPanel() {
                       onClick={() => void handleProcess(content.material.id)}
                       disabled={processing || content.material.status === "processing"}
                     >
-                      {processing || content.material.status === "processing"
-                        ? "加工中…"
-                        : content.material.status === "done"
-                          ? "🔁 重新加工"
-                          : content.material.status === "failed"
-                            ? "↻ 重试加工"
-                            : "▶ 加工"}
+                      {processing || content.material.status === "processing" ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <svg className="icon-svg" style={{ width: "12px", height: "12px", animation: "spin 1s linear infinite" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+                          </svg>
+                          加工中…
+                        </span>
+                      ) : content.material.status === "done" ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                          </svg>
+                          重新加工
+                        </span>
+                      ) : content.material.status === "failed" ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                          </svg>
+                          重试加工
+                        </span>
+                      ) : (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                          </svg>
+                          开始加工
+                        </span>
+                      )}
                     </button>
                     <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>{mediaStatusText(content)}</span>
                   </div>
@@ -529,12 +678,15 @@ export function MaterialsPanel() {
                             <button
                               type="button"
                               className="btn"
-                              style={{ padding: "2px 8px", fontSize: "11px", fontFamily: "monospace", flexShrink: 0 }}
+                              style={{ padding: "2px 8px", fontSize: "11px", fontFamily: "monospace", flexShrink: 0, display: "inline-flex", alignItems: "center", gap: "4px" }}
                               onClick={() => playSeg(seg.start)}
                               title="回听此段"
                               disabled={!rawUrl}
                             >
-                              ▶ {fmtTime(seg.start)}
+                              <svg className="icon-svg" style={{ width: "8px", height: "8px" }} viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3"/>
+                              </svg>
+                              {fmtTime(seg.start)}
                             </button>
                             <div style={{ fontSize: "13px", lineHeight: "1.6" }}>
                               {seg.speaker ? <strong style={{ color: "var(--accent-light)", marginRight: "6px" }}>{seg.speaker}</strong> : null}
@@ -555,12 +707,23 @@ export function MaterialsPanel() {
                   ) : null}
                 </div>
               ) : content.text !== undefined ? (
-                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: "13px", lineHeight: "1.7", color: "var(--text)", margin: 0 }}>
-                  {content.text}
-                </pre>
+                <>
+                  {content.material.note ? (
+                    <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "8px 12px", color: "var(--warn-light)", fontSize: "12px", lineHeight: "1.6", marginBottom: "10px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                      <svg className="icon-svg" style={{ color: "var(--warn-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                      <span>{content.material.note}</span>
+                    </div>
+                  ) : null}
+                  <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: "13px", lineHeight: "1.7", color: "var(--text)", margin: 0 }}>
+                    {content.text}
+                  </pre>
+                </>
               ) : (
                 <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
-                  ⚠️ {content.note ?? "该素材尚未加工完成。"}
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                    <svg className="icon-svg" style={{ color: "var(--warn-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <strong>{content.note ?? "该素材尚未加工完成。"}</strong>
+                  </div>
                   <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
                     （视频/图像加工见 P2.3b；该模态待接入本地模型后接通。）
                   </div>
@@ -585,13 +748,37 @@ const ELEMENT_TYPE_LABELS: Record<ElementType, string> = {
   time: "时间",
 };
 
-const ELEMENT_TYPE_ICONS: Record<ElementType, string> = {
-  person: "👤",
-  org: "🏢",
-  location: "📍",
-  event: "⚡",
-  equipment: "🛠️",
-  time: "🕐",
+const ELEMENT_TYPE_ICONS: Record<ElementType, React.ReactNode> = {
+  person: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </svg>
+  ),
+  org: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="9" y1="22" x2="9" y2="16"/><line x1="15" y1="22" x2="15" y2="16"/><line x1="9" y1="16" x2="15" y2="16"/><path d="M8 6h2v2H8V6zm0 4h2v2H8v-2zm8-4h2v2h-2V6zm0 4h2v2h-2v-2z"/>
+    </svg>
+  ),
+  location: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+    </svg>
+  ),
+  event: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+    </svg>
+  ),
+  equipment: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+    </svg>
+  ),
+  time: (
+    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </svg>
+  ),
 };
 
 const ELEMENT_TYPES: ElementType[] = ["person", "org", "location", "event", "equipment", "time"];
@@ -657,14 +844,19 @@ export function ElementsPanel() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
         <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-          <input
-            type="text"
-            className="input-text"
-            placeholder="🔍 过滤要素名称 / 别名…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ padding: "8px 12px", fontSize: "13px" }}
-          />
+          <div style={{ position: "relative", display: "flex", alignItems: "center", flex: 1 }}>
+            <svg className="icon-svg" style={{ position: "absolute", left: "10px", color: "var(--text-muted)", pointerEvents: "none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input
+              type="text"
+              className="input-text"
+              placeholder="过滤要素名称 / 别名…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={{ padding: "8px 12px 8px 32px", fontSize: "13px" }}
+            />
+          </div>
           <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleExtract} disabled={busy}>
             {busy ? "抽取中…" : elements && elements.length > 0 ? "重新抽取" : "提取要素"}
           </button>
@@ -730,7 +922,7 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
         const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
         const framed = (c.modality === "video" || c.modality === "image") && Boolean(c.locator.bbox || c.locator.timecode);
         const loc = c.locator.timecode
-          ? ` · ⏱ ${c.locator.timecode} 秒${c.locator.speaker ? ` · ${c.locator.speaker}` : ""}`
+          ? ` · 时间：${c.locator.timecode}秒${c.locator.speaker ? ` · 说话人：${c.locator.speaker}` : ""}`
           : c.locator.paragraph
             ? ` · 第${c.locator.paragraph}段`
             : "";
@@ -744,7 +936,15 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
             title={`${c.material_name}${loc}\n${c.snippet}${hint}`}
             onClick={onClick}
           >
-            {audioTc ? "▶ " : framed ? "▢ " : ""}
+            {audioTc ? (
+              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", fill: "currentColor", verticalAlign: "middle" }} viewBox="0 0 24 24" stroke="none">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            ) : framed ? (
+              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              </svg>
+            ) : null}
             {i + 1}
           </span>
         );
@@ -757,16 +957,19 @@ function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c:
   if (inquiry.status !== "answered") {
     const unverified = inquiry.claims.filter((c) => c.status === "unverified");
     return (
-      <div style={{ color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
-        ⚠️ {inquiry.answer}
-        {unverified.length > 0 ? (
-          <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
-            （以下为无有效出处的待核提示，不作为事实）
-            {unverified.map((c, i) => (
-              <div key={i} style={{ marginTop: "4px" }}>· {c.text}</div>
-            ))}
-          </div>
-        ) : null}
+      <div style={{ color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6", display: "inline-flex", alignItems: "flex-start", gap: "6px" }}>
+        <svg className="icon-svg" style={{ color: "var(--warn-light)", marginTop: "3px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div>
+          {inquiry.answer}
+          {unverified.length > 0 ? (
+            <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
+              （以下为无有效出处的待核提示，不作为事实）
+              {unverified.map((c, i) => (
+                <div key={i} style={{ marginTop: "4px" }}>· {c.text}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -915,13 +1118,21 @@ export function InquiryPanel() {
         {history.map((inq) => (
           <div key={inq.id}>
             <div className="chat-bubble chat-bubble--user">
-              <div className="chat-avatar">👤</div>
+              <div className="chat-avatar">
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                </svg>
+              </div>
               <div className="chat-content">
                 <p>{inq.question}</p>
               </div>
             </div>
             <div className="chat-bubble chat-bubble--ai">
-              <div className="chat-avatar">🤖</div>
+              <div className="chat-avatar">
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 15h.01M16 15h.01"/>
+                </svg>
+              </div>
               <div className="chat-content">
                 <InquiryAnswer inquiry={inq} onFrame={setFrameCite} />
               </div>
@@ -931,21 +1142,52 @@ export function InquiryPanel() {
         {liveQuestion ? (
           <>
             <div className="chat-bubble chat-bubble--user">
-              <div className="chat-avatar">👤</div>
+              <div className="chat-avatar">
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                </svg>
+              </div>
               <div className="chat-content">
                 <p>{liveQuestion}</p>
               </div>
             </div>
             <div className="chat-bubble chat-bubble--ai chat-bubble--live">
-              <div className="chat-avatar">🤖</div>
+              <div className="chat-avatar">
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 15h.01M16 15h.01"/>
+                </svg>
+              </div>
               <div className="chat-content">
                 <p className="live-narration">{liveText || "研判中…"}</p>
                 {toolTrace.length > 0 ? (
                   <div className="tool-trace" aria-label="工具调用轨迹">
                     {toolTrace.map((entry) => (
                       <div key={entry.key} className={`tool-trace__item tool-trace__item--${entry.status}`}>
-                        <span>🔧 调用 {entry.name}…</span>
-                        <span>{entry.status === "running" ? "进行中" : entry.status === "ok" ? "✓ ok" : "✗ 失败"}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                          </svg>
+                          调用 {entry.name}…
+                        </span>
+                        <span>
+                          {entry.status === "running" ? (
+                            "进行中"
+                          ) : entry.status === "ok" ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                              <svg className="icon-svg" style={{ color: "var(--ok-light)", width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                              </svg>
+                              成功
+                            </span>
+                          ) : (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                              <svg className="icon-svg" style={{ color: "var(--danger-light)", width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                              </svg>
+                              失败
+                            </span>
+                          )}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -956,7 +1198,11 @@ export function InquiryPanel() {
         ) : null}
         {busy && !liveQuestion ? (
           <div className="chat-bubble chat-bubble--ai chat-bubble--live">
-            <div className="chat-avatar">🤖</div>
+            <div className="chat-avatar">
+              <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 15h.01M16 15h.01"/>
+              </svg>
+            </div>
             <div className="chat-content">
               <p className="live-narration">研判中…</p>
             </div>
@@ -974,7 +1220,7 @@ export function InquiryPanel() {
         <input
           type="text"
           className="input-text"
-          placeholder="🎯 向 AI 助手提问有关本专题的关联线索…"
+          placeholder="向 AI 助手提问有关本专题的关联线索…"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           disabled={busy}
@@ -1089,7 +1335,12 @@ export function ReportPanel() {
           <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
             状态：<strong style={{ color: "var(--accent-light)" }}>{REPORT_STEPS[stepIndex]?.label ?? "草稿起草"}</strong>
             {report?.spec.classification ? ` · 密级 ${report.spec.classification}` : ""}
-            {report && !report.rendered ? " · ⚠️ 公文渲染未完成（缺 python3?）" : ""}
+            {report && !report.rendered ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "8px", color: "var(--danger-light)" }}>
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                公文渲染未完成（缺 python3?）
+              </span>
+            ) : ""}
           </span>
           <div style={{ flex: 1 }} />
           <button type="button" className="btn btn--primary" style={{ padding: "4px 12px", fontSize: "12px" }} onClick={handleSaveDraft} disabled={busy}>
@@ -1114,7 +1365,13 @@ export function ReportPanel() {
         <div className="workflow-steps">
           {REPORT_STEPS.map((step, i) => (
             <div key={step.status} className={`workflow-step ${i === stepIndex ? "workflow-step--active" : i < stepIndex ? "workflow-step--done" : ""}`}>
-              <span className="workflow-dot">{i < stepIndex ? "✓" : ""}</span>
+              <span className="workflow-dot">
+                {i < stepIndex ? (
+                  <svg className="icon-svg" style={{ width: "8px", height: "8px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                ) : ""}
+              </span>
               <div>
                 <div style={{ fontWeight: i === stepIndex ? "700" : "600" }}>{step.label}</div>
                 <span style={{ fontSize: "11px", opacity: 0.7 }}>{step.hint}</span>
@@ -1128,23 +1385,32 @@ export function ReportPanel() {
             <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>加载报告状态…</span>
           ) : (
             <>
-              <button type="button" className="btn btn--primary" style={{ width: "100%" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(caseId!))}>
-                🚀 提交保密员复核
+              <button type="button" className="btn btn--primary" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(caseId!))}>
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+                提交保密员复核
               </button>
               {canReview ? (
-                <button type="button" className="btn" style={{ width: "100%" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(caseId!))}>
-                  ✅ 复核核准
+                <button type="button" className="btn" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(caseId!))}>
+                  <svg className="icon-svg" style={{ color: "var(--ok-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  复核核准
                 </button>
               ) : null}
               <button
                 type="button"
                 className={status === "approved" || status === "exported" ? "btn btn--primary" : "btn btn--danger"}
-                style={{ width: "100%" }}
+                style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                 disabled={busy || (status !== "approved" && status !== "exported")}
                 title={status === "approved" || status === "exported" ? "导出公文 .md" : "必须完成保密复核后方可导出（闸门）"}
                 onClick={handleExport}
               >
-                📥 {status === "approved" || status === "exported" ? "导出报告 (.md)" : "导出报告 (未授权)"}
+                <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                {status === "approved" || status === "exported" ? "导出报告 (.md)" : "导出报告 (未授权)"}
               </button>
             </>
           )}
@@ -1155,33 +1421,78 @@ export function ReportPanel() {
 }
 
 // ==================== 5. CaseAuditPanel Sub-panel ====================
-interface AuditRow {
-  id: string;
-  time: string;
-  operator: string;
-  action: string;
-  status: string;
-  hash: string;
+
+/** 审计动作码 → 中文研判动作（未知码原样显示）。 */
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  "case.create": "创建专题",
+  "case.update": "更新专题",
+  "material.ingest": "汇入素材",
+  "material.process": "加工媒体素材",
+  "material.index": "建稠密索引",
+  "material.reindex": "重建稠密索引",
+  "material.delete": "删除素材",
+  "inquiry.create": "智能问答",
+  "inquiry.retrieve": "检索取材",
+  "element.extract": "提取要素",
+  "report.draft": "起草通报",
+  "report.submit": "提交复核",
+  "report.approve": "复核核准",
+  "report.export": "导出通报",
+  "audit.export": "导出审计",
+};
+
+const AUDIT_RESULT: Record<AuditEvent["result"], { text: string; color: string }> = {
+  ok: { text: "成功", color: "var(--ok-light)" },
+  deny: { text: "拒绝", color: "var(--warn-light)" },
+  error: { text: "失败", color: "var(--danger-light)" },
+};
+
+function auditActionLabel(e: AuditEvent): string {
+  return AUDIT_ACTION_LABELS[e.action] ?? e.action;
 }
 
-const AUDIT_ROWS: AuditRow[] = [
-  { id: "au1", time: "2026-06-04 10:45:12", operator: "演示作业员", action: "保存通报报告草稿", status: "成功", hash: "aef98bc...78ea1f" },
-  { id: "au2", time: "2026-06-04 10:22:04", operator: "演示作业员", action: "双击人工校对修正线索文本行 6", status: "成功", hash: "9bf4c02...e62f04" },
-  { id: "au3", time: "2026-06-04 10:15:20", operator: "系统守护进程", action: "音频线索转写转译完成 (置信度 78%)", status: "成功", hash: "3da8ea4...b7c2df" },
-  { id: "au4", time: "2026-06-04 09:30:11", operator: "系统守护进程", action: "自动提取要素及人物实体 6 条", status: "成功", hash: "d412be6...a20f98" },
-  { id: "au5", time: "2026-06-04 09:12:00", operator: "演示作业员", action: "汇入外部音频与日志素材 3 份", status: "成功", hash: "021cb8e...84d63a" },
-  { id: "au6", time: "2026-06-04 09:10:05", operator: "演示作业员", action: "创建分析专题骨架", status: "成功", hash: "f33b12a...ca098d" },
-];
-
 export function CaseAuditPanel() {
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [events, setEvents] = useState<AuditEvent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user || !caseId) return;
+    let alive = true;
+    listCaseAudit(caseId)
+      .then((es) => alive && setEvents(es))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [user, caseId]);
+
+  const last = events && events.length > 0 ? events[events.length - 1] : null;
+  // 倒序：最新动作在前。
+  const rows = events ? [...events].reverse() : [];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       <div style={{ background: "rgba(16,24,40,0.3)", border: "1px solid var(--border)", padding: "16px 20px", borderRadius: "var(--radius)" }}>
-        <h4 style={{ fontSize: "14px", fontWeight: "700", marginBottom: "4px" }}>🔒 本地审计链哈希锁（Integrity Chain）</h4>
+        <h4 style={{ fontSize: "14px", fontWeight: "700", marginBottom: "4px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <svg className="icon-svg" style={{ width: "14px", height: "14px", color: "var(--accent-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          本地审计链完整性校验（Integrity Chain）
+        </h4>
         <p style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-          当前专题下的所有变更日志已接入 M1 级 append-only 哈希连环锁。哈希总指纹: <code style={{ color: "var(--warn-light)", fontFamily: "monospace" }}>sha256-a9f4c3de8721c002bc0f987214da8c75</code>。任何篡改均将导致链校验失败并触发红线报警。
+          本专题所有变更经 append-only 哈希连环锁记录（镜像自全局审计链）。共 <strong style={{ color: "#fff" }}>{events?.length ?? "…"}</strong> 条事件
+          {last ? (
+            <>
+              ；末位指纹 <code style={{ color: "var(--warn-light)", fontFamily: "monospace" }}>{last.event_hash.slice(0, 12)}…{last.event_hash.slice(-6)}</code>
+            </>
+          ) : null}
+          。任何篡改都会令链校验失败（审计中心可一键 verify）。
         </p>
       </div>
+
+      {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
 
       <div className="audit-layout">
         <table className="audit-table">
@@ -1190,20 +1501,37 @@ export function CaseAuditPanel() {
               <th>时间戳</th>
               <th>操作账户</th>
               <th>研判动作</th>
+              <th>对象</th>
               <th>执行状态</th>
               <th>防篡改指纹 (HASH)</th>
             </tr>
           </thead>
           <tbody>
-            {AUDIT_ROWS.map((row) => (
-              <tr key={row.id}>
-                <td style={{ fontFamily: "monospace" }}>{row.time}</td>
-                <td style={{ fontWeight: "600" }}>{row.operator}</td>
-                <td>{row.action}</td>
-                <td style={{ color: "var(--ok-light)" }}>● {row.status}</td>
-                <td className="audit-hash">{row.hash}</td>
+            {rows.map((e) => {
+              const r = AUDIT_RESULT[e.result];
+              return (
+                <tr key={e.id}>
+                  <td style={{ fontFamily: "monospace" }}>{e.ts.replace("T", " ").slice(0, 19)}</td>
+                  <td style={{ fontWeight: "600" }}>{e.user}</td>
+                  <td>{auditActionLabel(e)}</td>
+                  <td style={{ fontFamily: "monospace", fontSize: "12px", color: "var(--text-dim)" }}>{e.object}</td>
+                  <td style={{ color: r.color }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                      <span className="status-dot" style={{ backgroundColor: "currentColor" }} />
+                      <span>{r.text}</span>
+                    </span>
+                  </td>
+                  <td className="audit-hash">{e.event_hash.slice(0, 10)}…{e.event_hash.slice(-6)}</td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "center", color: "var(--text-muted)", padding: "32px" }}>
+                  {events === null ? "加载审计记录…" : "本专题暂无审计事件。"}
+                </td>
               </tr>
-            ))}
+            ) : null}
           </tbody>
         </table>
       </div>

@@ -34,7 +34,8 @@ const AUDIO_EXTS = new Set(["mp3", "wav", "m4a", "flac", "aac", "ogg", "amr", "w
 const VIDEO_EXTS = new Set(["mp4", "mov", "mkv", "avi", "wmv", "flv", "webm"]);
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "svg"]);
 
-const MAX_CHUNK_CHARS = 1200;
+const MAX_CHUNK_CHARS = 1200; // 单块硬上限（超长段落按此硬切）
+const CHUNK_TARGET_CHARS = 600; // 合并目标尺寸：连续短段并到接近此值，避免过碎/过粗
 
 export interface IngestFile {
   filename: string;
@@ -75,6 +76,8 @@ const DEGRADE_NOTE: Record<Exclude<Modality, "doc"> | "doc-binary", string> = {
   image: "图像 OCR 暂不可用，待接入本地 OCR（降级占位）",
 };
 const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）";
+/** 稠密索引尽力而为失败时挂到素材 note 上的提示（检索仍可用 BM25，可手动重建）。 */
+const INDEX_DEGRADED_NOTE = "稠密索引未建（检索回退 BM25，可在素材上「重建索引」）";
 
 function normalize(text: string): string {
   return text
@@ -84,46 +87,74 @@ function normalize(text: string): string {
     .trim();
 }
 
-function splitLong(paragraph: string): string[] {
-  if (paragraph.length <= MAX_CHUNK_CHARS) return [paragraph];
-  const pieces: string[] = [];
-  for (let i = 0; i < paragraph.length; i += MAX_CHUNK_CHARS) {
-    pieces.push(paragraph.slice(i, i + MAX_CHUNK_CHARS));
+/** 原文按空行切出的非空段落跨度（保留偏移，供合并/硬切时取 verbatim 子串）。 */
+function paragraphSpans(text: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const raw of text.split(/\n\s*\n/)) {
+    const piece = raw.trim();
+    if (piece.length === 0) continue;
+    const start = text.indexOf(piece, cursor);
+    if (start < 0) continue; // 防御：trim 后理论上必能定位
+    const end = start + piece.length;
+    cursor = end;
+    spans.push({ start, end });
   }
-  return pieces;
+  return spans;
+}
+
+/**
+ * 段落跨度 → 目标尺寸切块跨度（§7.3 step 1 改进）。旧实现只「拆过长」不「并过短」：Markdown
+ * 空行密集→过碎（7KB 切 50+ 块）、OCR 单页无空行→塌成一块。此处贪心合并连续短段到
+ * ~CHUNK_TARGET_CHARS，单段超 MAX_CHUNK_CHARS 才按 MAX 硬切。返回原文偏移 {start,end,paraIndex}，
+ * `text.slice(start,end)` 即 verbatim chunk 文本（合并块含段间空行、仍是子串）→ 不变量
+ * `slice===text` 与 content_hash=sha256(text) 均不破（引用接地红线不动）。
+ */
+function packChunkSpans(text: string): { start: number; end: number; paraIndex: number }[] {
+  const spans = paragraphSpans(text);
+  const out: { start: number; end: number; paraIndex: number }[] = [];
+  let i = 0;
+  while (i < spans.length) {
+    const first = spans[i];
+    if (first.end - first.start > MAX_CHUNK_CHARS) {
+      // 单段过长：按 MAX 硬切（每片仍是原文切片）。
+      for (let p = first.start; p < first.end; p += MAX_CHUNK_CHARS) {
+        out.push({ start: p, end: Math.min(p + MAX_CHUNK_CHARS, first.end), paraIndex: i + 1 });
+      }
+      i++;
+      continue;
+    }
+    // 贪心并入后续段落直到接近目标尺寸（遇过长段则停，留给下一轮硬切）。
+    let end = first.end;
+    let j = i + 1;
+    while (j < spans.length && spans[j].end - spans[j].start <= MAX_CHUNK_CHARS && spans[j].end - first.start <= CHUNK_TARGET_CHARS) {
+      end = spans[j].end;
+      j++;
+    }
+    out.push({ start: first.start, end, paraIndex: i + 1 });
+    i = j;
+  }
+  return out;
 }
 
 /**
  * 文档归一化文本 → 带稳定 id 的切块（§7.3 step 1）。
  * 二期 Spec §2.1：每块带 `modality:"doc"` + `char_start/char_end`（归一化文本中的偏移，
  * 供 UI 高亮源片段；不变量：`text.slice(char_start,char_end) === chunk.text`）。
- * 段落经 trim/splitLong 后仍是归一化文本的子串，故用单调游标按文档顺序定位偏移。
+ * `paragraph` = 合并块的首段序号（1 基）。
  */
 function chunkText(materialId: string, text: string): Chunk[] {
-  const paragraphs = text
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-  const chunks: Chunk[] = [];
-  let idx = 0;
-  let cursor = 0;
-  paragraphs.forEach((para, pIdx) => {
-    for (const piece of splitLong(para)) {
-      const charStart = text.indexOf(piece, cursor);
-      const charEnd = charStart + piece.length;
-      cursor = charEnd;
-      chunks.push({
-        chunk_id: `${materialId}#${idx}`,
-        material_id: materialId,
-        modality: "doc",
-        locator: { paragraph: pIdx + 1, char_start: charStart, char_end: charEnd },
-        text: piece,
-        content_hash: sha256(piece),
-      });
-      idx++;
-    }
+  return packChunkSpans(text).map((s, idx): Chunk => {
+    const piece = text.slice(s.start, s.end);
+    return {
+      chunk_id: `${materialId}#${idx}`,
+      material_id: materialId,
+      modality: "doc",
+      locator: { paragraph: s.paraIndex, char_start: s.start, char_end: s.end },
+      text: piece,
+      content_hash: sha256(piece),
+    };
   });
-  return chunks;
 }
 
 export class MaterialService {
@@ -206,8 +237,8 @@ export class MaterialService {
     return base;
   }
 
-  /** 归一化文本 → 切块并落 `.txt` + `.chunks.jsonl`，返回切块数（base64/流式共用）。 */
-  private async writeDocChunks(actor: Identity, caseDir: string, id: string, rawText: string): Promise<number> {
+  /** 归一化文本 → 切块并落 `.txt` + `.chunks.jsonl`，返回切块数 + 索引降级 note（base64/流式共用）。 */
+  private async writeDocChunks(actor: Identity, caseDir: string, id: string, rawText: string): Promise<{ count: number; indexNote?: string }> {
     const text = normalize(rawText);
     const chunks = chunkText(id, text);
     const processed = path.join(caseDir, "processed");
@@ -218,8 +249,8 @@ export class MaterialService {
       chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
       "utf8",
     );
-    await this.writeIndex(actor, caseDir, id, chunks); // 同提交写稠密索引（§5.3）
-    return chunks.length;
+    const idx = await this.writeIndex(actor, caseDir, id, chunks); // 同提交写稠密索引（§5.3），尽力而为
+    return { count: chunks.length, indexNote: idx.note };
   }
 
   /**
@@ -237,32 +268,23 @@ export class MaterialService {
       const pageText = normalize(page.text);
       if (pageText.length === 0) continue;
       texts.push(pageText);
-      const paragraphs = pageText
-        .split(/\n\s*\n/)
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0);
-      let cursor = 0;
-      paragraphs.forEach((para, pIdx) => {
-        for (const piece of splitLong(para)) {
-          const charStart = pageText.indexOf(piece, cursor);
-          const charEnd = charStart + piece.length;
-          cursor = charEnd;
-          chunks.push({
-            chunk_id: `${materialId}#${idx}`,
-            material_id: materialId,
-            modality: "doc",
-            locator: { page: page.page, paragraph: pIdx + 1, char_start: charStart, char_end: charEnd },
-            text: piece,
-            content_hash: sha256(piece),
-          });
-          idx++;
-        }
-      });
+      for (const s of packChunkSpans(pageText)) {
+        const piece = pageText.slice(s.start, s.end);
+        chunks.push({
+          chunk_id: `${materialId}#${idx}`,
+          material_id: materialId,
+          modality: "doc",
+          locator: { page: page.page, paragraph: s.paraIndex, char_start: s.start, char_end: s.end },
+          text: piece,
+          content_hash: sha256(piece),
+        });
+        idx++;
+      }
     }
     return { chunks, text: texts.join("\n\n") };
   }
 
-  private async writeDocChunksFromPages(actor: Identity, caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<number> {
+  private async writeDocChunksFromPages(actor: Identity, caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<{ count: number; indexNote?: string }> {
     const { chunks, text } = built;
     const processed = path.join(caseDir, "processed");
     await mkdir(processed, { recursive: true });
@@ -272,8 +294,8 @@ export class MaterialService {
       chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
       "utf8",
     );
-    await this.writeIndex(actor, caseDir, id, chunks);
-    return chunks.length;
+    const idx = await this.writeIndex(actor, caseDir, id, chunks);
+    return { count: chunks.length, indexNote: idx.note };
   }
 
   private async processDocAtIngest(
@@ -284,8 +306,8 @@ export class MaterialService {
     ext: string,
   ): Promise<{ status: MaterialStatus; chunk_count?: number; note?: string; engine?: string }> {
     if (isTextDocExt(ext)) {
-      const count = await this.writeDocChunks(actor, caseDir, id, await readFile(rawFilePath, "utf8"));
-      return { status: "done", chunk_count: count };
+      const { count, indexNote } = await this.writeDocChunks(actor, caseDir, id, await readFile(rawFilePath, "utf8"));
+      return { status: "done", chunk_count: count, note: indexNote };
     }
     try {
       const pages = (await this.docParser.parse(rawFilePath)).pages;
@@ -303,8 +325,8 @@ export class MaterialService {
           }
           const ocrBuilt = this.chunkDocPages(id, ocrPages);
           if (ocrBuilt.chunks.length === 0) return { status: "pending", note: SCANNED_DOC_NOTE };
-          const count = await this.writeDocChunksFromPages(actor, caseDir, id, ocrBuilt);
-          return { status: "done", chunk_count: count, engine: "liteparse+paddleocr" };
+          const { count, indexNote } = await this.writeDocChunksFromPages(actor, caseDir, id, ocrBuilt);
+          return { status: "done", chunk_count: count, engine: "liteparse+paddleocr", note: indexNote };
         } catch (e) {
           // 区分零外发拦截（authorize 抛 403）与真·空扫描件，便于运维定位。
           if (e instanceof AppError && e.status === 403) {
@@ -313,24 +335,49 @@ export class MaterialService {
           return { status: "pending", note: SCANNED_DOC_NOTE };
         }
       }
-      const count = await this.writeDocChunksFromPages(actor, caseDir, id, built);
-      return { status: "done", chunk_count: count, engine: "liteparse" };
+      const { count, indexNote } = await this.writeDocChunksFromPages(actor, caseDir, id, built);
+      return { status: "done", chunk_count: count, engine: "liteparse", note: indexNote };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       return { status: "pending", note: `${DEGRADE_NOTE["doc-binary"]}：${message}` };
     }
   }
 
-  /** 稠密索引：embed 切块文本 → 写 `index/<mid>.vec`（与 chunks 同序同提交，§5.3）。未配置 embed 即跳过。 */
-  private async writeIndex(actor: Identity, caseDir: string, materialId: string, chunks: Chunk[]): Promise<void> {
+  /**
+   * 稠密索引：embed 切块文本 → 写 `index/<mid>.vec`（与 chunks 同序同提交，§5.3）。未配置 embed 即跳过。
+   *
+   * **尽力而为红线（勿改回抛错）**：embedding 是 BM25 之上的增强（retrieveHybrid 向量缺失即退 BM25）。
+   * 它失败——云端点超时/不可达/未授权——绝不能阻断文档解析/摄入，更不能被误报成"文档解析不可用"
+   * 并把素材回退 pending（旧 bug：上传 PDF 卡 ~60s 后报 “The operation was aborted due to timeout”，
+   * 且盘上已有切块、状态却是 pending 的脏态）。故此处吞掉异常→落审计→返回 note，由调用方挂到素材 note。
+   * 注意：mock embed 在进程内同步、永不抛 → .vec 仍同提交落盘（§5.3 不变量与单测不受影响）。
+   */
+  private async writeIndex(actor: Identity, caseDir: string, materialId: string, chunks: Chunk[]): Promise<{ indexed: boolean; note?: string }> {
     const embed = this.slots.embed;
-    if (!embed || chunks.length === 0) return;
-    // 真 embed 槽出站前授权（零外发红线）：与 OCR/媒体摄入一致；mock/未配置端点为空→天然跳过。
-    await this.authorizeMedia(actor, [this.mediaEndpoints.embed], "embed-ingest");
-    const vectors = await embed.embed(chunks.map((c) => c.text));
-    const indexDir = path.join(caseDir, "index");
-    await mkdir(indexDir, { recursive: true });
-    await writeVec(path.join(indexDir, `${materialId}.vec`), { embed_model: embed.modelId, dim: embed.dim, count: chunks.length }, vectors);
+    if (!embed || chunks.length === 0) return { indexed: false };
+    try {
+      // 真 embed 槽出站前授权（零外发红线）：与 OCR/媒体摄入一致；mock/未配置端点为空→天然跳过。
+      await this.authorizeMedia(actor, [this.mediaEndpoints.embed], "embed-ingest");
+      const vectors = await embed.embed(chunks.map((c) => c.text));
+      const indexDir = path.join(caseDir, "index");
+      await mkdir(indexDir, { recursive: true });
+      await writeVec(path.join(indexDir, `${materialId}.vec`), { embed_model: embed.modelId, dim: embed.dim, count: chunks.length }, vectors);
+      return { indexed: true };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const caseId = path.basename(caseDir); // paths.caseDir(id)=join(casesDir,id) → basename 即 caseId
+      await this.audit
+        .append({
+          user: actor.id,
+          action: "material.index",
+          object: `material:${materialId}`,
+          result: "error",
+          caseId,
+          detail: { caseId, materialId, reason: "embed-failed", message },
+        })
+        .catch(() => undefined);
+      return { indexed: false, note: `${INDEX_DEGRADED_NOTE}：${message}` };
+    }
   }
 
   /**
@@ -440,6 +487,67 @@ export class MaterialService {
   }
 
   /**
+   * 删除素材（§5）：先从 manifest 摘除（权威），再清理 raw/processed/index 落盘，最后审计。
+   * 经 cases.get 复用访问 + 密级校验；各产物 `rm({force})` 幂等（缺失不报错）。
+   * 提交点顺序：manifest 先于文件——若中途崩溃，宁留孤儿文件（loadCaseChunks 只读 manifest 内素材，
+   * 不会读到）也不留"manifest 仍列、内容已删"的悬挂素材。
+   */
+  async remove(actor: Identity, caseId: string, materialId: string): Promise<void> {
+    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const manifest = await this.cases.loadManifest(caseId);
+    const material = manifest?.materials.find((m) => m.id === materialId);
+    if (!material) throw new AppError(404, "素材不存在");
+
+    await this.cases.detachMaterial(caseId, materialId);
+    const caseDir = this.paths.caseDir(caseId);
+    await Promise.all([
+      rm(path.join(caseDir, "materials", `${materialId}-${material.filename}`), { force: true }),
+      rm(path.join(caseDir, "processed", `${materialId}.txt`), { force: true }),
+      rm(path.join(caseDir, "processed", `${materialId}.chunks.jsonl`), { force: true }),
+      rm(path.join(caseDir, "processed", `${materialId}.media.json`), { force: true }),
+      rm(path.join(caseDir, "processed", `${materialId}.frames`), { recursive: true, force: true }),
+      rm(path.join(caseDir, "index", `${materialId}.vec`), { force: true }),
+    ]);
+    await this.audit.append({
+      user: actor.id,
+      action: "material.delete",
+      object: `material:${materialId}`,
+      caseId,
+      detail: { caseId, materialId, filename: material.filename, modality: material.modality },
+    });
+  }
+
+  /**
+   * 重建素材稠密索引（§5.3）：读盘上已落切块 → 尽力而为 embed → 重写 `index/<mid>.vec`。
+   * 供"上传时 embed 不可达 / 换嵌入模型后"手动恢复稠密检索（与摄入同 writeIndex 路径）。
+   * 成功即清除索引降级 note；失败回写降级原因。仅 done 素材可建（其切块已落盘）。
+   */
+  async reindex(actor: Identity, caseId: string, materialId: string): Promise<Material> {
+    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const manifest = await this.cases.loadManifest(caseId);
+    const material = manifest?.materials.find((m) => m.id === materialId);
+    if (!material) throw new AppError(404, "素材不存在");
+    if (material.status !== "done") throw new AppError(400, "仅已完成的素材可重建索引");
+    if (!this.slots.embed) throw new AppError(400, "未配置嵌入模型，无法重建稠密索引");
+    const chunks = await this.loadMaterialChunks(caseId, materialId);
+    if (chunks.length === 0) throw new AppError(400, "该素材无可索引切块");
+
+    const outcome = await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, chunks);
+    const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
+      m.note = outcome.note; // 成功→undefined（清降级提示）；失败→索引降级原因
+    });
+    await this.audit.append({
+      user: actor.id,
+      action: "material.reindex",
+      object: `material:${materialId}`,
+      result: outcome.indexed ? "ok" : "error",
+      caseId,
+      detail: { caseId, materialId, indexed: outcome.indexed, chunkCount: chunks.length },
+    });
+    return updated;
+  }
+
+  /**
    * 显式加工媒体素材（二期 §4.1/§4.2）。状态机 pending/failed/done → processing →
    * done|failed。幂等（重 process 生成新 chunk_id 版本，replace 不 append，§2.5）。
    * 提交点顺序（§2.4）：先把 media.json + chunks.jsonl 完整原子写盘 → 再翻 done → 审计，
@@ -492,7 +600,7 @@ export class MaterialService {
         out.chunks.map((c) => JSON.stringify(c)).join("\n") + (out.chunks.length ? "\n" : ""),
       );
       if (out.frames) await this.writeFrames(processedDir, materialId, out.frames);
-      await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3）
+      const idx = await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3），尽力而为
 
       const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
         m.status = "done";
@@ -501,7 +609,8 @@ export class MaterialService {
         if (out.duration !== undefined) m.duration = out.duration;
         m.engine = out.engine;
         m.processed_at = new Date().toISOString();
-        m.note = out.note; // 部分失败说明（§4.5）；全成功为 undefined
+        // 部分失败说明（§4.5）⊕ 稠密索引降级（embed 失败不阻断加工）；全成功为 undefined。
+        m.note = [out.note, idx.note].filter(Boolean).join("；") || undefined;
       });
       await this.audit.append({
         user: actor.id,

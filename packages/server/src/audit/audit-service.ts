@@ -108,9 +108,18 @@ export class AuditService {
   }
 
   async readAll(): Promise<AuditEvent[]> {
+    return this.readLog(this.paths.auditFile);
+  }
+
+  /** 读某专题的审计镜像 `cases/<id>/audit.log`（§7.2 本地筛选副本）；无则空。 */
+  async readCaseEvents(caseId: string): Promise<AuditEvent[]> {
+    return this.readLog(this.paths.caseAuditLog(caseId));
+  }
+
+  private async readLog(file: string): Promise<AuditEvent[]> {
     let raw: string;
     try {
-      raw = await readFile(this.paths.auditFile, "utf8");
+      raw = await readFile(file, "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw e;

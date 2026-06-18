@@ -42,7 +42,7 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
           密级：{CLEARANCE_LABELS[clearance]}
         </span>
         <span className="badge badge--offline" title="本应用零外发；检测到外发尝试将转为告警态">
-          ● 离线
+          离线
         </span>
         <span className="badge badge--devmode" title="开发模式：未接入正式开源模型链路，禁止涉密专题">
           开发模式
@@ -71,7 +71,9 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
               <circle cx="12" cy="7" r="4"/>
             </svg>
             <span>{user ? `${user.name}（${ROLE_LABELS[user.role]}）` : "未登录"}</span>
-            <span style={{ fontSize: "10px", opacity: 0.7 }}>▼</span>
+            <svg className="icon-svg" style={{ width: "10px", height: "10px", opacity: 0.7 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
           </button>
           {menuOpen ? (
             <div className="topbar__menu" role="menu">

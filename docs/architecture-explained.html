@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mini-agent / intel-workbench 架构讲解</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23121212'/%3E%3Cpath d='M6 10l10-6 10 6v12l-10 6-10-6z' fill='none' stroke='%2336d6bd' stroke-width='2'/%3E%3Cpath d='M16 4v24M6 10l20 12M26 10L6 22' stroke='%23ffbf5a' stroke-width='1.5'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121212;
+      --bg-2: #17191b;
+      --paper: #f4f1ea;
+      --paper-2: #e7e1d7;
+      --ink: #17191b;
+      --text: #f5f3ee;
+      --muted: #b9b2a8;
+      --line: rgba(244, 241, 234, 0.16);
+      --line-strong: rgba(244, 241, 234, 0.32);
+      --teal: #36d6bd;
+      --amber: #ffbf5a;
+      --coral: #ff725c;
+      --violet: #a58cff;
+      --green: #8fd66b;
+      --blue: #72b7ff;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+      --radius: 8px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: "Avenir Next", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+        var(--bg);
+      background-size: 28px 28px;
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.7;
+      letter-spacing: 0;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    code, pre { font-family: var(--mono); }
+    code {
+      padding: 0.12rem 0.34rem;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 5px;
+      background: rgba(255,255,255,0.06);
+      color: #f8e7bd;
+      font-size: 0.92em;
+      word-break: break-word;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .side {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 26px 18px;
+      border-right: 1px solid var(--line);
+      background: rgba(18,18,18,0.92);
+      backdrop-filter: blur(8px);
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: grid;
+      gap: 10px;
+      padding: 0 6px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(54,214,189,0.12), rgba(255,191,90,0.12));
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 800;
+    }
+
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .nav {
+      display: grid;
+      gap: 4px;
+      padding-top: 18px;
+    }
+
+    .nav a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 36px;
+      padding: 7px 9px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .nav a:hover,
+    .nav a.active {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+    }
+
+    .nav .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--line-strong);
+      flex: 0 0 auto;
+    }
+
+    .nav a.active .dot { background: var(--teal); }
+
+    .main {
+      min-width: 0;
+      padding: 34px min(5vw, 64px) 80px;
+    }
+
+    .hero {
+      min-height: 86vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(360px, 0.96fr);
+      gap: 34px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 28px;
+    }
+
+    .hero h2 {
+      margin: 0 0 20px;
+      max-width: 920px;
+      font-size: 72px;
+      line-height: 1.04;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .hero h2 span {
+      display: block;
+    }
+
+    .hero .lede {
+      max-width: 780px;
+      margin: 0;
+      color: #d9d2c7;
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 7px;
+      border: 1px solid var(--line-strong);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .button.secondary {
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 34px;
+      max-width: 800px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: rgba(255,255,255,0.045);
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .map-panel {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: #0e1111;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .map-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 46px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font: 12px/1.2 var(--mono);
+    }
+
+    .map-body { padding: 18px; }
+
+    .system-map {
+      display: grid;
+      gap: 12px;
+    }
+
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(255,255,255,0.035);
+    }
+
+    .layer h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .layer p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .layer.core { border-left: 4px solid var(--teal); }
+    .layer.server { border-left: 4px solid var(--amber); }
+    .layer.web { border-left: 4px solid var(--violet); }
+    .layer.storage { border-left: 4px solid var(--green); }
+
+    .pipe {
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font: 12px/1 var(--mono);
+      min-height: 16px;
+    }
+
+    section {
+      padding: 76px 0 0;
+      scroll-margin-top: 18px;
+    }
+
+    .section-title {
+      display: grid;
+      gap: 12px;
+      max-width: 980px;
+      margin-bottom: 24px;
+    }
+
+    .kicker {
+      color: var(--teal);
+      font: 700 12px/1.2 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    h2.section-heading {
+      margin: 0;
+      font-size: 44px;
+      line-height: 1.05;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .section-title p {
+      margin: 0;
+      color: #d9d2c7;
+      max-width: 860px;
+      font-size: 16px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      background: rgba(255,255,255,0.045);
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .card p,
+    .card li {
+      color: #d1cabf;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .card p { margin: 0 0 10px; }
+    .card p:last-child { margin-bottom: 0; }
+    .card ul { margin: 10px 0 0; padding-left: 19px; }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(0,0,0,0.22);
+      font: 12px/1.2 var(--mono);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(116px, 1fr));
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 142px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: rgba(255,255,255,0.045);
+    }
+
+    .flow-step::after {
+      content: "";
+      position: absolute;
+      right: -10px;
+      top: 50%;
+      width: 10px;
+      height: 1px;
+      background: var(--line-strong);
+    }
+
+    .flow-step:last-child::after { display: none; }
+
+    .flow-step .num {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      margin-bottom: 8px;
+      border-radius: 50%;
+      background: var(--paper);
+      color: var(--ink);
+      font: 800 12px/1 var(--mono);
+    }
+
+    .flow-step h3 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .diagram {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: #101313;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .diagram-title {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font: 12px/1.2 var(--mono);
+    }
+
+    .diagram-body { padding: 18px; }
+
+    .stack {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    .stack-col {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      min-height: 420px;
+    }
+
+    .stack-col h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    .node {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 12px;
+      background: rgba(255,255,255,0.045);
+      min-height: 72px;
+    }
+
+    .node strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.25;
+      color: var(--text);
+    }
+
+    .node span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .arrow-col {
+      display: grid;
+      place-items: center;
+      color: var(--line-strong);
+      font: 18px/1 var(--mono);
+      min-width: 24px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,0.035);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    th {
+      color: var(--paper);
+      background: rgba(255,255,255,0.055);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+    td { color: #d7d0c5; }
+
+    .codeblock {
+      margin: 0;
+      padding: 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #0a0d0d;
+      color: #e9e1d5;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .call-chain {
+      display: grid;
+      gap: 12px;
+    }
+
+    .call {
+      display: grid;
+      grid-template-columns: 168px minmax(0, 1fr);
+      gap: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .call .where {
+      color: var(--amber);
+      font: 700 12px/1.45 var(--mono);
+      word-break: break-word;
+    }
+
+    .call .what {
+      color: #d7d0c5;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .redline-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .redline {
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      padding: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.025));
+    }
+
+    .redline b {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      color: var(--ink);
+      background: var(--paper);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .redline h3 {
+      margin: 0 0 10px;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    .redline p {
+      margin: 0;
+      color: #d7d0c5;
+      font-size: 14px;
+    }
+
+    .state-machine {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .state {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: rgba(255,255,255,0.045);
+      min-height: 112px;
+    }
+
+    .state strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.3;
+    }
+
+    .state span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .note {
+      border-left: 4px solid var(--teal);
+      padding: 14px 16px;
+      background: rgba(54,214,189,0.08);
+      color: #dffaf4;
+      border-radius: 0 7px 7px 0;
+      font-size: 14px;
+    }
+
+    .warn {
+      border-left-color: var(--amber);
+      background: rgba(255,191,90,0.08);
+      color: #ffe7bd;
+    }
+
+    .mini-map {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+    }
+
+    .milestone {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      min-height: 150px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .milestone.done { border-color: rgba(143,214,107,0.5); }
+    .milestone.current { border-color: rgba(255,191,90,0.75); }
+    .milestone.blocked { border-color: rgba(255,114,92,0.55); }
+
+    .milestone b {
+      display: block;
+      color: var(--paper);
+      font: 800 13px/1.2 var(--mono);
+      margin-bottom: 8px;
+    }
+
+    .milestone p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    footer {
+      margin-top: 80px;
+      padding-top: 28px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mobile-title { display: none; }
+
+    @media (max-width: 1080px) {
+      .app { grid-template-columns: 1fr; }
+      .side {
+        position: relative;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .hero { grid-template-columns: 1fr; min-height: auto; padding-top: 24px; }
+      .hero h2 { font-size: 54px; }
+      h2.section-heading { font-size: 36px; }
+      .stack { grid-template-columns: 1fr; }
+      .arrow-col { min-height: 28px; transform: rotate(90deg); }
+      .grid-2, .grid-3, .redline-grid { grid-template-columns: 1fr; }
+      .status-strip { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .main { padding: 24px 16px 56px; }
+      .side { padding: 18px 12px; }
+      .nav { grid-template-columns: 1fr; }
+      .hero h2 { font-size: 38px; }
+      h2.section-heading { font-size: 30px; }
+      .flow { grid-template-columns: repeat(8, 140px); }
+      .state-machine { grid-template-columns: 1fr; }
+      .call { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" role="img">
+            <path d="M5 8.5L14 3.5L23 8.5V19.5L14 24.5L5 19.5V8.5Z" stroke="#36d6bd" stroke-width="1.6"/>
+            <path d="M8.5 11L14 8L19.5 11V17L14 20L8.5 17V11Z" stroke="#ffbf5a" stroke-width="1.6"/>
+            <path d="M14 8V20M8.5 11L19.5 17M19.5 11L8.5 17" stroke="#f4f1ea" stroke-width="1.1" opacity=".85"/>
+          </svg>
+        </div>
+        <h1>mini-agent 架构地图</h1>
+        <p>按当前 `feat/intel-p3-harness` 分支整理。重点讲系统如何从本地 agent runtime 演进成情报分析工作台。</p>
+      </div>
+      <nav class="nav" aria-label="页面章节">
+        <a href="#overview"><span class="dot"></span>项目定位</a>
+        <a href="#layers"><span class="dot"></span>三层架构</a>
+        <a href="#end-to-end"><span class="dot"></span>主链路</a>
+        <a href="#core"><span class="dot"></span>Core Runtime</a>
+        <a href="#server"><span class="dot"></span>Server Harness</a>
+        <a href="#agent-qa"><span class="dot"></span>Agent 问答</a>
+        <a href="#redlines"><span class="dot"></span>三条红线</a>
+        <a href="#web"><span class="dot"></span>前端工作台</a>
+        <a href="#storage"><span class="dot"></span>落盘结构</a>
+        <a href="#stages"><span class="dot"></span>阶段与下一步</a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <section class="hero" id="overview">
+        <div>
+          <h2>
+            <span>一个本地优先的</span>
+            <span>Agent Harness</span>
+            <span>外面包了一套</span>
+            <span>情报工作台。</span>
+          </h2>
+          <p class="lede">
+            这个仓库现在不是单纯的 CLI agent，也不是普通的 CRUD Web 应用。它的核心是 `packages/core` 里的 mini-agent runtime：
+            模型、工具、技能、会话、run trace 都在这里。`packages/server` 把这套 runtime 接入情报业务，并把零外发、溯源、审计这些红线做成工具边界。
+            `packages/web` 则提供操作者和管理员使用的 React 工作台。
+          </p>
+          <div class="hero-actions">
+            <a class="button" href="../packages/core/src/runtime/agent.ts">看 RuntimeAgent</a>
+            <a class="button secondary" href="../packages/server/src/inquiry/inquiry-service.ts">看 InquiryService</a>
+            <a class="button secondary" href="../packages/web/src/pages/CaseWorkbench.tsx">看前端工作台</a>
+          </div>
+          <div class="status-strip">
+            <div class="metric"><strong>当前阶段</strong><span>P3.D 五个模型槽全部接真（OCR/Embed/Rerank/VLM/ASR），下一步做好已有功能。</span></div>
+            <div class="metric"><strong>验证基线</strong><span>`npm run check` 当前通过：61 个测试文件，491 个测试。</span></div>
+            <div class="metric"><strong>部署假设</strong><span>本地/气隙优先，模型端点和多模态槽通过白名单授权。</span></div>
+          </div>
+        </div>
+
+        <div class="map-panel" aria-label="架构简图">
+          <div class="map-head"><span>system-map</span><span>local-first</span></div>
+          <div class="map-body">
+            <div class="system-map">
+              <div class="layer web">
+                <h3>Web Workbench</h3>
+                <p>React + Vite。登录、专题、素材、问答、要素、报告、审计、后台提示词管理。</p>
+              </div>
+              <div class="pipe">HTTP JSON / SSE</div>
+              <div class="layer server">
+                <h3>Server Harness</h3>
+                <p>Express API。组合 Case、Material、Inquiry、Audit、Auth、Admin 等服务，把业务变成受控工具。</p>
+              </div>
+              <div class="pipe">RuntimeAgent + extraTools + toolMiddleware</div>
+              <div class="layer core">
+                <h3>mini-agent Core</h3>
+                <p>Agent 循环、工具注册、模型适配器、技能系统、会话 JSONL、run trace、CLI。</p>
+              </div>
+              <div class="pipe">append-only files</div>
+              <div class="layer storage">
+                <h3>Local Storage</h3>
+                <p>`cases/`、`audit/`、`config/`、`.mini-agent/runs/`。文件系统就是权威数据源。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="layers">
+        <div class="section-title">
+          <div class="kicker">01 / architecture</div>
+          <h2 class="section-heading">三层架构：core 提供 agent 能力，server 绑定业务边界，web 承载工作流。</h2>
+          <p>理解这个项目最重要的是分清三层的责任。core 不懂“专题、密级、素材、通报”；server 不自己发明 agent 循环，而是把业务工具注入 core；web 不直接操作文件，只通过受鉴权的 API 和 SSE 展示结果。</p>
+        </div>
+
+        <div class="diagram">
+          <div class="diagram-title"><span>package-boundaries</span><span>packages/*</span></div>
+          <div class="diagram-body">
+            <div class="stack">
+              <div class="stack-col">
+                <h3>packages/core</h3>
+                <div class="node"><strong>RuntimeAgent / RuntimeConversation</strong><span>创建会话，串行 send，按 run 启动 agent loop。</span></div>
+                <div class="node"><strong>runAgentLoop</strong><span>构造 system prompt，调用模型，执行工具，把消息和工具结果写 session。</span></div>
+                <div class="node"><strong>ToolRegistry</strong><span>注册 read/write/edit/bash/analyze_media/activate_skill 等默认工具，也支持 run 级 extraTools。</span></div>
+                <div class="node"><strong>ModelAdapter</strong><span>OpenAI-compatible generate / stream，统一工具调用格式。</span></div>
+                <div class="node"><strong>Session / Run Store</strong><span>JSONL 会话与 `.mini-agent/runs` 轨迹。</span></div>
+              </div>
+              <div class="arrow-col">→</div>
+              <div class="stack-col">
+                <h3>packages/server</h3>
+                <div class="node"><strong>createApp</strong><span>装配数据路径、审计、鉴权、模型、slots、所有业务服务和路由。</span></div>
+                <div class="node"><strong>InquiryService</strong><span>把问答从单发 generateJson 升级为 agent harness 工具链。</span></div>
+                <div class="node"><strong>MaterialService</strong><span>汇入、切块、媒体加工、向量索引、原始素材/帧读取。</span></div>
+                <div class="node"><strong>AuditService / OfflineGuard</strong><span>审计哈希链与模型/slot 出站授权。</span></div>
+                <div class="node"><strong>PromptStore / AdminService</strong><span>受管提示词、用户、模型状态、技能状态。</span></div>
+              </div>
+              <div class="arrow-col">→</div>
+              <div class="stack-col">
+                <h3>packages/web</h3>
+                <div class="node"><strong>App Routes</strong><span>作业面、管理面、审计中心，按会话和角色守卫。</span></div>
+                <div class="node"><strong>CaseWorkbench</strong><span>专题内的素材、要素、问答、报告、审计标签页。</span></div>
+                <div class="node"><strong>api.ts</strong><span>统一带 token 调 API，解析 SSE，处理 401 自动登出。</span></div>
+                <div class="node"><strong>Admin.tsx</strong><span>提示词编辑、版本回看、用户管理、模型/技能诊断。</span></div>
+                <div class="node"><strong>styles.css</strong><span>工作台视觉系统和响应式布局。</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-3" style="margin-top:16px">
+          <div class="card">
+            <h3>core 是通用 harness</h3>
+            <p>core 的稳定出口在 <a href="../packages/core/src/index.ts"><code>packages/core/src/index.ts</code></a>。server 通过 `import { RuntimeAgent } from "mini-agent"` 使用它，而不是深入 import 内部文件。</p>
+          </div>
+          <div class="card">
+            <h3>server 是可信边界</h3>
+            <p>server 负责把业务约束变成工具能力。agent 不能直接随便读 `cases/`，它只能调 server 暴露的 `search_chunks`、`read_chunk`、`cite`、`finalize_answer` 等工具。</p>
+          </div>
+          <div class="card">
+            <h3>web 是操作界面</h3>
+            <p>前端没有业务权威。它只保存会话 token，所有数据来自 `/api`，流式问答来自 `/api/cases/:id/inquiries/stream`。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="end-to-end">
+        <div class="section-title">
+          <div class="kicker">02 / main flow</div>
+          <h2 class="section-heading">端到端主链路：从文件进来，到带出处的结论出去。</h2>
+          <p>这条链路是整个系统的骨架。素材不是直接喂给模型，而是先落盘、加工成 chunk、进入检索，再由 agent 用工具逐步检索、阅读、接地引用，最后通过 finalize 契约生成可入库的问答记录。</p>
+        </div>
+
+        <div class="flow" aria-label="端到端流程">
+          <div class="flow-step"><span class="num">1</span><h3>登录</h3><p>`AuthService.login` 校验本地用户，发内存 token，审计 `auth.login`。</p></div>
+          <div class="flow-step"><span class="num">2</span><h3>建专题</h3><p>`CaseService.create` 写 `manifest.json`，按角色和密级约束创建。</p></div>
+          <div class="flow-step"><span class="num">3</span><h3>上传素材</h3><p>`MaterialService.ingest` 或 `ingestStream` 把原始文件写入 `materials/`。</p></div>
+          <div class="flow-step"><span class="num">4</span><h3>加工切块</h3><p>文档直接切 chunk；音视频图像走媒体管线，产出 `media.json` 和 `.chunks.jsonl`。</p></div>
+          <div class="flow-step"><span class="num">5</span><h3>检索</h3><p>BM25、dense embedding、rerank 组合，预算不足时只取相关上下文。</p></div>
+          <div class="flow-step"><span class="num">6</span><h3>Agent 工具</h3><p>agent 调 `search_chunks`、`read_chunk`、`cite`、按需媒体工具。</p></div>
+          <div class="flow-step"><span class="num">7</span><h3>Finalize</h3><p>`finalize_answer` 是最终结论唯一入口，raw final text 不直接入库。</p></div>
+          <div class="flow-step"><span class="num">8</span><h3>审计展示</h3><p>工具调用、问答创建、出站授权都入审计链，前端展示 citation 与回放。</p></div>
+        </div>
+
+        <div class="call-chain" style="margin-top:18px">
+          <div class="call">
+            <div class="where">web/src/api.ts</div>
+            <div class="what">前端所有鉴权请求都带 `Authorization: Bearer &lt;token&gt;`。流式问答由 `askInquiryStream` 读取 `ReadableStream`，用 `TextDecoder` 处理跨 chunk UTF-8，再拆 SSE frame。</div>
+          </div>
+          <div class="call">
+            <div class="where">routes/inquiries.ts</div>
+            <div class="what">`POST /api/cases/:id/inquiries/stream` 设置 `text/event-stream`，把 server 侧 `InquiryStreamEvent` 写成 `data: ...\n\n`。客户端断连时用 `AbortController` 中止 agent run。</div>
+          </div>
+          <div class="call">
+            <div class="where">InquiryService.askStream</div>
+            <div class="what">校验问题、校验专题访问、检查是否有 chunk、检查文本 LLM 配置，然后进入 `runAgentInquiry`。空素材直接返回 insufficient，不浪费模型调用。</div>
+          </div>
+          <div class="call">
+            <div class="where">RuntimeAgent.run</div>
+            <div class="what">server 创建本次问答的 ledger 和工具数组，通过 run 级 `extraTools` 注入 core。toolMiddleware 把工具调用同步写进审计。</div>
+          </div>
+          <div class="call">
+            <div class="where">makeFromLedger</div>
+            <div class="what">server 不信任模型最后那段自由文本，而是只读取 ledger.finalize 中的 claims，再交叉检查 ledger.cited，组装 `Inquiry`。</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="core">
+        <div class="section-title">
+          <div class="kicker">03 / core runtime</div>
+          <h2 class="section-heading">Core Runtime：一个迷你 Claude Code 风格的本地 agent 循环。</h2>
+          <p>`packages/core` 的职责是通用 agent 能力：模型适配、工具调用、技能激活、会话持久化、run 轨迹。它不理解情报业务，所以后续业务能力都通过 extraTools 和 modelAdapter override 接进来。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>RuntimeAgent.create</h3>
+            <p>agent 的构造入口。它解析配置、准备模型适配器、工具注册表、技能注册表、session store、run store。现在支持 `RuntimeAgent.create(options)`，旧的 `new RuntimeAgent(...)` 路径已废弃。</p>
+            <div class="tag-row">
+              <span class="tag">runtime/agent.ts</span>
+              <span class="tag">runtime/config.ts</span>
+              <span class="tag">skills/registry.ts</span>
+            </div>
+          </div>
+          <div class="card">
+            <h3>RuntimeConversation.send</h3>
+            <p>同一个 conversation 的 send 被内部队列串行化，避免多次 ask 同时改 `messages` 和 session JSONL。每次 send 产生一个 run，由 RunManager 管理状态和 trace。</p>
+            <div class="tag-row">
+              <span class="tag">sendQueue</span>
+              <span class="tag">session JSONL</span>
+              <span class="tag">runId</span>
+            </div>
+          </div>
+          <div class="card">
+            <h3>runAgentLoop</h3>
+            <p>循环步骤是固定的：构造 system prompt，发模型请求，记录模型响应，如果有 tool_calls 就逐个执行工具，把结果追加为 tool message，再进入下一轮。没有 tool_calls 时结束。</p>
+            <div class="tag-row">
+              <span class="tag">runtime/loop.ts</span>
+              <span class="tag">modelAdapter.generate</span>
+              <span class="tag">modelAdapter.stream</span>
+            </div>
+          </div>
+          <div class="card">
+            <h3>ToolRegistry</h3>
+            <p>工具定义使用 zod schema，注册时同名冲突直接报错。执行时先校验参数，再带 AbortSignal 和 timeout 调工具。P3.0 增加了 `withExtraTools`，让 server 可以按 run 注入业务工具。</p>
+            <div class="tag-row">
+              <span class="tag">tools/index.ts</span>
+              <span class="tag">zod inputSchema</span>
+              <span class="tag">strict JSON schema</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="diagram" style="margin-top:18px">
+          <div class="diagram-title"><span>agent-loop</span><span>one run</span></div>
+          <div class="diagram-body">
+            <pre class="codeblock">用户输入
+  ↓
+RuntimeConversation.send(prompt, signal, overrides)
+  ↓
+RunManager.start() 生成 runId，并记录 prompt / provider / model
+  ↓
+runAgentLoop()
+  ├─ buildSystemPrompt()
+  ├─ modelAdapter.generate() 或 modelAdapter.stream()
+  ├─ sessionStore.appendEntry(assistant message)
+  ├─ 如果 assistant.toolCalls 存在：
+  │    ├─ sessionStore.appendEntry(tool_call)
+  │    ├─ toolMiddleware(toolCall, runTool) 可选包裹
+  │    ├─ ToolRegistry.execute()
+  │    └─ sessionStore.appendEntry(tool_result)
+  └─ 如果没有 toolCalls：finalMessage = assistant message
+  ↓
+RunManager.complete() / fail()
+  ↓
+返回 { runId, sessionId, sessionPath, finalMessage }</pre>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:16px">
+          P3.B-stream 的关键变化是 `ModelAdapter.stream?()` 成为一等能力。stream 事件先给 UI 显示 token/tool_call_delta，适配器内部仍组装完整的 `GenerateResult`，最后用 `complete` 事件交还给 loop，所以非流式和流式的最终消息结构保持一致。
+        </div>
+      </section>
+
+      <section id="server">
+        <div class="section-title">
+          <div class="kicker">04 / server harness</div>
+          <h2 class="section-heading">Server Harness：把业务系统拆成可审计、可组合、可降级的服务。</h2>
+          <p>`createApp` 是 server 的装配中心。它决定数据根、创建审计服务、用户存储、模型适配器、OfflineGuard、模型槽、业务服务，再统一挂到 `/api` 路由下。</p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>服务</th><th>文件</th><th>核心职责</th><th>关键不变量</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>AuthService / UserStore</td>
+                <td><code>auth/auth-service.ts</code><br><code>auth/user-store.ts</code></td>
+                <td>本地登录、内存 session token、用户增删改、scrypt 口令哈希。</td>
+                <td>登录失败也走假哈希校验，降低用户名枚举侧信道；登录/登出入审计。</td>
+              </tr>
+              <tr>
+                <td>CaseService</td>
+                <td><code>cases/case-service.ts</code></td>
+                <td>专题 CRUD、密级校验、manifest 原子写、素材挂载、崩溃清扫。</td>
+                <td>同一 manifest 的 read-modify-write 通过 FileMutationQueue 串行。</td>
+              </tr>
+              <tr>
+                <td>MaterialService</td>
+                <td><code>materials/material-service.ts</code></td>
+                <td>素材上传、文本切块、媒体加工、帧文件、向量索引、chunk 加载。</td>
+                <td>媒体加工先写完整产物，再翻 `done`，避免问答读到 done 但零 chunk。</td>
+              </tr>
+              <tr>
+                <td>InquiryService</td>
+                <td><code>inquiry/inquiry-service.ts</code></td>
+                <td>问答单发路径、agent 路径、SSE 流式问答、检索、ledger 转 Inquiry。</td>
+                <td>agent 路只从 `finalize_answer` 和 ledger 生成最终记录。</td>
+              </tr>
+              <tr>
+                <td>ElementService</td>
+                <td><code>elements/element-service.ts</code></td>
+                <td>结构化要素抽取，复用 citation 校验，只保留有有效 mentions 的要素。</td>
+                <td>要素抽取继续用 `generateJson`，不强行改成 agent loop。</td>
+              </tr>
+              <tr>
+                <td>ReportService</td>
+                <td><code>report/report-service.ts</code></td>
+                <td>报告草稿、提交复核、保密员/管理员核准、导出闸门。</td>
+                <td>未复核禁止导出，并记录 deny 审计。</td>
+              </tr>
+              <tr>
+                <td>AuditService</td>
+                <td><code>audit/audit-service.ts</code></td>
+                <td>append-only 审计 JSONL、payload_hash、prev_hash、event_hash、verify。</td>
+                <td>全局 `audit/audit.jsonl` 是权威，专题审计日志只是镜像副本。</td>
+              </tr>
+              <tr>
+                <td>PromptStore / AdminService</td>
+                <td><code>admin/prompt-store.ts</code><br><code>admin/admin-service.ts</code></td>
+                <td>受管提示词、版本归档、模型/技能/用户后台。</td>
+                <td>提示词不能为空；编辑先归档旧版，再写当前版本并审计。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid-2" style="margin-top:16px">
+          <div class="card">
+            <h3>服务装配顺序为什么重要</h3>
+            <p>`createApp` 先创建数据路径和审计，再创建鉴权和专题，再读模型配置和 slot 配置，最后把 `OfflineGuard`、`MaterialService`、`InquiryService` 等组合起来。这样每个业务服务都能复用同一条审计链和同一套访问控制。</p>
+          </div>
+          <div class="card">
+            <h3>API 路由是薄层</h3>
+            <p>路由文件基本只做 HTTP 参数解析和响应。实际业务都落在 service 中，这让测试可以绕开 HTTP，直接用临时 dataDir 和 mock adapter 跑端到端。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="agent-qa">
+        <div class="section-title">
+          <div class="kicker">05 / agent inquiry</div>
+          <h2 class="section-heading">Agent 问答新范式：让 agent 自由检索，但只给它安全工具。</h2>
+          <p>旧问答是单次 `generateJson`：先选上下文，再让模型一次性吐 JSON，然后事后过滤 citation。三期转向后，问答进入 core harness：模型可以多轮决定检索什么、读哪些 chunk、何时引用、何时结束，但它看不到任意文件系统写工具，也不能直接把自由文本当结论入库。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="diagram">
+            <div class="diagram-title"><span>tool-contract</span><span>per ask ledger</span></div>
+            <div class="diagram-body">
+              <pre class="codeblock">createCitationLedger()
+  retrieved: Map&lt;chunk_id, Chunk&gt;
+  cited: Map&lt;chunk_id, Citation&gt;
+  finalize: { claims } | null
+  readBytes: number
+
+extraTools for this run:
+  search_chunks(query, k)
+    → 检索本专题 chunks
+    → 写 ledger.retrieved
+
+  read_chunk(chunk_id)
+    → 只能读 retrieved 里已有的 chunk
+    → 受 readBudgetBytes / perReadCapBytes 限制
+
+  cite(chunk_id, claim)
+    → 复用 resolveValidCitations
+    → 校验 content_hash
+    → 写 ledger.cited
+
+  finalize_answer({ claims })
+    → 写 ledger.finalize
+    → server 从这里生成 Inquiry</pre>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>为什么要有 `finalize_answer`</h3>
+            <p>core loop 的天然终点是“模型发了一条没有 tool_calls 的 assistant message”。这对普通聊天没问题，但对情报系统有风险：模型可能在最终自由文本里加入没有 cite 的新断言。</p>
+            <p>所以 server 侧规定：最终问答记录只从 `finalize_answer({claims})` 和 ledger 生成。没有 finalize，就判 `insufficient` 或 `error`；raw final text 不入库。</p>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead>
+              <tr><th>工具</th><th>模型看到的能力</th><th>server 实际做的约束</th><th>为什么安全</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>search_chunks</code></td>
+                <td>按 query 搜索本专题片段。</td>
+                <td>固定 caseId，不接受跨专题参数；只返回 id、snippet、locator、material_name。</td>
+                <td>agent 不能枚举全局文件，也不能凭空 cite 未检索 chunk。</td>
+              </tr>
+              <tr>
+                <td><code>read_chunk</code></td>
+                <td>读取某个 chunk 全文。</td>
+                <td>只能读本次 ledger.retrieved 中已有 chunk；读取总量和单次长度受预算限制。</td>
+                <td>防止长文档撑爆本地模型上下文，也防止绕过检索范围。</td>
+              </tr>
+              <tr>
+                <td><code>cite</code></td>
+                <td>把 claim 绑定到 chunk。</td>
+                <td>通过 `resolveValidCitations` 校验 chunk 存在且 `sha256(text) === content_hash`。</td>
+                <td>citation 不是模型说了算，而是 server 根据真实 chunk 重建。</td>
+              </tr>
+              <tr>
+                <td><code>transcribe/caption_frame/ocr_region</code></td>
+                <td>检索不足时按需重看原始媒体。</td>
+                <td>只能读本专题素材，体量封顶，real slot 出站前过 OfflineGuard。</td>
+                <td>按需多模态产出的临时 chunk 也进入 ledger，后续仍需 cite。</td>
+              </tr>
+              <tr>
+                <td><code>finalize_answer</code></td>
+                <td>提交本次最终 claims。</td>
+                <td>server 只认其中 claim 和 cite_ids，未 cite 的结论降级待核或 insufficient。</td>
+                <td>把最终答案从“自由文本”变成“可检查结构”。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note warn" style="margin-top:16px">
+          当前 P3.A/P3.B 问答没有把 core 默认的 `bash`、`write`、`edit` 暴露给情报 agent。P3.0-iso 的降权子进程隔离只有在未来真的给 agent 任意写工具时才需要做。
+        </div>
+      </section>
+
+      <section id="redlines">
+        <div class="section-title">
+          <div class="kicker">06 / invariants</div>
+          <h2 class="section-heading">三条红线不是提示词口号，而是代码里的不变量。</h2>
+          <p>项目最核心的安全思路是：不要指望模型“自觉”。模型可以自由推理，但它拿到的工具、工具的参数、工具返回的数据、最终入库的格式，都由 server 侧硬约束。</p>
+        </div>
+
+        <div class="redline-grid">
+          <div class="redline">
+            <b>Redline 1</b>
+            <h3>零外发</h3>
+            <p>文本模型、embedding、rerank、ASR、VLM、OCR 这些应用自身出站都要过 `OfflineGuard.authorize`。白名单 host 放行并审计，非白名单抛 403 并审计 `egress.deny`。</p>
+          </div>
+          <div class="redline">
+            <b>Redline 2</b>
+            <h3>Citation 溯源</h3>
+            <p>每个 chunk 带 `content_hash = sha256(text)`。模型只能提出 cite 请求，server 用真实 chunk 重建 Citation。hash 不一致或未检索过，就不进入台账。</p>
+          </div>
+          <div class="redline">
+            <b>Redline 3</b>
+            <h3>审计链</h3>
+            <p>审计事件稳定序列化后计算 `payload_hash`，再和前一个事件的 `prev_hash` 拼成 `event_hash`。`verify()` 可以定位篡改或断链。</p>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top:16px">
+          <div class="diagram">
+            <div class="diagram-title"><span>egress guard</span><span>model + slots</span></div>
+            <div class="diagram-body">
+              <pre class="codeblock">guardModelAdapter(adapter, guard, ctx)
+  generate(input):
+    if endpoint empty → 503
+    guard.authorize(endpoint, { user, purpose })
+    adapter.generate(input)
+
+  stream(input):
+    if endpoint empty → 503
+    guard.authorize(endpoint, { user, purpose })
+    yield* adapter.stream(input)
+
+media tools:
+  if slot endpoint exists:
+    guard.authorize(slotEndpoint, purpose)
+  call ASR / VLM / OCR adapter</pre>
+            </div>
+          </div>
+          <div class="diagram">
+            <div class="diagram-title"><span>audit hash chain</span><span>append-only</span></div>
+            <div class="diagram-body">
+              <pre class="codeblock">base event:
+  { id, ts, user, action, object, result, detail }
+
+payload_hash = sha256(stableStringify(base))
+event_hash   = sha256(payload_hash + prev_hash)
+
+AuditEvent:
+  { ...base, payload_hash, prev_hash, event_hash }
+
+write:
+  append audit/audit.jsonl
+  if caseId exists:
+    append cases/&lt;id&gt;/audit.log</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="web">
+        <div class="section-title">
+          <div class="kicker">07 / web workbench</div>
+          <h2 class="section-heading">前端工作台：围绕专题，把素材、问答、要素、报告和审计放在一个操作面里。</h2>
+          <p>React 前端不是演示壳，而是完整工作台。它有登录会话、角色守卫、作业面、管理面、审计中心。专题工作台里每个标签页都对应 server 的一组服务。</p>
+        </div>
+
+        <div class="state-machine">
+          <div class="state"><strong>登录页</strong><span>`/login` 调 `POST /api/auth/login`，成功后保存 token 和用户信息。</span></div>
+          <div class="state"><strong>作业面</strong><span>`/` 专题列表，`/cases/new` 新建专题，`/cases/:id/*` 进入工作台。</span></div>
+          <div class="state"><strong>管理面</strong><span>`/admin/prompts`、`skills`、`models`、`users`，仅管理员访问。</span></div>
+          <div class="state"><strong>审计中心</strong><span>`/audit` 给管理员和保密员查看全局审计与 verify。</span></div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead>
+              <tr><th>页面</th><th>核心组件</th><th>对应 API</th><th>业务含义</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>线索素材</td>
+                <td><code>MaterialsPanel</code></td>
+                <td>`GET/POST /api/cases/:id/materials`<br>`POST /process`</td>
+                <td>上传原始文件，触发媒体加工，查看转写段、分镜、OCR、bbox。</td>
+              </tr>
+              <tr>
+                <td>要素提取</td>
+                <td><code>ElementsPanel</code></td>
+                <td>`GET/POST /api/cases/:id/elements`</td>
+                <td>从已加工 chunk 中抽人物、组织、地点、事件等，并绑定出处。</td>
+              </tr>
+              <tr>
+                <td>智能问答</td>
+                <td><code>InquiryPanel</code></td>
+                <td>`GET /inquiries`<br>`POST /inquiries/stream`</td>
+                <td>显示聊天历史、流式 token、工具轨迹、citation chip、音频回听和帧框选。</td>
+              </tr>
+              <tr>
+                <td>通报起草</td>
+                <td><code>ReportPanel</code></td>
+                <td>`GET /report`<br>`POST /draft/submit/approve/export`</td>
+                <td>报告草稿、保密复核、导出闸门。</td>
+              </tr>
+              <tr>
+                <td>专题审计</td>
+                <td><code>CaseAuditPanel</code></td>
+                <td>`GET /api/audit?caseId=...`</td>
+                <td>查看本专题关联的审计事件。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid-2" style="margin-top:16px">
+          <div class="card">
+            <h3>流式问答 UI 的状态机</h3>
+            <p>`InquiryPanel` 保存 `history`、`liveQuestion`、`liveText`、`toolTrace`、`busy`、`frameCite`。token 事件追加到 liveText；tool_start 增加 running 轨迹；tool_result 更新 ok/failed；done 后把 inquiry 加到 history 并清 live state。</p>
+          </div>
+          <div class="card">
+            <h3>引用回放不是装饰</h3>
+            <p>音频 citation 带 timecode 时，点击 chip 会拉原始素材并跳播片段。视频/图像 citation 带 bbox 或 timecode 时，点击会取帧并叠加框选。这是“溯源可复核”的前端体现。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="storage">
+        <div class="section-title">
+          <div class="kicker">08 / storage</div>
+          <h2 class="section-heading">数据落盘：文件系统是权威数据库。</h2>
+          <p>这个项目刻意保持 local-first。没有引入外部数据库，业务状态都落在数据根目录下。默认数据根是进程工作目录，也可以用 `WORKBENCH_DATA_DIR` 覆盖。</p>
+        </div>
+
+        <pre class="codeblock">WORKBENCH_DATA_DIR 或仓库根
+├── cases/
+│   └── &lt;caseId&gt;/
+│       ├── manifest.json              # 专题元数据、密级、素材列表、状态
+│       ├── materials/
+│       │   └── &lt;materialId&gt;-&lt;filename&gt; # 原始素材
+│       ├── processed/
+│       │   ├── &lt;materialId&gt;.txt        # 文本文档归一化结果
+│       │   ├── &lt;materialId&gt;.media.json # 音视频图像加工中间结果
+│       │   ├── &lt;materialId&gt;.chunks.jsonl
+│       │   └── &lt;materialId&gt;.frames/
+│       │       └── &lt;t&gt;.svg             # mock 视频/图像帧
+│       ├── index/
+│       │   └── &lt;materialId&gt;.vec        # embedding 向量索引
+│       ├── inquiries.jsonl             # 问答记录
+│       ├── elements.json               # 要素抽取结果
+│       ├── report/
+│       │   ├── report.json
+│       │   ├── bulletin.spec.json
+│       │   └── bulletin.md
+│       └── audit.log                   # 该专题审计镜像
+├── audit/
+│   └── audit.jsonl                     # 全局审计哈希链
+├── config/
+│   ├── users.json                      # 本地用户
+│   └── prompts/
+│       ├── inquiry-methodology.md
+│       └── *.versions/*.md
+└── .agent-scratch/                     # inquiry agent 工作区</pre>
+
+        <div class="grid-2" style="margin-top:16px">
+          <div class="card">
+            <h3>为什么不用数据库</h3>
+            <p>当前目标是本地、离线、可检查。文件结构让审计、素材、模型中间结果和报告产物都可以直接被人工复核。测试也更简单：每个用例创建临时 dataDir，跑完删除。</p>
+          </div>
+          <div class="card">
+            <h3>并发靠小粒度队列</h3>
+            <p>最容易出错的是 `manifest.json` 的 read-modify-write，例如同时 ingest 和 process。`CaseService` 用 core 提供的 `FileMutationQueue` 按文件路径串行，避免 last-writer-wins。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="stages">
+        <div class="section-title">
+          <div class="kicker">09 / roadmap</div>
+          <h2 class="section-heading">当前开发阶段：P3.D 五个模型槽全部接真，下一步做好已有功能。</h2>
+          <p>从提交历史看，一期、二期、P3.0/A/B、P3.doc/ocr 已落地；P3.D 已把五个模型槽全部从 mock 换成真实端点（OCR=本地 PaddleOCR，Embed/Rerank/VLM=硅基流动云，ASR=本地 FunASR），均经对抗评审 + 真链路 e2e 亲验，三红线守住。下一步进“做好已有功能”，之后才是垂直情报分析 skill + benchmark。</p>
+        </div>
+
+        <div class="mini-map">
+          <div class="milestone done"><b>M0-M5</b><p>monorepo、专题、素材、问答溯源、报告闸门、管理后台基础。</p></div>
+          <div class="milestone done"><b>P2.0-P2.5</b><p>多模态数据模型、RAG 预算、mock slots、媒体加工、混合检索、rerank。</p></div>
+          <div class="milestone done"><b>P3.0</b><p>run 级 extraTools、toolMiddleware、同名冲突报错、finalize 契约地基。</p></div>
+          <div class="milestone done"><b>P3.A</b><p>问答接进 harness，只读工具链，ledger/cite/finalize，审计同步。</p></div>
+          <div class="milestone done"><b>P3.B</b><p>core stream、server SSE、按需多模态 mock、受管提示词、流式会话 UI。</p></div>
+          <div class="milestone done"><b>P3.doc/ocr/D</b><p>文档解析(lit)、OCR(PaddleOCR)、五槽接真(Embed/Rerank/VLM 硅基流动 + ASR 本地 FunASR)。</p></div>
+          <div class="milestone current"><b>做好已有功能</b><p>NewCase 真上传、跨案数据总览、媒体真链路验收、角色逻辑。下一步。</p></div>
+        </div>
+
+        <div class="grid-2" style="margin-top:16px">
+          <div class="card">
+            <h3>下一步 P3.C 要解决什么</h3>
+            <p>让一个编排 agent 可以派生多个子 agent 并行调查。难点不是“多开几个 run”，而是每个子 agent 要有独立 ledger，父 agent 只能通过显式 `merge_evidence(subRunId)` 合并证据，审计中也要能追踪父子关系。</p>
+          </div>
+          <div class="card">
+            <h3>P3.D 已接真（不再阻塞）</h3>
+            <p>五个模型槽全部从 mock 换成真实端点：OCR=本地 PaddleOCR(:8000)，Embed/Rerank/VLM=硅基流动云(OpenAI 兼容)，ASR=本地 FunASR(:8001，带句级时间戳+说话人)。每个走“接真→对抗评审→真链路 e2e 亲验→提交”，三红线守住。部署到气隙机时把云端点换本地即可。</p>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:16px">
+          接手开发时，建议先跑 `npm run check` 建立基线；再根据任务选择服务级测试，例如 `packages/server/tests/inquiry-agent.test.ts`、`inquiry-stream.test.ts`、`prompt-store.test.ts`、`packages/core/tests/integration/streaming.test.ts`。
+        </div>
+      </section>
+
+      <footer>
+        <p>生成时间：本地仓库当前状态。入口文件：<code>package.json</code>、<code>packages/server/src/app.ts</code>、<code>packages/core/src/runtime/agent.ts</code>、<code>packages/web/src/App.tsx</code>。</p>
+        <p>本页是静态说明文档，不参与构建，不改变业务逻辑。</p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const links = [...document.querySelectorAll(".nav a")];
+    const sections = links
+      .map((link) => document.querySelector(link.getAttribute("href")))
+      .filter(Boolean);
+
+    const byId = new Map(links.map((link) => [link.getAttribute("href").slice(1), link]));
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      links.forEach((link) => link.classList.remove("active"));
+      byId.get(visible.target.id)?.classList.add("active");
+    }, { rootMargin: "-20% 0px -62% 0px", threshold: [0.05, 0.2, 0.5] });
+
+    sections.forEach((section) => observer.observe(section));
+  </script>
+</body>
+</html>

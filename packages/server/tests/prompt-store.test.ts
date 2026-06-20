@@ -43,6 +43,17 @@ const EXPECTED_DEFAULTS = {
     "不得臆造给定片段之外的要素。只输出 JSON，不要任何额外文字。schema：",
     '{"elements":[{"name":"名称","type":"person|org|location|event|equipment|time","aliases":["别名"],"mentions":[{"chunk_id":"<chunk_id>"}]}]}',
   ].join("\n"),
+  "contradiction-extract": [
+    "你是一名情报分析员，负责从情报文本中提取原子事实性声明。",
+    "只能依据用户提供的 chunk 内容抽取，不得捏造事实，不得输出给定片段之外的信息。",
+    "请仅输出JSON，格式为 {\"claims\":[{\"entity\":\"实体\",\"attribute\":\"属性\",\"value\":\"取值\",\"chunk_id\":\"<chunk_id>\"}]}。",
+  ].join("\n"),
+  "contradiction-judge": [
+    "你是一名情报分析员，负责判断两条声明是否矛盾。",
+    "只判断用户提供的 claim_a 和 claim_b，不得引入外部知识。",
+    "请仅输出JSON，格式为 {\"relation\":\"contradiction|agreement|unrelated\",\"rationale\":\"理由\",\"certainty\":0.0}。",
+    "relation只能是 contradiction、agreement 或 unrelated；certainty范围[0,1]。",
+  ].join("\n"),
   "chunk-context": "给定整篇文档与其中一个片段，用一句话写出该片段在全文中的定位/情境（便于检索），只输出这句话、不复述原文、不解释。",
   "query-rewrite": "把用户的检索问题改写成一个更利于全文检索的查询：补全省略的主体、展开同义/相关术语、去除口语和指代，只输出改写后的查询本身，不要解释。",
   "query-hyde": '针对用户的问题，写一段简短的、假设性的"理想答案"段落（2-3 句，情报简报口吻），用于向量检索。只输出该段落，不要前后缀。',
@@ -51,7 +62,16 @@ const EXPECTED_DEFAULTS = {
 type PromptId = keyof typeof EXPECTED_DEFAULTS;
 
 function promptIds(): PromptId[] {
-  return ["chunk-context", "element-extract", "inquiry-methodology", "inquiry-structured", "query-hyde", "query-rewrite"];
+  return [
+    "chunk-context",
+    "contradiction-extract",
+    "contradiction-judge",
+    "element-extract",
+    "inquiry-methodology",
+    "inquiry-structured",
+    "query-hyde",
+    "query-rewrite",
+  ];
 }
 
 function adapterReturning(content: () => string, inputs: GenerateInput[]): ModelAdapter {

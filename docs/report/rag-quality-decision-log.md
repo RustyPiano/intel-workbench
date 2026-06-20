@@ -230,3 +230,11 @@
 | hyde | 0.720 | 0.768 | 0.737 | 0.782 |
 
 **读数**：在本合成基准上，**强 hybrid+rerank 基线已近饱和**（R@10=0.95），通用 RAG 增强**总体不增益**：CR 仅在重排阶段微增（对齐 Anthropic「context 利于精排」）、对一阶段混合略有稀释；query rewrite / HyDE 对"本就贴合 gold 块"的清洁合成 query 过度扩展/假设 → 反降（HyDE 尤甚，气隙弱 LLM 易生发散假设答案）。**这是真实负结果**：这些技术的价值在脏/欠定/大歧义语料，而非"每块自造 query"基准。**工程决策**：三者均实现且 opt-in 默认关，留给真实困难查询；不强行开启以免回退当前基线。创新拿分点上移到原创 skill（矛盾检测，C1：对比 LLM 直出）。**可选**：若要让 RAG 增强显出价值，需另造"更难 query 集"（欠定/多跳/跨块）——属可选实验，非本轮必需。
+
+## Phase B — 多模态摄入做实（消除"上传音视频→暂不可用"）
+
+**B1 音频/图像摄入即加工**：`ingestOne` 媒体分支原无条件 `pending`+降级提示；改为已配置对应槽（音频→asr、图像→vlm|ocr）时**摄入即复用既有 `process()` 路径**（同 authorize/管线/切块/索引/状态机/审计，零管线重复）→ done+timecode/bbox chunk；未配/失败/视频→回落 pending+note。双评审修：① 降级 failed→pending 须**落审计**（不可静默改状态，审计红线）② 并发 409 不可把 processing 覆盖回 pending（原样抛）。视频不动（属 B2）。
+
+**B2 视频真帧/分镜（ffmpeg 8.1.2 本机已装）**：新 `ffmpeg.ts`（本地子进程，同 lit 信任类、不经 OfflineGuard）——`ffmpegAvailable`/`probeDuration`/`parseSceneTimestamps`(纯)/`buildShotRanges`(纯)/`detectShots`(scene 滤镜+showinfo)/`extractFrame`/`extractAudioWav`；`processVideo` 真路径（临时文件→探时长→分镜→逐镜头抽真帧→抽 WAV 喂 ASR，finally 清临时目录）替换 mock，ffmpeg 缺失/任一步失败→回落 mock+诚实 note。`// TODO TransNetV2`。独立评审挑出**BLOCKING 气隙红线洞**：ffmpeg 解析恶意容器可经 concat:/playlist 触发**网络外连**——已修（全 ffmpeg/ffprobe 调用加 `-nostdin -protocol_whitelist file,pipe`，`assertLocalFile` 拒 `scheme://`/前导 `-`）；**MAJOR** 真帧 key 取小数(t1)+端点只认数字 key/恒发 svg MIME→真 PNG 不可服务——已修（frame key 取镜头整数序号、`MediaFrame.format` svg|png 贯通存储与端点 MIME）。本机真 ffmpeg 四命令（含白名单旗标）亲验可跑（probe/detect/PNG 15KB/WAV 64KB）。
+
+每特性 Codex 实现 + Codex/Opus 双评审 + 本地 `npm run check` 闸（**591/2 绿**）。三红线守住（媒体模型调用仍经 authorizeMedia；ffmpeg 锁本地协议；content_hash 不变；降级落审计）。提交 = Phase B 检查点（未 push）。

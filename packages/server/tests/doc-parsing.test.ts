@@ -571,8 +571,9 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     const slots: ModelSlots = { ...EMPTY_SLOTS, vlm: new FakeVlm(order), ocr: new FakeOcrAdapter(order) };
     const guard = new RecordingGuard(["vlm.local:8000", "ocr.local:8000"], audit, order);
     const materials = svc(new FakeDocParser([]), slots, guard, { asr: "", vlm: "http://vlm.local:8000", ocr: "http://ocr.local:8000" });
+    const pendingIngest = svc(new FakeDocParser([]), EMPTY_SLOTS);
 
-    const [img] = await materials.ingest(OPERATOR, caseId, [
+    const [img] = await pendingIngest.ingest(OPERATOR, caseId, [
       { filename: "scene.png", content: Buffer.from("fake-img").toString("base64"), encoding: "base64" },
     ]);
     expect(img.status).toBe("pending");
@@ -593,8 +594,9 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     const slots: ModelSlots = { ...EMPTY_SLOTS, vlm: new FakeVlm(order), ocr: new FakeOcrAdapter(order) };
     const guard = new RecordingGuard([], audit, order); // 空白名单 → authorize 抛 403
     const materials = svc(new FakeDocParser([]), slots, guard, { asr: "", vlm: "http://vlm.denied:8000", ocr: "http://ocr.denied:8000" });
+    const pendingIngest = svc(new FakeDocParser([]), EMPTY_SLOTS);
 
-    const [img] = await materials.ingest(OPERATOR, caseId, [
+    const [img] = await pendingIngest.ingest(OPERATOR, caseId, [
       { filename: "scene.png", content: Buffer.from("fake-img").toString("base64"), encoding: "base64" },
     ]);
     const failed = await materials.process(OPERATOR, caseId, img.id);

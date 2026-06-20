@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -12,12 +12,14 @@ import type { Identity } from "../src/domain/types.js";
 import { MaterialService } from "../src/materials/material-service.js";
 import { readVec } from "../src/materials/vec-store.js";
 import { MockAsr, MockEmbed, MockOcr, MockVlm } from "../src/model/mock-slots.js";
-import type { EmbeddingAdapter, ModelSlots, OcrAdapter } from "../src/model/slots.js";
+import type { AsrAdapter, EmbeddingAdapter, ModelSlots, OcrAdapter } from "../src/model/slots.js";
 import { sha256 } from "../src/util/hash.js";
 
 const ASR_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: null, ocr: null, embed: null, rerank: null };
+const OCR_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: new MockOcr(), embed: null, rerank: null };
 const FULL_SLOTS: ModelSlots = { asr: new MockAsr(), vlm: new MockVlm(), ocr: new MockOcr(), embed: null, rerank: null };
 const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
+const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, rerank: null };
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 
@@ -148,6 +150,97 @@ describe("MaterialService 汇入与加工（M2）", () => {
   });
 });
 
+describe("MaterialService 汇入时媒体自动加工（B1）", () => {
+  let root: string;
+  let paths: DataPaths;
+  let audit: AuditService;
+  let cases: CaseService;
+  let caseId: string;
+
+  const AUDIO_B64 = Buffer.alloc(12_000, 1).toString("base64");
+  const IMAGE_B64 = Buffer.from("img-bytes").toString("base64");
+  const VIDEO_B64 = Buffer.alloc(12_000, 1).toString("base64");
+
+  function svc(slots: ModelSlots): MaterialService {
+    return new MaterialService(paths, audit, cases, slots);
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "iw-b1-"));
+    paths = resolveDataPaths(root);
+    audit = new AuditService(paths);
+    cases = new CaseService(paths, audit, false);
+    caseId = (await cases.create(OPERATOR, { name: "B1 媒体自动加工", clearance: "internal" })).id;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("音频汇入且 ASR 已配置 → 自动加工 done + timecoded chunks", async () => {
+    const [m] = await svc(ASR_SLOTS).ingest(OPERATOR, caseId, [{ filename: "call.mp3", content: AUDIO_B64, encoding: "base64" }]);
+    expect(m.modality).toBe("audio");
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBeGreaterThan(0);
+
+    const chunks = await svc(ASR_SLOTS).loadCaseChunks(caseId);
+    expect(chunks).toHaveLength(m.chunk_count ?? 0);
+    expect(chunks[0].modality).toBe("audio");
+    expect(chunks[0].locator.timecode).toBe("0-5");
+    expect(chunks[0].content_hash).toBe(sha256(chunks[0].text));
+  });
+
+  it("图像汇入且 OCR 已配置 → 自动加工 done + bbox chunks", async () => {
+    const [m] = await svc(OCR_SLOTS).ingest(OPERATOR, caseId, [{ filename: "photo.jpg", content: IMAGE_B64, encoding: "base64" }]);
+    expect(m.modality).toBe("image");
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBeGreaterThan(0);
+
+    const chunks = await svc(OCR_SLOTS).loadCaseChunks(caseId);
+    expect(chunks).toHaveLength(m.chunk_count ?? 0);
+    expect(chunks.every((c) => c.modality === "image")).toBe(true);
+    expect(chunks.some((c) => c.locator.bbox?.length === 4)).toBe(true);
+  });
+
+  it("音频/图像汇入但相关槽未配置 → 保持 pending + 降级说明", async () => {
+    const s = svc(EMPTY_SLOTS);
+    const [audio, image] = await s.ingest(OPERATOR, caseId, [
+      { filename: "call.mp3", content: AUDIO_B64, encoding: "base64" },
+      { filename: "photo.jpg", content: IMAGE_B64, encoding: "base64" },
+    ]);
+    expect(audio.status).toBe("pending");
+    expect(audio.note).toContain("音频转写暂不可用");
+    expect(image.status).toBe("pending");
+    expect(image.note).toContain("图像 OCR 暂不可用");
+  });
+
+  it("视频汇入即使模型槽已配置 → 仍保持 pending（B2 另做）", async () => {
+    const [m] = await svc(FULL_SLOTS).ingest(OPERATOR, caseId, [{ filename: "clip.mp4", content: VIDEO_B64, encoding: "base64" }]);
+    expect(m.modality).toBe("video");
+    expect(m.status).toBe("pending");
+    expect(m.note).toContain("视频转写/解析暂不可用");
+  });
+
+  it("汇入时音频加工失败 → 上传不崩溃并回落 pending + 降级说明", async () => {
+    const boomAsr: AsrAdapter = {
+      engine: "boom-asr",
+      transcribe: async () => {
+        throw new Error("ASR 崩");
+      },
+    };
+    const [m] = await svc({ asr: boomAsr, vlm: null, ocr: null, embed: null, rerank: null }).ingest(OPERATOR, caseId, [
+      { filename: "call.mp3", content: AUDIO_B64, encoding: "base64" },
+    ]);
+    expect(m.modality).toBe("audio");
+    expect(m.status).toBe("pending");
+    expect(m.note).toContain("音频转写暂不可用");
+    expect(await svc(EMPTY_SLOTS).loadCaseChunks(caseId)).toHaveLength(0);
+    // 降级转换须如实落审计（审计红线，勿静默改写状态）。
+    const events = await audit.readAll();
+    expect(events.some((e) => e.action === "material.process" && e.result === "error" && e.detail?.phase === "ingest-degrade")).toBe(true);
+  });
+});
+
 describe("MaterialService 音频加工（二期 P2.3a）", () => {
   let root: string;
   let paths: DataPaths;
@@ -161,8 +254,9 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
   function svc(slots: ModelSlots = ASR_SLOTS): MaterialService {
     return new MaterialService(paths, audit, cases, slots);
   }
-  async function ingestAudio(s: MaterialService): Promise<string> {
-    const [m] = await s.ingest(OPERATOR, caseId, [{ filename: "call.mp3", content: AUDIO_B64, encoding: "base64" }]);
+  async function ingestAudio(): Promise<string> {
+    const pendingIngest = svc(EMPTY_SLOTS);
+    const [m] = await pendingIngest.ingest(OPERATOR, caseId, [{ filename: "call.mp3", content: AUDIO_B64, encoding: "base64" }]);
     return m.id;
   }
 
@@ -180,7 +274,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
 
   it("mock ASR → done，chunks 带 timecode/speaker/content_hash + 字段齐全", async () => {
     const s = svc();
-    const mid = await ingestAudio(s);
+    const mid = await ingestAudio();
     const m = await s.process(OPERATOR, caseId, mid);
     expect(m.status).toBe("done");
     expect(m.chunk_count).toBe(3);
@@ -208,7 +302,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
 
   it("getContent done 音频 → 返回转写段", async () => {
     const s = svc();
-    const mid = await ingestAudio(s);
+    const mid = await ingestAudio();
     await s.process(OPERATOR, caseId, mid);
     const content = await s.getContent(OPERATOR, mid);
     expect(content.segments).toHaveLength(3);
@@ -217,7 +311,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
 
   it("幂等：重 process 生成新 chunk_id 版本，替换不追加（§2.5）", async () => {
     const s = svc();
-    const mid = await ingestAudio(s);
+    const mid = await ingestAudio();
     await s.process(OPERATOR, caseId, mid);
     const m2 = await s.process(OPERATOR, caseId, mid);
     expect(m2.chunk_version).toBe(2);
@@ -228,7 +322,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
 
   it("ASR 未配置 → failed 带原因 + 审计 fail", async () => {
     const s = svc({ asr: null, vlm: null, ocr: null, embed: null, rerank: null });
-    const mid = await ingestAudio(s);
+    const mid = await ingestAudio();
     const m = await s.process(OPERATOR, caseId, mid);
     expect(m.status).toBe("failed");
     expect(m.note).toContain("未配置");
@@ -243,7 +337,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
 
   it("两并发 process：恰一个 done，另一个 409（不丢状态/不重复入库）", async () => {
     const s = svc();
-    const mid = await ingestAudio(s);
+    const mid = await ingestAudio();
     const results = await Promise.allSettled([s.process(OPERATOR, caseId, mid), s.process(OPERATOR, caseId, mid)]);
     const done = results.filter((r) => r.status === "fulfilled" && r.value.status === "done");
     const conflict = results.filter((r) => r.status === "rejected" && (r.reason as { status?: number }).status === 409);
@@ -312,21 +406,51 @@ describe("MaterialService 视频/图像加工（二期 P2.3b）", () => {
     const media = JSON.parse(await readFile(path.join(paths.caseDir(caseId), "processed", `${mid}.media.json`), "utf8"));
     expect(media.kind).toBe("video");
     expect(media.shots).toHaveLength(2);
+    expect(media.shots.map((shot: { frameKey: string; frameFormat: string }) => ({ key: shot.frameKey, format: shot.frameFormat }))).toEqual([
+      { key: "0", format: "svg" },
+      { key: "1", format: "svg" },
+    ]);
     expect(media.transcript.segments).toHaveLength(3);
   });
 
-  it("getFrameFile：有效 t 取到帧；缺失 → 404；非法 t → 400", async () => {
+  it("getFrameFile：有效 t 取到 svg 帧和 MIME；缺失 → 404；非法 t → 400", async () => {
     const s = svc();
     const mid = await ingest(s, "clip.mp4");
     await s.process(OPERATOR, caseId, mid);
-    expect((await s.getFrameFile(OPERATOR, mid, "0")).path).toContain("0.svg");
+    const frame = await s.getFrameFile(OPERATOR, mid, "0");
+    expect(frame.path).toContain("0.svg");
+    expect(frame.contentType).toBe("image/svg+xml");
     await expect(s.getFrameFile(OPERATOR, mid, "999")).rejects.toMatchObject({ status: 404 });
     await expect(s.getFrameFile(OPERATOR, mid, "../etc")).rejects.toMatchObject({ status: 400 });
   });
 
+  it("getFrameFile：png 帧按 .png 落盘并返回 image/png", async () => {
+    const s = svc();
+    const mid = await ingest(s, "clip.mp4");
+    const processedDir = path.join(paths.caseDir(caseId), "processed");
+    await mkdir(processedDir, { recursive: true });
+    await writeFile(
+      path.join(processedDir, `${mid}.media.json`),
+      `${JSON.stringify({ kind: "video", duration: 1, shots: [{ t1: 0, t2: 1, frameKey: "0", frameFormat: "png", caption: null, ocr: [] }], transcript: null })}\n`,
+    );
+    await (s as unknown as { writeFrames(processedDir: string, materialId: string, frames: { key: string; format: "png"; content: Buffer }[]): Promise<void> }).writeFrames(
+      processedDir,
+      mid,
+      [{ key: "0", format: "png", content: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }],
+    );
+
+    const frame = await s.getFrameFile(OPERATOR, mid, "0");
+    expect(frame.path).toContain("0.png");
+    expect(frame.contentType).toBe("image/png");
+    expect(await readFile(frame.path)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  });
+
   it("图像 → done，配文 + OCR chunk（bbox），modality:image", async () => {
     const s = svc();
-    const [img] = await s.ingest(OPERATOR, caseId, [{ filename: "photo.jpg", content: Buffer.from("img-bytes").toString("base64"), encoding: "base64" }]);
+    const pendingIngest = svc(EMPTY_SLOTS);
+    const [img] = await pendingIngest.ingest(OPERATOR, caseId, [
+      { filename: "photo.jpg", content: Buffer.from("img-bytes").toString("base64"), encoding: "base64" },
+    ]);
     const m = await s.process(OPERATOR, caseId, img.id);
     expect(m.status).toBe("done");
     const chunks = await s.loadCaseChunks(caseId);

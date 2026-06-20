@@ -11,6 +11,18 @@ export function readCtxBudgetTokens(): number | null {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 
+/** 是否启用 Contextual Retrieval：默认关闭，避免未显式配置时新增 LLM 出站。 */
+export function readContextualRetrieval(): boolean {
+  return process.env.MINI_AGENT_CONTEXTUAL_RETRIEVAL === "true";
+}
+
+export type QueryRewriteMode = "off" | "rewrite" | "hyde";
+
+export function readQueryRewriteMode(): QueryRewriteMode {
+  const v = process.env.MINI_AGENT_QUERY_REWRITE;
+  return v === "rewrite" || v === "hyde" ? v : "off";
+}
+
 /** 重排触发的最小候选数门控默认值（§5.2）。候选数 < 阈值不重排：小候选集精排无收益、徒增一次出站。 */
 const RERANK_MIN_CANDIDATES = 8;
 

@@ -10,9 +10,9 @@ import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
 import type { Identity } from "../src/domain/types.js";
 import { type DocPage, type DocPageImage, type DocParseResult, type DocParser, LitDocParser, parseLitJson } from "../src/materials/doc-parser.js";
-import { MaterialService } from "../src/materials/material-service.js";
+import { linesToParagraphs, MaterialService } from "../src/materials/material-service.js";
 import { readVec } from "../src/materials/vec-store.js";
-import type { EmbeddingAdapter, ModelSlots, OcrAdapter, OcrResult, VlmAdapter } from "../src/model/slots.js";
+import type { EmbeddingAdapter, ModelSlots, OcrAdapter, OcrLine, OcrResult, VlmAdapter } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { sha256 } from "../src/util/hash.js";
 
@@ -68,11 +68,16 @@ class FakeOcrAdapter implements OcrAdapter {
   readonly engine = "fake-ocr";
   readonly calls: Buffer[] = [];
 
-  constructor(private readonly order: string[] = []) {}
+  constructor(
+    private readonly order: string[] = [],
+    private readonly results?: OcrResult[],
+  ) {}
 
   async ocr(image: Buffer): Promise<OcrResult> {
     this.order.push(`ocr:${image.toString("utf8")}`);
     this.calls.push(image);
+    const result = this.results?.[this.calls.length - 1];
+    if (result) return result;
     return { lines: [{ text: `OCR 第 ${this.calls.length} 页`, bbox: [0, 0, 1, 1] }] };
   }
 }
@@ -131,6 +136,37 @@ function normalize(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+describe("OCR line geometry reconstruction", () => {
+  it("linesToParagraphs sorts by y then x and inserts paragraph breaks for large vertical gaps", () => {
+    const lines: OcrLine[] = [
+      { text: "right column same row", bbox: [0.5, 0.1, 0.2, 0.02] },
+      { text: "new block", bbox: [0.1, 0.25, 0.2, 0.02] },
+      { text: "left column same row", bbox: [0.1, 0.1, 0.2, 0.02] },
+    ];
+
+    expect(linesToParagraphs(lines)).toBe("left column same row\nright column same row\n\nnew block");
+  });
+
+  it("linesToParagraphs keeps tightly spaced lines in one paragraph", () => {
+    const lines: OcrLine[] = [
+      { text: "first line", bbox: [0.1, 0.1, 0.2, 0.02] },
+      { text: "second line", bbox: [0.1, 0.125, 0.2, 0.02] },
+      { text: "third line", bbox: [0.1, 0.15, 0.2, 0.02] },
+    ];
+
+    expect(linesToParagraphs(lines)).toBe("first line\nsecond line\nthird line");
+  });
+
+  it("linesToParagraphs degrades safely when bbox heights are zero (no spurious breaks)", () => {
+    const lines: OcrLine[] = [
+      { text: "alpha", bbox: [0.1, 0.1, 0.2, 0] },
+      { text: "beta", bbox: [0.1, 0.2, 0.2, 0] },
+    ];
+    // 全 0 高 → 阈值不被压成 0 → 不因任意正间距误判分段。
+    expect(linesToParagraphs(lines)).toBe("alpha\nbeta");
+  });
+});
 
 describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => {
   let root: string;
@@ -270,6 +306,46 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     expect(chunks.map((c) => c.locator.page)).toEqual([1, 2]);
     expect(chunks.map((c) => c.text)).toEqual(["OCR 第 1 页", "OCR 第 2 页"]);
     for (const chunk of chunks) expect(chunk.content_hash).toBe(sha256(chunk.text));
+  });
+
+  it("扫描 PDF OCR 兜底：按 OCR 几何重建段落并给 chunk 附加重叠行 bbox 并集", async () => {
+    const lineA = `Alpha ${"a".repeat(160)}`;
+    const lineB = `Bravo ${"b".repeat(160)}`;
+    const lineC = `Charlie ${"c".repeat(330)}`;
+    const lineD = `Delta ${"d".repeat(330)}`;
+    const ocrLines: OcrLine[] = [
+      { text: lineC, bbox: [0.125, 0.3125, 0.25, 0.03125] },
+      { text: lineB, bbox: [0.25, 0.1875, 0.125, 0.03125] },
+      { text: lineD, bbox: [0.125, 0.4375, 0.25, 0.03125] },
+      { text: lineA, bbox: [0.125, 0.125, 0.25, 0.03125] },
+    ];
+    const parser = new FakeDocParser([{ page: 1, text: "   " }], [{ page: 1, image: Buffer.from("page-1") }]);
+    const ocr = new FakeOcrAdapter([], [{ lines: ocrLines }]);
+    const materials = svc(parser, { ...EMPTY_SLOTS, ocr }, undefined, {
+      asr: "",
+      vlm: "",
+      ocr: "http://ocr.local:8000",
+      embed: "",
+    });
+
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "scan.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    expect(m.status).toBe("done");
+    expect(m.chunk_count).toBeGreaterThan(1);
+    const pageText = await readFile(path.join(paths.caseDir(caseId), "processed", `${m.id}.txt`), "utf8");
+    expect(pageText).toBe(`${lineA}\n${lineB}\n\n${lineC}\n\n${lineD}`);
+    const chunks = (await materials.loadCaseChunks(caseId)).filter((c) => c.material_id === m.id);
+    expect(chunks).toHaveLength(m.chunk_count);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]?.text).toBe(`${lineA}\n${lineB}`);
+    expect(chunks[0]?.locator.bbox).toEqual([0.125, 0.125, 0.25, 0.09375]);
+    expect(chunks[1]?.locator.bbox).toEqual([0.125, 0.3125, 0.25, 0.03125]);
+    for (const chunk of chunks) {
+      expect(pageText.slice(chunk.locator.char_start, chunk.locator.char_end)).toBe(chunk.text);
+      expect(chunk.content_hash).toBe(sha256(chunk.text));
+    }
   });
 
   it("扫描 PDF OCR 兜底：OfflineGuard 拒绝时不调用 OCR，仍降级 pending", async () => {
@@ -443,6 +519,17 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       expect(normalized.slice(chunk.locator.char_start, chunk.locator.char_end)).toBe(chunk.text);
       expect(chunk.content_hash).toBe(sha256(chunk.text));
     }
+  });
+
+  it("非 OCR 页级文档 chunk 不附加 bbox", async () => {
+    const materials = svc(new FakeDocParser(PDF_PAGES));
+    const [m] = await materials.ingest(OPERATOR, caseId, [
+      { filename: "normal.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
+    ]);
+
+    const chunks = (await materials.loadCaseChunks(caseId)).filter((c) => c.material_id === m.id);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((chunk) => chunk.locator.bbox === undefined)).toBe(true);
   });
 
   it("parseLitJson：合法输出按页号映射，缺失/非有限页号回落顺序页码", () => {

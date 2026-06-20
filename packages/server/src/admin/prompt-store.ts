@@ -44,6 +44,27 @@ export const REGISTERED_PROMPTS = [
       '{"elements":[{"name":"名称","type":"person|org|location|event|equipment|time","aliases":["别名"],"mentions":[{"chunk_id":"<chunk_id>"}]}]}',
     ].join("\n"),
   },
+  {
+    id: "query-rewrite",
+    name: "检索问题改写",
+    role: "system",
+    description: "把用户问题改写为更适合全文检索的查询。",
+    defaultBody: "把用户的检索问题改写成一个更利于全文检索的查询：补全省略的主体、展开同义/相关术语、去除口语和指代，只输出改写后的查询本身，不要解释。",
+  },
+  {
+    id: "query-hyde",
+    name: "检索 HyDE 生成",
+    role: "system",
+    description: "为用户问题生成假设性理想答案段落，用于向量检索。",
+    defaultBody: '针对用户的问题，写一段简短的、假设性的"理想答案"段落（2-3 句，情报简报口吻），用于向量检索。只输出该段落，不要前后缀。',
+  },
+  {
+    id: "chunk-context",
+    name: "切块检索语境",
+    role: "system",
+    description: "Contextual Retrieval 的单片段全文定位提示词。",
+    defaultBody: "给定整篇文档与其中一个片段，用一句话写出该片段在全文中的定位/情境（便于检索），只输出这句话、不复述原文、不解释。",
+  },
 ] as const;
 
 export type ManagedPromptId = (typeof REGISTERED_PROMPTS)[number]["id"];

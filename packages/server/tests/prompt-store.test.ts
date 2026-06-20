@@ -43,12 +43,15 @@ const EXPECTED_DEFAULTS = {
     "不得臆造给定片段之外的要素。只输出 JSON，不要任何额外文字。schema：",
     '{"elements":[{"name":"名称","type":"person|org|location|event|equipment|time","aliases":["别名"],"mentions":[{"chunk_id":"<chunk_id>"}]}]}',
   ].join("\n"),
+  "chunk-context": "给定整篇文档与其中一个片段，用一句话写出该片段在全文中的定位/情境（便于检索），只输出这句话、不复述原文、不解释。",
+  "query-rewrite": "把用户的检索问题改写成一个更利于全文检索的查询：补全省略的主体、展开同义/相关术语、去除口语和指代，只输出改写后的查询本身，不要解释。",
+  "query-hyde": '针对用户的问题，写一段简短的、假设性的"理想答案"段落（2-3 句，情报简报口吻），用于向量检索。只输出该段落，不要前后缀。',
 } as const;
 
 type PromptId = keyof typeof EXPECTED_DEFAULTS;
 
 function promptIds(): PromptId[] {
-  return ["element-extract", "inquiry-methodology", "inquiry-structured"];
+  return ["chunk-context", "element-extract", "inquiry-methodology", "inquiry-structured", "query-hyde", "query-rewrite"];
 }
 
 function adapterReturning(content: () => string, inputs: GenerateInput[]): ModelAdapter {
@@ -88,7 +91,7 @@ describe("PromptStore 受管提示词（P3.B-3a）", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("无覆盖文件时返回三条字节级默认提示词", async () => {
+  it("无覆盖文件时返回字节级默认提示词", async () => {
     expect(REGISTERED_PROMPTS.map((p) => p.id).sort()).toEqual(promptIds().sort());
     for (const id of promptIds()) {
       expect(DEFAULT_PROMPT_BODIES[id]).toBe(EXPECTED_DEFAULTS[id]);

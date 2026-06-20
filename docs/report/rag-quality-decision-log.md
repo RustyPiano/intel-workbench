@@ -181,7 +181,7 @@
 
 ---
 
-## D8 — 步骤 2：bbox 几何重排（OCR）⏭️ 下一步（未动代码）
+## D8 — 步骤 2：bbox 几何重排（OCR）✅ 完成（A4）
 
 **目标**：扫描件 OCR 不再"每页一块"（D3 病灶）；用 PaddleOCR 已返回的行坐标恢复阅读顺序 + 段落结构，喂给新切块打包器；并为 OCR 块带 bbox 供高亮（落地 deferred 的"扫描件 bbox 行级高亮"）。
 
@@ -196,6 +196,37 @@
 
 **验收**：扫描件每页**多块且尺寸一致**、阅读顺序正确、（子步）chunk 带 `locator.bbox`；`slice===text` / `content_hash` 不变；`npm run check` 绿。
 
-## D9 — 步骤 3：评测 / benchmark 闭环 ⬜ 待办
-## D10 — 步骤 4：Contextual Retrieval（逐块 LLM） ⬜ 待办
-## D11 — 步骤 5：查询改写（rewrite/HyDE） ⬜ 待办
+**落地（A4）**：`linesToParagraphs(lines)`（按 y→x 排、行高中位数×1.5 聚段、段内 `\n`/段间 `\n\n`）替换单 `\n` 拼接；`locateOcrLineSpans` 在**归一化后**页文本上 indexOf-from-cursor 定位每行（规避 normalize 偏移漂移），`chunkDocPages` 对每块字符区间求重叠行 bbox 并集写 `locator.bbox`。双评审：独立 Codex 提 ① 多列阅读顺序（按计划 v1 单列、留 TODO，**不修**）② 0 行高把阈值压成 0（已修：仅取正行高求中位 + `medianHeight>0` 守卫）。单测 hand-compute 并集 bbox + `slice===text`/`hash` 不变 + 每页多块。
+
+## D9 — 步骤 3：评测 / benchmark 闭环 ✅ 完成（A1）
+
+**目标**：可复现的检索质量基准，给后续每个技术出 before/after 数字（老师 benchmark 评分点）。
+
+**实现**：独立 `npm run eval`（不进 `npm run check`，因需联网+确定性）。语料 `packages/server/eval/corpus/`：DeepSeek 合成 45 篇虚构情报素材（逐篇纯文本生成，**可续跑**：盘上已有的复用，规避长中文套 JSON 截断 + 后台进程被 SIGTERM 中断丢进度）→ 确定性 `chunkText` 切 227 块 → 逐块"答案只能由本块支撑"的中文 query（措辞与原文不同，并发池生成）100 条，gold=`stem#idx`（切块器确定 → 可复现）。runner 复用产品 `retrieveHybrid`/`rerankTopK`（同代码路径），真 SiliconFlow embed(Qwen3-Embedding-8B,4096)/rerank(Qwen3-Reranker-8B)。指标 `metrics.ts` 纯函数 Recall@5/@10、MRR@10、nDCG@10（确定性单测进 `check`）。
+
+**双评审修**：① gen-corpus 单调用 30 篇→截断（改分批/逐篇）；② gold label 与重建 chunk_id 漂移防护（硬校验）；③ `ndcgAtK` 遇重复 id 可 >1（与 recall 一致去重）；④ 问题数不足显式告警。
+
+**基线（227 块 / 100 query）**：hybrid R@5=0.92 R@10=0.95 MRR@10=0.833 nDCG@10=0.862；rerank R@5=0.95 MRR@10=0.915 nDCG@10=0.924。→ **未触天花板**（首版 30 文档/42 块时 R@5=R@10=1.0 无区分度，已弃），rerank 明显抬升 MRR/nDCG。
+
+## D10 — 步骤 4：Contextual Retrieval（逐块 LLM）✅ 完成（A2）
+
+**实现**：`Chunk.context?`（LLM 生成的情境句）；纯函数 `indexText(c)=context?`ctx\n\ntext`:text` **只**喂 embedding + BM25(`retrieve`) + rerank；`chunk.text`/`content_hash`/Citation/答案上下文一律仍用 verbatim text（引用接地红线不破）。摄入时逐块经 OfflineGuard 生成 context（best-effort，失败留空+审计+不阻断），`MINI_AGENT_CONTEXTUAL_RETRIEVAL` opt-in；reindex 回填。双评审修：逐块授权（每次真实 generate 一条 egress）、reindex 仅在 `.vec` 重建成功后才落 context 进 `.chunks.jsonl`（jsonl⇔vec 一致）、chunk-context 经 PromptStore 解析（admin 可编辑生效）。
+
+**eval（`--variant=cr`）**：hybrid R@10=0.95(持平) MRR@10 0.833→0.809、nDCG 0.862→0.843（略降）；**rerank MRR@10 0.915→0.923、nDCG 0.924→0.930（略升）**。
+
+## D11 — 步骤 5：查询改写（rewrite + HyDE）✅ 完成（A3）
+
+**实现**：检索前改写 query（仅影响检索，原始 question 仍持久化 + 喂答案模型——grep 验证 `retrievalQ` 不入持久化/答案/引用）。可复用纯函数 `rewriteForRetrieval(deps,user,query,mode,prompt)`，`MINI_AGENT_QUERY_REWRITE=rewrite|hyde` 开关（默认 off=零行为变化），best-effort 回退+审计。`askSingle` 接入；eval runner 复用同函数。
+
+**eval**：`--variant=qrewrite` hybrid MRR@10 0.833→0.786、nDCG→0.822（降）；`--variant=hyde` MRR→0.720、rerank 崩到 0.737（明显降）。0/100 改写失败回退。
+
+## Phase A 小结 — benchmark 横向结论（诚实记录；D12+ 留给分析层 skill）
+
+| variant | hybrid MRR@10 | hybrid nDCG@10 | rerank MRR@10 | rerank nDCG@10 |
+|---|---|---|---|---|
+| baseline | 0.833 | 0.862 | 0.915 | 0.924 |
+| cr | 0.809 | 0.843 | **0.923** | **0.930** |
+| qrewrite | 0.786 | 0.822 | 0.885 | 0.896 |
+| hyde | 0.720 | 0.768 | 0.737 | 0.782 |
+
+**读数**：在本合成基准上，**强 hybrid+rerank 基线已近饱和**（R@10=0.95），通用 RAG 增强**总体不增益**：CR 仅在重排阶段微增（对齐 Anthropic「context 利于精排」）、对一阶段混合略有稀释；query rewrite / HyDE 对"本就贴合 gold 块"的清洁合成 query 过度扩展/假设 → 反降（HyDE 尤甚，气隙弱 LLM 易生发散假设答案）。**这是真实负结果**：这些技术的价值在脏/欠定/大歧义语料，而非"每块自造 query"基准。**工程决策**：三者均实现且 opt-in 默认关，留给真实困难查询；不强行开启以免回退当前基线。创新拿分点上移到原创 skill（矛盾检测，C1：对比 LLM 直出）。**可选**：若要让 RAG 增强显出价值，需另造"更难 query 集"（欠定/多跳/跨块）——属可选实验，非本轮必需。

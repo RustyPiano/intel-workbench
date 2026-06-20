@@ -3,20 +3,21 @@ import path from "node:path";
 
 import { RuntimeAgent, RUNTIME_VERSION, type ModelStreamEvent, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
 
-import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
+import { DEFAULT_PROMPT_BODIES, type ManagedPromptId, type PromptStore } from "../admin/prompt-store.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Inquiry, InquiryClaim, Modality } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
-import { readCtxBudgetTokens, readRerankMinCandidates } from "../model/rag-config.js";
+import { readCtxBudgetTokens, readQueryRewriteMode, readRerankMinCandidates } from "../model/rag-config.js";
 import type { AsrAdapter, EmbeddingAdapter, OcrAdapter, RerankerAdapter, VlmAdapter } from "../model/slots.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { guardModelAdapter } from "../security/guarded-adapter.js";
 import { shortId } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
 import { createCitationLedger, createIntelTools, type CitationLedger } from "./intel-harness.js";
+import { rewriteForRetrieval, type RewriteMode } from "./query-rewrite.js";
 import { rerankTopK, retrieveHybrid, selectContext } from "./retrieval.js";
 
 /** 稠密检索依赖（二期 P2.4）。embed 缺省 null → 检索退 BM25-only。 */
@@ -128,19 +129,52 @@ export class InquiryService {
   private async askSingle(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
     const q = question?.trim();
     if (!q) throw new AppError(400, "问题不能为空");
+    const rewriteMode = readQueryRewriteMode();
+    let retrievalQ = q;
+    let appliedRewriteMode: RewriteMode | null = null;
     const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
     const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
 
     const chunks = await this.materials.loadCaseChunks(caseId);
+    if (rewriteMode !== "off" && this.deps.adapter) {
+      try {
+        const promptId = rewriteMode === "hyde" ? "query-hyde" : "query-rewrite";
+        const sys = await this.promptBody(promptId, DEFAULT_PROMPT_BODIES[promptId]);
+        retrievalQ = await rewriteForRetrieval(this.deps, actor.id, q, rewriteMode, sys);
+        appliedRewriteMode = rewriteMode;
+        await this.audit
+          .append({
+            user: actor.id,
+            action: "inquiry.rewrite",
+            object: `case:${caseId}`,
+            caseId,
+            detail: { caseId, mode: rewriteMode, original: q, rewritten: retrievalQ },
+          })
+          .catch(() => undefined);
+      } catch (e) {
+        retrievalQ = q;
+        const message = e instanceof Error ? e.message : String(e);
+        await this.audit
+          .append({
+            user: actor.id,
+            action: "inquiry.rewrite",
+            object: `case:${caseId}`,
+            caseId,
+            result: "error",
+            detail: { caseId, mode: rewriteMode, message },
+          })
+          .catch(() => undefined);
+      }
+    }
     // token 预算路由（§5.1）：预算内全上下文、超预算检索；未设预算退一期 top-k。
-    const sel = selectContext(q, chunks, readCtxBudgetTokens(), TOP_K);
+    const sel = selectContext(retrievalQ, chunks, readCtxBudgetTokens(), TOP_K);
     let used = sel.used;
     let mode: string = sel.mode;
     let staleIndex = 0;
     // 检索路且 embed 可用 → 升级为 BM25 ⊕ dense 混合（§5.2）；否则保持 BM25。
     if (sel.mode === "retrieval" && this.dense.embed) {
       try {
-        const hybrid = await this.hybridRetrieve(actor, q, caseId, chunks);
+        const hybrid = await this.hybridRetrieve(actor, retrievalQ, caseId, chunks);
         used = hybrid.used;
         staleIndex = hybrid.stale;
         mode = hybrid.reranked ? "hybrid+rerank" : "hybrid";
@@ -178,7 +212,7 @@ export class InquiryService {
       action: "inquiry.create",
       object: `inquiry:${inquiry.id}`,
       caseId,
-      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, mode, used: used.length, staleIndex },
+      detail: { caseId, inquiryId: inquiry.id, status: inquiry.status, mode: appliedRewriteMode ? `${mode}+${appliedRewriteMode}` : mode, used: used.length, staleIndex },
     });
     return inquiry;
   }
@@ -534,7 +568,7 @@ export class InquiryService {
     return this.agentConfig.perReadCapBytes ?? 8 * 1024;
   }
 
-  private async promptBody(id: "inquiry-methodology" | "inquiry-structured", fallback: string): Promise<string> {
+  private async promptBody(id: ManagedPromptId, fallback: string): Promise<string> {
     return this.promptStore ? this.promptStore.getBody(id) : fallback;
   }
 

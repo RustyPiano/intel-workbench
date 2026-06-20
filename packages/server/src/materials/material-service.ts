@@ -3,12 +3,16 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 
+import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Identity, Material, MaterialStatus, Modality } from "../domain/types.js";
-import type { AsrResult, EmbeddingAdapter, ModelSlots } from "../model/slots.js";
+import { indexText } from "../inquiry/retrieval.js";
+import { readContextualRetrieval } from "../model/rag-config.js";
+import type { AsrResult, EmbeddingAdapter, ModelSlots, OcrLine } from "../model/slots.js";
+import type { LlmDeps } from "../model/structured.js";
 import type { OfflineGuard } from "../security/offline-guard.js";
 import { sha256, shortId } from "../util/hash.js";
 import { writeFileAtomic } from "../util/atomic.js";
@@ -79,12 +83,47 @@ const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑为扫描件，OCR
 /** 稠密索引尽力而为失败时挂到素材 note 上的提示（检索仍可用 BM25，可手动重建）。 */
 const INDEX_DEGRADED_NOTE = "稠密索引未建（检索回退 BM25，可在素材上「重建索引」）";
 
-function normalize(text: string): string {
+export function normalize(text: string): string {
   return text
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function sortOcrLines(lines: OcrLine[]): OcrLine[] {
+  return [...lines].sort((a, b) => a.bbox[1] - b.bbox[1] || a.bbox[0] - b.bbox[0]);
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+export function linesToParagraphs(lines: OcrLine[]): string {
+  const sorted = sortOcrLines(lines);
+  if (sorted.length === 0) return "";
+  // 仅取正行高求中位数：退化的 0 高 bbox 不应把阈值压成 0（否则任何正间距都误判为新段）。
+  const medianHeight = median(sorted.map((line) => line.bbox[3]).filter((h) => h > 0));
+  const paragraphs: string[][] = [];
+  let current: string[] = [];
+  let previous: OcrLine | undefined;
+  // TODO multi-column (分栏) reading order.
+  for (const line of sorted) {
+    if (previous) {
+      const gap = line.bbox[1] - (previous.bbox[1] + previous.bbox[3]);
+      if (medianHeight > 0 && gap > 1.5 * medianHeight) {
+        paragraphs.push(current);
+        current = [];
+      }
+    }
+    current.push(line.text);
+    previous = line;
+  }
+  paragraphs.push(current);
+  return paragraphs.map((paragraph) => paragraph.join("\n")).join("\n\n");
 }
 
 /** 原文按空行切出的非空段落跨度（保留偏移，供合并/硬切时取 verbatim 子串）。 */
@@ -137,13 +176,37 @@ function packChunkSpans(text: string): { start: number; end: number; paraIndex: 
   return out;
 }
 
+function locateOcrLineSpans(pageText: string, lines: OcrLine[]): { start: number; end: number; bbox: [number, number, number, number] }[] {
+  const spans: { start: number; end: number; bbox: [number, number, number, number] }[] = [];
+  let cursor = 0;
+  for (const line of lines) {
+    const text = normalize(line.text);
+    if (text.length === 0) continue;
+    const start = pageText.indexOf(text, cursor);
+    if (start < 0) continue;
+    const end = start + text.length;
+    cursor = end;
+    spans.push({ start, end, bbox: line.bbox });
+  }
+  return spans;
+}
+
+function unionBboxes(lines: { bbox: [number, number, number, number] }[]): [number, number, number, number] | undefined {
+  if (lines.length === 0) return undefined;
+  const minX = Math.min(...lines.map((line) => line.bbox[0]));
+  const minY = Math.min(...lines.map((line) => line.bbox[1]));
+  const maxX = Math.max(...lines.map((line) => line.bbox[0] + line.bbox[2]));
+  const maxY = Math.max(...lines.map((line) => line.bbox[1] + line.bbox[3]));
+  return [minX, minY, maxX - minX, maxY - minY];
+}
+
 /**
  * 文档归一化文本 → 带稳定 id 的切块（§7.3 step 1）。
  * 二期 Spec §2.1：每块带 `modality:"doc"` + `char_start/char_end`（归一化文本中的偏移，
  * 供 UI 高亮源片段；不变量：`text.slice(char_start,char_end) === chunk.text`）。
  * `paragraph` = 合并块的首段序号（1 基）。
  */
-function chunkText(materialId: string, text: string): Chunk[] {
+export function chunkText(materialId: string, text: string): Chunk[] {
   return packChunkSpans(text).map((s, idx): Chunk => {
     const piece = text.slice(s.start, s.end);
     return {
@@ -167,6 +230,8 @@ export class MaterialService {
     private readonly docParser: DocParser = new LitDocParser(),
     private readonly guard?: OfflineGuard,
     private readonly mediaEndpoints: { asr: string; vlm: string; ocr: string; embed: string } = { asr: "", vlm: "", ocr: "", embed: "" },
+    private readonly llm?: LlmDeps,
+    private readonly promptStore?: PromptStore,
   ) {}
 
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
@@ -187,6 +252,39 @@ export class MaterialService {
     if (!this.guard) return;
     for (const endpoint of endpoints) {
       if (endpoint) await this.guard.authorize(endpoint, { user: actor.id, purpose });
+    }
+  }
+
+  private async attachContext(actor: Identity, caseId: string, chunks: Chunk[], fullText: string): Promise<void> {
+    if (!readContextualRetrieval() || !this.llm?.adapter) return;
+    try {
+      // 受管提示词经 PromptStore 解析（admin 可编辑生效）；无 store 时回退默认体。
+      const systemPrompt = this.promptStore ? await this.promptStore.getBody("chunk-context") : DEFAULT_PROMPT_BODIES["chunk-context"];
+      for (const chunk of chunks) {
+        // 逐块出站前授权（零外发红线，每次真实 generate 一条 egress 审计）。
+        await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "chunk-context" });
+        const result = await this.llm.adapter.generate({
+          systemPrompt,
+          messages: [{ role: "user", content: `全文：\n${fullText}\n\n片段：\n${chunk.text}` }],
+          tools: [],
+          temperature: 0,
+          maxTokens: 120,
+        });
+        chunk.context = result.message.content.trim();
+      }
+    } catch (e) {
+      for (const chunk of chunks) delete chunk.context;
+      const message = e instanceof Error ? e.message : String(e);
+      await this.audit
+        .append({
+          user: actor.id,
+          action: "material.context",
+          object: `case:${caseId}`,
+          result: "error",
+          caseId,
+          detail: { caseId, message },
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -241,6 +339,8 @@ export class MaterialService {
   private async writeDocChunks(actor: Identity, caseDir: string, id: string, rawText: string): Promise<{ count: number; indexNote?: string }> {
     const text = normalize(rawText);
     const chunks = chunkText(id, text);
+    const caseId = path.basename(caseDir);
+    await this.attachContext(actor, caseId, chunks, text);
     const processed = path.join(caseDir, "processed");
     await mkdir(processed, { recursive: true });
     await writeFile(path.join(processed, `${id}.txt`), text, "utf8");
@@ -268,13 +368,19 @@ export class MaterialService {
       const pageText = normalize(page.text);
       if (pageText.length === 0) continue;
       texts.push(pageText);
+      const ocrLineSpans = page.ocrLines ? locateOcrLineSpans(pageText, page.ocrLines) : [];
       for (const s of packChunkSpans(pageText)) {
         const piece = pageText.slice(s.start, s.end);
+        const locator: Chunk["locator"] = { page: page.page, paragraph: s.paraIndex, char_start: s.start, char_end: s.end };
+        if (page.ocrLines) {
+          const bbox = unionBboxes(ocrLineSpans.filter((line) => line.start < s.end && line.end > s.start));
+          if (bbox) locator.bbox = bbox;
+        }
         chunks.push({
           chunk_id: `${materialId}#${idx}`,
           material_id: materialId,
           modality: "doc",
-          locator: { page: page.page, paragraph: s.paraIndex, char_start: s.start, char_end: s.end },
+          locator,
           text: piece,
           content_hash: sha256(piece),
         });
@@ -286,6 +392,8 @@ export class MaterialService {
 
   private async writeDocChunksFromPages(actor: Identity, caseDir: string, id: string, built: { chunks: Chunk[]; text: string }): Promise<{ count: number; indexNote?: string }> {
     const { chunks, text } = built;
+    const caseId = path.basename(caseDir);
+    await this.attachContext(actor, caseId, chunks, text);
     const processed = path.join(caseDir, "processed");
     await mkdir(processed, { recursive: true });
     await writeFile(path.join(processed, `${id}.txt`), text, "utf8");
@@ -321,7 +429,8 @@ export class MaterialService {
           const ocrPages: DocPage[] = [];
           for (const { page, image } of images) {
             const r = await ocr.ocr(image);
-            ocrPages.push({ page, text: r.lines.map((line) => line.text).join("\n") });
+            const ocrLines = sortOcrLines(r.lines);
+            ocrPages.push({ page, text: linesToParagraphs(ocrLines), ocrLines });
           }
           const ocrBuilt = this.chunkDocPages(id, ocrPages);
           if (ocrBuilt.chunks.length === 0) return { status: "pending", note: SCANNED_DOC_NOTE };
@@ -358,7 +467,7 @@ export class MaterialService {
     try {
       // 真 embed 槽出站前授权（零外发红线）：与 OCR/媒体摄入一致；mock/未配置端点为空→天然跳过。
       await this.authorizeMedia(actor, [this.mediaEndpoints.embed], "embed-ingest");
-      const vectors = await embed.embed(chunks.map((c) => c.text));
+      const vectors = await embed.embed(chunks.map(indexText));
       const indexDir = path.join(caseDir, "index");
       await mkdir(indexDir, { recursive: true });
       await writeVec(path.join(indexDir, `${materialId}.vec`), { embed_model: embed.modelId, dim: embed.dim, count: chunks.length }, vectors);
@@ -531,8 +640,23 @@ export class MaterialService {
     if (!this.slots.embed) throw new AppError(400, "未配置嵌入模型，无法重建稠密索引");
     const chunks = await this.loadMaterialChunks(caseId, materialId);
     if (chunks.length === 0) throw new AppError(400, "该素材无可索引切块");
+    const processedDir = path.join(this.paths.caseDir(caseId), "processed");
+    const crEnabled = readContextualRetrieval();
+    if (crEnabled) {
+      // 先在内存里补 context（embed 用 indexText 即含 context）；.chunks.jsonl 推迟到 .vec 重建成功后再落。
+      const fullText = await readFile(path.join(processedDir, `${materialId}.txt`), "utf8").catch(() => chunks.map((c) => c.text).join("\n\n"));
+      await this.attachContext(actor, caseId, chunks, fullText);
+    }
 
     const outcome = await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, chunks);
+    if (crEnabled && outcome.indexed) {
+      // 仅在 .vec 成功重建后才把 context 落进 .chunks.jsonl，保证 jsonl 与 vec 同源一致（评审 #4：embed 失败时不留 jsonl-有 context/vec-旧 的错配）。
+      await writeFile(
+        path.join(processedDir, `${materialId}.chunks.jsonl`),
+        chunks.map((c) => JSON.stringify(c)).join("\n") + (chunks.length ? "\n" : ""),
+        "utf8",
+      );
+    }
     const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
       m.note = outcome.note; // 成功→undefined（清降级提示）；失败→索引降级原因
     });

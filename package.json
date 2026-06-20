@@ -18,6 +18,8 @@
     "test:run": "vitest run",
     "typecheck": "npm run build -w mini-agent && npm run typecheck -w @intel-workbench/server && npm run typecheck -w @intel-workbench/web",
     "check": "npm run typecheck && npm run test:run",
+    "eval": "tsx packages/server/eval/run-eval.ts",
+    "eval:gen": "tsx packages/server/eval/gen-corpus.ts",
     "dev:server": "npm run dev -w @intel-workbench/server",
     "dev:web": "npm run dev -w @intel-workbench/web",
     "build:server": "npm run build -w @intel-workbench/server",

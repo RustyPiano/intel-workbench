@@ -86,6 +86,8 @@ export interface Chunk {
   /** chunk 自带模态（二期 Spec §2.1）；旧 chunk 无此字段，读取时缺省 "doc"。 */
   modality: Modality;
   locator: ChunkLocator;
+  /** LLM 生成的检索语境；不进入 text/content_hash/Citation。旧 chunk 无此字段。 */
+  context?: string;
   text: string;
   content_hash: string;
 }

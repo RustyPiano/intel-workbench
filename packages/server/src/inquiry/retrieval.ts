@@ -21,13 +21,17 @@ export interface ScoredChunk {
   score: number;
 }
 
+export function indexText(chunk: Chunk): string {
+  return chunk.context ? `${chunk.context}\n\n${chunk.text}` : chunk.text;
+}
+
 const K1 = 1.5;
 const B = 0.75;
 
 /** BM25 打分，返回得分 > 0 的 top-k chunk（按分降序）。 */
 export function retrieve(query: string, chunks: Chunk[], k = 6): ScoredChunk[] {
   if (chunks.length === 0) return [];
-  const docTokens = chunks.map((c) => tokenize(c.text));
+  const docTokens = chunks.map((c) => tokenize(indexText(c)));
   const n = chunks.length;
   const df = new Map<string, number>();
   for (const toks of docTokens) {
@@ -201,7 +205,7 @@ export async function rerankTopK(
   k: number,
 ): Promise<Chunk[]> {
   if (candidates.length === 0) return [];
-  const scores = await reranker.rerank(query, candidates.map((c) => c.text));
+  const scores = await reranker.rerank(query, candidates.map(indexText));
   return candidates
     .map((chunk, i) => ({ chunk, score: scores[i] ?? 0 }))
     .sort((a, b) => b.score - a.score)

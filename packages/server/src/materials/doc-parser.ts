@@ -12,9 +12,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import type { OcrLine } from "../model/slots.js";
+
 export interface DocPage {
   page: number;
   text: string;
+  ocrLines?: OcrLine[];
 }
 
 export interface DocParseResult {

@@ -111,6 +111,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     audit,
   );
   const slots: ModelSlots = buildSlots(useMockMedia(), slotConfigs);
+  const llm: LlmDeps = { adapter, guard, modelEndpoint };
   // 零外发不变量（勿破）：真槽 ⟺ 非空端点。槽（buildSlots）与下面各 *Endpoint 都由同一
   // slotConfigs.<slot>.configured 派生，且 configured=Boolean(baseURL&&model&&host)（slot-config.ts），
   // 故"真适配器"必然带非空端点 → authorizeMedia 的"端点为空即跳过"对真槽永不跳过、必先授权。
@@ -130,8 +131,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     vlm: media.vlmEndpoint,
     ocr: media.ocrEndpoint,
     embed: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "",
-  });
-  const llm: LlmDeps = { adapter, guard, modelEndpoint };
+  }, llm, promptStore);
   // 稠密检索依赖（二期 P2.4）：embed 槽 + 端点（real 出站前授权；mock 进程内为空）。
   const dense = { embed: slots.embed, embedEndpoint: slotConfigs.embed.configured ? slotConfigs.embed.baseURL : "" };
   // 重排依赖（二期 P2.5，可选门控）：rerank 槽 + 端点（real 出站前授权；mock 进程内为空）；缺省 null → 不重排。

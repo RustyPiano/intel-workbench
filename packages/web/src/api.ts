@@ -167,6 +167,18 @@ export interface ApiElement {
   note?: string;
 }
 
+export interface Contradiction {
+  id: string;
+  entity: string;
+  attribute?: string;
+  scope: "cross-material" | "intra-material";
+  claim_a: { text: string; citation: ApiCitation };
+  claim_b: { text: string; citation: ApiCitation };
+  relation: "contradiction";
+  rationale: string;
+  confidence: number;
+}
+
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
 
 export interface ApiReport {
@@ -495,6 +507,20 @@ export function listElements(caseId: string): Promise<ApiElement[]> {
 export function extractElements(caseId: string): Promise<ApiElement[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/elements`, { method: "POST", headers: headers() }).then((r) =>
     unwrap<ApiElement[]>(r, "elements"),
+  );
+}
+
+// ---- 矛盾检测 ----
+
+export function listContradictions(caseId: string): Promise<Contradiction[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions`, { headers: headers() }).then((r) =>
+    unwrap<Contradiction[]>(r, "contradictions"),
+  );
+}
+
+export function detectContradictions(caseId: string): Promise<Contradiction[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions`, { method: "POST", headers: headers() }).then((r) =>
+    unwrap<Contradiction[]>(r, "contradictions"),
   );
 }
 

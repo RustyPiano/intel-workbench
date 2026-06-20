@@ -14,6 +14,7 @@ import { CaseListPage } from "./pages/CaseList";
 import {
   CaseAuditPanel,
   CaseWorkbench,
+  ContradictionsPanel,
   ElementsPanel,
   InquiryPanel,
   MaterialsPanel,
@@ -46,6 +47,7 @@ export function App() {
           <Route index element={<Navigate to="materials" replace />} />
           <Route path="materials" element={<MaterialsPanel />} />
           <Route path="elements" element={<ElementsPanel />} />
+          <Route path="contradictions" element={<ContradictionsPanel />} />
           <Route path="inquiry" element={<InquiryPanel />} />
           <Route path="report" element={<ReportPanel />} />
           <Route path="audit" element={<CaseAuditPanel />} />

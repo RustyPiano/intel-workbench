@@ -41,8 +41,16 @@ interface JudgeResult {
   certainty?: number;
 }
 
-function normalizeKey(entity: string, attribute: string): string {
-  return `${entity.toLowerCase().trim()}:${attribute.toLowerCase().trim()}`;
+interface DetectionStats {
+  clusters: number;
+  pairsJudged: number;
+}
+
+// 按实体聚类（不含 attribute）：同一实体的不同属性表述（如 572号护卫舰 的 "状态"/"部署能力"/"动力测试状态"）
+// 进同一簇，由簇内 NLI 判定是否真冲突。规避"按 entity:attribute 精确串聚类"对 LLM 自由抽取的表层差异过敏导致漏判
+// （实测 entity:attribute 聚类几乎全是 size-1 簇 → recall≈0.17 且高方差）。entity 串（代号/舷号/编号）比 attribute 稳定。
+function normalizeKey(entity: string): string {
+  return entity.toLowerCase().replace(/\s+/g, "").trim();
 }
 
 function citationKey(citation: Citation): string {
@@ -84,6 +92,8 @@ function asJudgeResult(raw: Record<string, unknown>): JudgeResult {
 }
 
 export class ContradictionService {
+  private readonly detectionStats = new WeakMap<Contradiction[], DetectionStats>();
+
   constructor(
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
@@ -109,28 +119,15 @@ export class ContradictionService {
         });
         return [];
       }
-      if (!this.llm.adapter || !this.llm.modelEndpoint) throw new Error("文本 LLM 未配置：矛盾检测不可用");
-
-      const budget = readCtxBudgetTokens();
-      const { used: chunks } =
-        budget !== null ? fitToBudget(all, budget) : { used: all.slice(0, MAX_CHUNKS) };
-      if (budget === null && all.length > MAX_CHUNKS) {
-        console.warn(`ContradictionService 无预算回退：截到前 ${MAX_CHUNKS}/${all.length} 块（设 MINI_AGENT_CTX_BUDGET_TOKENS 以按预算取材）`);
-      }
-      const retrievedById = new Map(chunks.map((chunk) => [chunk.chunk_id, chunk]));
-      const rawClaims = await this.extractClaims(actor, chunks);
-      const claims = this.groundClaims(rawClaims, retrievedById, nameById);
-      const clusters = this.clusterClaims(claims);
-      const { contradictions, pairsJudged } = await this.judgeClusters(actor, clusters);
-
-      contradictions.sort((a, b) => b.confidence - a.confidence);
+      const contradictions = await this.detectFromChunks(actor, all, nameById);
+      const stats = this.detectionStats.get(contradictions) ?? { clusters: 0, pairsJudged: 0 };
       await this.persist(caseId, contradictions);
       await this.audit.append({
         user: actor.id,
         action: "contradiction.detect",
         object: `case:${caseId}`,
         caseId,
-        detail: { caseId, count: contradictions.length, clusters: clusters.size, pairsJudged },
+        detail: { caseId, count: contradictions.length, clusters: stats.clusters, pairsJudged: stats.pairsJudged },
       });
       return contradictions;
     } catch (e) {
@@ -144,6 +141,34 @@ export class ContradictionService {
       });
       return [];
     }
+  }
+
+  async detectFromChunks(actor: Identity, chunks: Chunk[], nameById: Map<string, string>): Promise<Contradiction[]> {
+    if (chunks.length === 0) {
+      const contradictions: Contradiction[] = [];
+      this.detectionStats.set(contradictions, { clusters: 0, pairsJudged: 0 });
+      return contradictions;
+    }
+    if (!this.llm.adapter || !this.llm.modelEndpoint) throw new Error("文本 LLM 未配置：矛盾检测不可用");
+
+    const budget = readCtxBudgetTokens();
+    const { used: fittedChunks } =
+      budget !== null ? fitToBudget(chunks, budget) : { used: chunks.slice(0, MAX_CHUNKS) };
+    if (budget === null && chunks.length > MAX_CHUNKS) {
+      console.warn(`ContradictionService 无预算回退：截到前 ${MAX_CHUNKS}/${chunks.length} 块（设 MINI_AGENT_CTX_BUDGET_TOKENS 以按预算取材）`);
+    }
+    const retrievedById = new Map(fittedChunks.map((chunk) => [chunk.chunk_id, chunk]));
+    const rawClaims = await this.extractClaims(actor, fittedChunks);
+    const claims = this.groundClaims(rawClaims, retrievedById, nameById);
+    const clusters = this.clusterClaims(claims);
+    if (process.env.MINI_AGENT_CONTRADICTION_DEBUG) {
+      console.error(`[ct-debug] rawClaims=${rawClaims.length} grounded=${claims.length} clusters=${clusters.size} sizes=[${[...clusters.values()].map((c) => c.length).join(",")}] keys=${[...clusters.keys()].slice(0, 20).join(" | ")}`);
+    }
+    const { contradictions, pairsJudged } = await this.judgeClusters(actor, clusters);
+
+    contradictions.sort((a, b) => b.confidence - a.confidence);
+    this.detectionStats.set(contradictions, { clusters: clusters.size, pairsJudged });
+    return contradictions;
   }
 
   async get(actor: Identity, caseId: string): Promise<Contradiction[]> {
@@ -194,7 +219,7 @@ export class ContradictionService {
   private clusterClaims(claims: GroundedClaim[]): Map<string, GroundedClaim[]> {
     const clusters = new Map<string, GroundedClaim[]>();
     for (const claim of claims) {
-      const key = normalizeKey(claim.entity, claim.attribute);
+      const key = normalizeKey(claim.entity);
       clusters.set(key, [...(clusters.get(key) ?? []), claim]);
     }
     return clusters;

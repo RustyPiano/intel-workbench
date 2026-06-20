@@ -1,14 +1,19 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import type { Chunk, ChunkLocator, Modality } from "../domain/types.js";
 import type { AsrAdapter, AsrResult, ModelSlots, OcrLine, VlmAdapter, OcrAdapter } from "../model/slots.js";
 import { sha256 } from "../util/hash.js";
+import { detectShots, extractAudioWav, extractFrame, ffmpegAvailable, probeDuration } from "./ffmpeg.js";
 
 /**
  * 媒体加工管线（二期 §4.2/§4.3/§4.4）。媒体不是新子系统，只是新的 chunk 生产者：产出与
  * 文档相同格式的 Chunk（modality + timecode/bbox/speaker/frame locator + content_hash），
  * 即可被 loadCaseChunks/检索/Citation/问答/要素全部不改即引用。
  *
- * 本期 mock-first：分镜/帧抽取由确定性 mock 代替（真实 ffmpeg+TransNetV2 为 P2.6）；
- * 配文/转写/OCR 经 VLM/ASR/OCR 适配器（mock）。
+ * 视频优先走本地 ffmpeg 分镜/抽帧/抽音频；不可用或失败时回落确定性 mock。
+ * 配文/转写/OCR 经 VLM/ASR/OCR 适配器。
  */
 
 const SHOT_SECONDS = 10;
@@ -48,9 +53,12 @@ export async function processAudio(materialId: string, version: number, audio: B
 
 // ==================== 视频 ====================
 
+export type MediaFrameFormat = "svg" | "png";
+
 export interface MediaFrame {
-  /** 帧标识（= 镜头起始秒），落 `processed/<mid>.frames/<key>.svg`。 */
+  /** 帧标识（= 镜头序号），由 MaterialService 按 format 落到 `processed/<mid>.frames/<key>.<ext>`。 */
   key: string;
+  format: MediaFrameFormat;
   content: Buffer;
 }
 
@@ -58,6 +66,7 @@ interface ShotMeta {
   t1: number;
   t2: number;
   frameKey: string;
+  frameFormat: MediaFrameFormat;
   caption: string | null;
   ocr: OcrLine[];
 }
@@ -88,7 +97,6 @@ export async function processVideo(
   video: Buffer,
   slots: Pick<ModelSlots, "asr" | "vlm" | "ocr">,
 ): Promise<VideoProcessResult> {
-  const duration = mockDuration(video);
   const chunks: Chunk[] = [];
   const frames: MediaFrame[] = [];
   const shots: ShotMeta[] = [];
@@ -96,11 +104,38 @@ export async function processVideo(
   const engines: string[] = [];
   let capIdx = 0;
   let ocrIdx = 0;
+  let duration = mockDuration(video);
+  let ranges: [number, number][] = [];
+  let frameImages: Buffer[] = [];
+  let frameFormat: MediaFrameFormat = "svg";
+  let asrInput = video;
+  let tmpDir: string | null = null;
 
-  // mock 分镜（TransNetV2 形态）：按固定时长切镜头。
-  const ranges: [number, number][] = [];
-  for (let t = 0; t < duration; t += SHOT_SECONDS) ranges.push([t, Math.min(t + SHOT_SECONDS, duration)]);
-  if (ranges.length === 0) ranges.push([0, duration]);
+  try {
+    if (!(await ffmpegAvailable())) throw new Error("ffmpeg not found");
+    tmpDir = await mkdtemp(path.join(tmpdir(), "iw-ffmpeg-"));
+    const file = path.join(tmpDir, "input.video");
+    await writeFile(file, video);
+    duration = await probeDuration(file);
+    ranges = await detectShots(file, duration);
+    for (const [t1, t2] of ranges) frameImages.push(await extractFrame(file, (t1 + t2) / 2));
+    asrInput = await extractAudioWav(file);
+    frameFormat = "png";
+    engines.push("ffmpeg");
+  } catch {
+    notes.push("real shot detection unavailable (ffmpeg not found)");
+    duration = mockDuration(video);
+    ranges = [];
+    frameImages = [];
+    frameFormat = "svg";
+    asrInput = video;
+    // mock 分镜（TransNetV2 形态）：按固定时长切镜头。
+    for (let t = 0; t < duration; t += SHOT_SECONDS) ranges.push([t, Math.min(t + SHOT_SECONDS, duration)]);
+    if (ranges.length === 0) ranges.push([0, duration]);
+    for (const [t1] of ranges) frameImages.push(mockFrame(t1));
+  } finally {
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  }
 
   if (slots.vlm) engines.push(slots.vlm.engine);
   else notes.push("VLM 未配置：跳过镜头配文");
@@ -109,9 +144,9 @@ export async function processVideo(
 
   for (let si = 0; si < ranges.length; si++) {
     const [t1, t2] = ranges[si];
-    const frame = mockFrame(t1);
-    const key = String(t1);
-    frames.push({ key, content: frame });
+    const frame = frameImages[si] ?? mockFrame(t1);
+    const key = String(si);
+    frames.push({ key, format: frameFormat, content: frame });
     let caption: string | null = null;
     let ocrLines: OcrLine[] = [];
     if (slots.vlm) {
@@ -134,14 +169,14 @@ export async function processVideo(
     for (const line of ocrLines) {
       chunks.push(makeChunk(materialId, `${materialId}.v${version}.ocr#${ocrIdx++}`, "video", line.text, { timecode: tc(t1, t2), bbox: line.bbox, frame: si }));
     }
-    shots.push({ t1, t2, frameKey: key, caption, ocr: ocrLines });
+    shots.push({ t1, t2, frameKey: key, frameFormat, caption, ocr: ocrLines });
   }
 
   // 音轨转写（走 ASR）→ modality:"video" 转写 chunk。
   let transcript: AsrResult | null = null;
   if (slots.asr) {
     try {
-      transcript = await slots.asr.transcribe(video);
+      transcript = await slots.asr.transcribe(asrInput);
       engines.push(slots.asr.engine);
       transcript.segments.forEach((seg, i) =>
         chunks.push(makeChunk(materialId, `${materialId}.v${version}.tr#${i}`, "video", seg.text, { timecode: tc(seg.start, seg.end), speaker: seg.speaker })),

@@ -19,10 +19,10 @@ export function createMaterialsRouter(materials: MaterialService): Router {
     res.sendFile(filePath, { headers: { "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(filename)}` } });
   });
 
-  // 视频/图像关键帧（二期 §4.3）：bbox 引用在帧上框选回放。t = 镜头起始秒。
+  // 视频/图像关键帧（二期 §4.3）：bbox 引用在帧上框选回放。t = 镜头序号。
   router.get("/:mid/frame", async (req, res) => {
-    const { path: filePath } = await materials.getFrameFile(req.identity, req.params.mid, String(req.query.t ?? ""));
-    res.sendFile(filePath, { headers: { "Content-Type": "image/svg+xml" } });
+    const { path: filePath, contentType } = await materials.getFrameFile(req.identity, req.params.mid, String(req.query.t ?? ""));
+    res.sendFile(filePath, { headers: { "Content-Type": contentType } });
   });
 
   return router;

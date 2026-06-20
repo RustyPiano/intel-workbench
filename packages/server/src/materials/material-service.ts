@@ -83,6 +83,14 @@ const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑为扫描件，OCR
 /** 稠密索引尽力而为失败时挂到素材 note 上的提示（检索仍可用 BM25，可手动重建）。 */
 const INDEX_DEGRADED_NOTE = "稠密索引未建（检索回退 BM25，可在素材上「重建索引」）";
 
+function frameContentType(format: MediaFrame["format"]): string {
+  return format === "png" ? "image/png" : "image/svg+xml";
+}
+
+function isFrameFormat(value: unknown): value is MediaFrame["format"] {
+  return value === "svg" || value === "png";
+}
+
 export function normalize(text: string): string {
   return text
     .replace(/\r\n?/g, "\n")
@@ -332,7 +340,45 @@ export class MaterialService {
       caseId,
       detail: { caseId, materialId: id, filename, modality, status: base.status },
     });
-    return base;
+    return this.processMediaAtIngest(actor, caseId, base);
+  }
+
+  private shouldProcessMediaAtIngest(modality: Modality): boolean {
+    if (modality === "audio") return this.slots.asr !== null;
+    if (modality === "image") return this.slots.vlm !== null || this.slots.ocr !== null;
+    return false;
+  }
+
+  private async processMediaAtIngest(actor: Identity, caseId: string, material: Material): Promise<Material> {
+    if (material.modality !== "audio" && material.modality !== "image") return material;
+    const modality = material.modality;
+    if (!this.shouldProcessMediaAtIngest(material.modality)) return material;
+
+    try {
+      const processed = await this.process(actor, caseId, material.id);
+      if (processed.status !== "failed") return processed;
+    } catch (e) {
+      // 并发 409（已有 caller 持有 processing）：绝不能把 processing 改回 pending 破坏状态机——原样抛出，不降级。
+      if (e instanceof AppError && e.status === 409) throw e;
+      // 其余=摄入期媒体加工尽力而为：保留上传、下面降级 pending。
+    }
+
+    // 降级 failed/异常 → pending；该状态转换如实落审计（勿静默改写，审计红线）。
+    const degraded = await this.cases.updateMaterial(caseId, material.id, (m) => {
+      m.status = "pending";
+      m.note = DEGRADE_NOTE[modality];
+    });
+    await this.audit
+      .append({
+        user: actor.id,
+        action: "material.process",
+        object: `material:${material.id}`,
+        result: "error",
+        caseId,
+        detail: { caseId, materialId: material.id, phase: "ingest-degrade", modality, reason: "media-processing-failed" },
+      })
+      .catch(() => undefined);
+    return degraded;
   }
 
   /** 归一化文本 → 切块并落 `.txt` + `.chunks.jsonl`，返回切块数 + 索引降级 note（base64/流式共用）。 */
@@ -536,7 +582,7 @@ export class MaterialService {
       caseId,
       detail: { caseId, materialId: id, filename, modality, status: base.status, via: "stream" },
     });
-    return base;
+    return this.processMediaAtIngest(actor, caseId, base);
   }
 
   /** 专题素材列表 + 加工状态（§5）。 */
@@ -571,19 +617,35 @@ export class MaterialService {
     return { material, note: material.note ?? "该素材尚未加工完成" };
   }
 
-  /** 取视频/图像关键帧文件（bbox 引用回放，二期 §4.3）。t = 镜头起始秒（数字）。 */
-  async getFrameFile(actor: Identity, materialId: string, t: string): Promise<{ path: string }> {
+  /** 取视频/图像关键帧文件（bbox 引用回放，二期 §4.3）。t = 镜头序号（数字）。 */
+  async getFrameFile(actor: Identity, materialId: string, t: string): Promise<{ path: string; contentType: string }> {
     const located = await this.locate(materialId);
     if (!located) throw new AppError(404, "素材不存在");
     await this.cases.get(actor, located.caseId);
     if (!/^\d+$/.test(t)) throw new AppError(400, "非法时间码");
-    const file = path.join(this.paths.caseDir(located.caseId), "processed", `${materialId}.frames`, `${t}.svg`);
+    const processedDir = path.join(this.paths.caseDir(located.caseId), "processed");
+    let format: MediaFrame["format"] | null = null;
     try {
-      await stat(file);
-    } catch {
-      throw new AppError(404, "帧不存在");
+      const media = JSON.parse(await readFile(path.join(processedDir, `${materialId}.media.json`), "utf8")) as {
+        shots?: Array<{ frameKey?: unknown; frameFormat?: unknown }>;
+      };
+      const shot = Array.isArray(media.shots) ? media.shots.find((s) => s.frameKey === t) : undefined;
+      if (shot && isFrameFormat(shot.frameFormat)) format = shot.frameFormat;
+      else throw new AppError(404, "帧不存在");
+    } catch (e) {
+      if (e instanceof AppError) throw e;
     }
-    return { path: file };
+    const candidates: MediaFrame["format"][] = format ? [format] : ["svg", "png"];
+    for (const candidate of candidates) {
+      const file = path.join(processedDir, `${materialId}.frames`, `${t}.${candidate}`);
+      try {
+        await stat(file);
+        return { path: file, contentType: frameContentType(candidate) };
+      } catch {
+        // try next candidate
+      }
+    }
+    throw new AppError(404, "帧不存在");
   }
 
   /** 原始素材文件路径（供回放/下载，二期 P2.3a）。经 cases.get 复用密级校验。 */
@@ -776,7 +838,7 @@ export class MaterialService {
     const dir = path.join(processedDir, `${materialId}.frames`);
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
-    for (const f of frames) await writeFile(path.join(dir, `${f.key}.svg`), f.content);
+    for (const f of frames) await writeFile(path.join(dir, `${f.key}.${f.format}`), f.content);
   }
 
   private async failProcess(actor: Identity, caseId: string, materialId: string, note: string, reason: string): Promise<Material> {

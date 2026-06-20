@@ -139,6 +139,18 @@ export interface Element {
   note?: string;
 }
 
+export interface Contradiction {
+  id: string;
+  entity: string;
+  attribute?: string;
+  scope: "cross-material" | "intra-material";
+  claim_a: { text: string; citation: Citation };
+  claim_b: { text: string; citation: Citation };
+  relation: "contradiction";
+  rationale: string;
+  confidence: number;
+}
+
 /** 报告复核状态机（工程方案 §7.4）：草稿 → 待复核 → 已复核 → 已导出。 */
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
 

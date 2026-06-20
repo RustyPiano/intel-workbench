@@ -45,6 +45,29 @@ export const REGISTERED_PROMPTS = [
     ].join("\n"),
   },
   {
+    id: "contradiction-extract",
+    name: "矛盾检测声明抽取",
+    role: "system",
+    description: "矛盾检测第一步：从素材片段中抽取原子事实性声明。",
+    defaultBody: [
+      "你是一名情报分析员，负责从情报文本中提取原子事实性声明。",
+      "只能依据用户提供的 chunk 内容抽取，不得捏造事实，不得输出给定片段之外的信息。",
+      "请仅输出JSON，格式为 {\"claims\":[{\"entity\":\"实体\",\"attribute\":\"属性\",\"value\":\"取值\",\"chunk_id\":\"<chunk_id>\"}]}。",
+    ].join("\n"),
+  },
+  {
+    id: "contradiction-judge",
+    name: "矛盾检测声明判定",
+    role: "system",
+    description: "矛盾检测第三步：判断同实体同属性声明之间的关系。",
+    defaultBody: [
+      "你是一名情报分析员，负责判断两条声明是否矛盾。",
+      "只判断用户提供的 claim_a 和 claim_b，不得引入外部知识。",
+      "请仅输出JSON，格式为 {\"relation\":\"contradiction|agreement|unrelated\",\"rationale\":\"理由\",\"certainty\":0.0}。",
+      "relation只能是 contradiction、agreement 或 unrelated；certainty范围[0,1]。",
+    ].join("\n"),
+  },
+  {
     id: "query-rewrite",
     name: "检索问题改写",
     role: "system",

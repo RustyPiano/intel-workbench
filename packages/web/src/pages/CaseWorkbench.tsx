@@ -5,6 +5,7 @@ import {
   approveReport,
   askInquiryStream,
   deleteMaterial,
+  detectContradictions,
   draftReport,
   exportReport,
   extractElements,
@@ -14,6 +15,7 @@ import {
   getMaterialContent,
   getReport,
   listCaseAudit,
+  listContradictions,
   listElements,
   listInquiries,
   listMaterials,
@@ -30,6 +32,7 @@ import {
   type ApiMaterial,
   type ApiReport,
   type AuditEvent,
+  type Contradiction,
   type ElementType,
   type ImageMedia,
   type MaterialContent,
@@ -41,6 +44,7 @@ import { CLEARANCE_LABELS } from "../types";
 const TABS: { to: string; label: string }[] = [
   { to: "materials", label: "线索素材" },
   { to: "elements", label: "要素提取" },
+  { to: "contradictions", label: "矛盾检测" },
   { to: "inquiry", label: "智能问答" },
   { to: "report", label: "通报起草" },
   { to: "audit", label: "专题审计" },
@@ -911,7 +915,113 @@ export function ElementsPanel() {
   );
 }
 
-// ==================== 3. Inquiry Sub-panel ====================
+// ==================== 3. Contradictions Sub-panel ====================
+
+const CONTRADICTION_SCOPE_LABELS: Record<Contradiction["scope"], string> = {
+  "cross-material": "跨文件",
+  "intra-material": "文件内",
+};
+
+function citedClaim(text: string, citation: ApiCitation): ApiClaim {
+  return { text, type: "fact", status: "verified", citations: [citation] };
+}
+
+export function ContradictionsPanel() {
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [contradictions, setContradictions] = useState<Contradiction[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+
+  useEffect(() => {
+    if (!user || !caseId) return;
+    let alive = true;
+    listContradictions(caseId)
+      .then((items) => alive && setContradictions(items))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [user, caseId]);
+
+  const handleDetect = async () => {
+    if (!user || !caseId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setContradictions(await detectContradictions(caseId));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const all = contradictions ?? [];
+
+  return (
+    <div className="contradictions-layout">
+      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+        <span style={{ flex: 1, fontSize: "12px", color: "var(--text-dim)" }}>
+          已发现 <strong style={{ color: "#fff" }}>{all.length}</strong> 组矛盾线索
+        </span>
+        <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleDetect} disabled={busy}>
+          {busy ? "检测中…" : contradictions && contradictions.length > 0 ? "重新检测" : "检测矛盾"}
+        </button>
+      </div>
+
+      {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
+
+      <div className="contradictions-list">
+        {contradictions === null ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载中…</div>
+        ) : all.length === 0 ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
+            尚未检测到矛盾。点击「检测矛盾」从已加工素材中比对冲突陈述，每条结果都会绑定双方出处。
+          </div>
+        ) : (
+          all.map((item) => (
+            <div key={item.id} className="contradiction-row">
+              <div className="contradiction-row__head">
+                <div style={{ fontWeight: 700 }}>{item.attribute ? `${item.entity} · ${item.attribute}` : item.entity}</div>
+                <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+                  <span className={`contradiction-scope contradiction-scope--${item.scope === "cross-material" ? "cross" : "intra"}`}>
+                    {CONTRADICTION_SCOPE_LABELS[item.scope]}
+                  </span>
+                  <span className="contradiction-confidence">{Math.round(item.confidence * 100)}%</span>
+                </div>
+              </div>
+
+              <div className="contradiction-claims">
+                <div className="contradiction-claim">
+                  <div className="contradiction-claim__label">陈述 A</div>
+                  <div>
+                    {item.claim_a.text}
+                    <CitationChips claim={citedClaim(item.claim_a.text, item.claim_a.citation)} onFrame={setFrameCite} />
+                  </div>
+                </div>
+                <div className="contradiction-claim">
+                  <div className="contradiction-claim__label">陈述 B</div>
+                  <div>
+                    {item.claim_b.text}
+                    <CitationChips claim={citedClaim(item.claim_b.text, item.claim_b.citation)} onFrame={setFrameCite} />
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.7" }}>{item.rationale}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {frameCite ? <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} /> : null}
+    </div>
+  );
+}
+
+// ==================== 4. Inquiry Sub-panel ====================
 
 function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCitation) => void }) {
   if (claim.citations.length === 0) return null;
@@ -1238,7 +1348,7 @@ export function InquiryPanel() {
   );
 }
 
-// ==================== 4. Report Sub-panel ====================
+// ==================== 5. Report Sub-panel ====================
 
 const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: string }[] = [
   { status: "draft", label: "草稿起草", hint: "编辑标题与正文，保存即落盘并渲染公文" },
@@ -1420,7 +1530,7 @@ export function ReportPanel() {
   );
 }
 
-// ==================== 5. CaseAuditPanel Sub-panel ====================
+// ==================== 6. CaseAuditPanel Sub-panel ====================
 
 /** 审计动作码 → 中文研判动作（未知码原样显示）。 */
 const AUDIT_ACTION_LABELS: Record<string, string> = {

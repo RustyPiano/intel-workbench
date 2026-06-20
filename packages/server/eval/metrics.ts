@@ -5,6 +5,15 @@ export interface QueryRanking {
 
 export type MetricAverages = Record<string, number>;
 
+export interface PairPrf {
+  precision: number;
+  recall: number;
+  f1: number;
+  tp: number;
+  fp: number;
+  fn: number;
+}
+
 function relevantSet(relevant: string[] | Set<string>): Set<string> {
   return relevant instanceof Set ? relevant : new Set(relevant);
 }
@@ -68,4 +77,23 @@ export function aggregateMetrics(rows: QueryRanking[], ks: number[]): MetricAver
     out[`ndcgAt${k}`] = rows.reduce((sum, r) => sum + ndcgAtK(r.ranked, r.relevant, k), 0) / denom;
   }
   return out;
+}
+
+export function pairKey(a: string, b: string): string {
+  return JSON.stringify([a, b].sort());
+}
+
+export function contradictionPRF(predictedPairs: [string, string][], goldPairs: [string, string][]): PairPrf {
+  const predicted = new Set(predictedPairs.map(([a, b]) => pairKey(a, b)));
+  const gold = new Set(goldPairs.map(([a, b]) => pairKey(a, b)));
+  let tp = 0;
+  for (const key of predicted) {
+    if (gold.has(key)) tp++;
+  }
+  const fp = predicted.size - tp;
+  const fn = gold.size - tp;
+  const precision = predicted.size === 0 ? 0 : tp / predicted.size;
+  const recall = gold.size === 0 ? 0 : tp / gold.size;
+  const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+  return { precision, recall, f1, tp, fp, fn };
 }

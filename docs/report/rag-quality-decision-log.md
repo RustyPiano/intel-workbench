@@ -238,3 +238,18 @@
 **B2 视频真帧/分镜（ffmpeg 8.1.2 本机已装）**：新 `ffmpeg.ts`（本地子进程，同 lit 信任类、不经 OfflineGuard）——`ffmpegAvailable`/`probeDuration`/`parseSceneTimestamps`(纯)/`buildShotRanges`(纯)/`detectShots`(scene 滤镜+showinfo)/`extractFrame`/`extractAudioWav`；`processVideo` 真路径（临时文件→探时长→分镜→逐镜头抽真帧→抽 WAV 喂 ASR，finally 清临时目录）替换 mock，ffmpeg 缺失/任一步失败→回落 mock+诚实 note。`// TODO TransNetV2`。独立评审挑出**BLOCKING 气隙红线洞**：ffmpeg 解析恶意容器可经 concat:/playlist 触发**网络外连**——已修（全 ffmpeg/ffprobe 调用加 `-nostdin -protocol_whitelist file,pipe`，`assertLocalFile` 拒 `scheme://`/前导 `-`）；**MAJOR** 真帧 key 取小数(t1)+端点只认数字 key/恒发 svg MIME→真 PNG 不可服务——已修（frame key 取镜头整数序号、`MediaFrame.format` svg|png 贯通存储与端点 MIME）。本机真 ffmpeg 四命令（含白名单旗标）亲验可跑（probe/detect/PNG 15KB/WAV 64KB）。
 
 每特性 Codex 实现 + Codex/Opus 双评审 + 本地 `npm run check` 闸（**591/2 绿**）。三红线守住（媒体模型调用仍经 authorizeMedia；ffmpeg 锁本地协议；content_hash 不变；降级落审计）。提交 = Phase B 检查点（未 push）。
+
+## D12 — 交叉验证/矛盾检测（中心件，原创算法 + benchmark vs LLM 直出）
+
+**交付形态**：server `ContradictionService`（analysis/）+ 路由经 createApiRouter，1:1 仿 ElementService（工作台内可审计可溯源，非 mini-agent skill）。覆盖跨文件「同事实异说」+ 单文件内部矛盾（`scope:cross-material|intra-material`）。
+
+**原创算法（非"让 LLM 找矛盾"）**：① 逐块抽原子主张 `{entity,attribute,value,chunk_id}`（LLM）→ `resolveValidCitations` 丢伪造锚点；② **按实体确定性聚类**（非 LLM）；③ **仅簇内成对 NLI**（LLM judge `contradiction|agreement|unrelated`）→ O(Σnᵢ²) 非 O(N²)，每簇 ≤30 对+告警；④ 确定性置信度（关系确定度+是否跨源+数值距离）+ scope。逐条 provenance：两 citation 经 `chunkToCitation` 带 content_hash。OfflineGuard 逐块授权（extract/judge 各 purpose）；审计 `contradiction.detect`；best-effort 不崩。Opus 审修：逐块授权、路由并入 createApiRouter、清 Codex 平行草稿残留。
+
+**benchmark（核心实验，C1b）**：自造带标注语料 `eval/contradictions/corpus.json`（30 块/6 虚构文件/12 金标矛盾对，含跨/内 + 干扰），跑**本锚定流水线 vs LLM-直出基线**，指标=矛盾对 P/R/F1（`npm run eval:contradiction`）。
+
+**关键实验发现（真实，过程见 git）**：
+- **聚类粒度过敏 → 灾难性漏判**。初版按 `entity:attribute` 精确串聚类：LLM 自由抽取把同一实体的同一事实拆成不同 attribute 表述（如 `572号护卫舰` 的 `状态`/`部署能力`/`动力测试状态`），50 个簇几乎全 size-1 → 冲突主张从不进同簇被比较 → **anchored F1≈0.0–0.29（recall 0.17，高方差）**，惨败于 LLM-直出。
+- **修：改按实体聚类**（attribute 交给簇内 NLI 判语义冲突）→ 簇从 50(全 1) 降到 23(size 1–6) → **anchored F1=0.7368（precision 1.0，recall 0.58，7/12，0 误报）**。LLM-直出本轮 F1=0.96（11/12，非满分）。
+- **残余漏判=实体串表层变体**（`临时雷达站r-19` vs `r-19临时雷达站（工程队登记）`、`苍鹭无人机分队` vs `…（南堤机场放飞清单）`）确定性聚类仍不合并 → 下一级稳健化=**嵌入式实体归并**（按实体串语义相似聚类，复用 embed 槽），可选。
+
+**诚实结论 + 价值定位**：30 块小语料上 LLM-直出已近天花板（0.96），结构化在**原始 F1 上至多打平**；但结构化的不可替代价值是**逐条可验证 provenance**（每对矛盾绑定 content_hash 精确块、precision 1.0、可点可审）——直出只吐 chunk_id 对、无接地、且在**大语料**上单次调用必丢上下文/掉精度（结构化逐块抽+成对判可扩展）。即"赢"不在玩具集 F1 而在**可溯源+可扩展+可审计**。**可选增强**：嵌入式实体归并（推 recall）/ 更大更难语料（让直出掉精度，empirically 显结构化优势）——属可选实验，视后续投入。本地 `npm run check` 绿。提交 = C1b 检查点。

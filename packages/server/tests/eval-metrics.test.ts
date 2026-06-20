@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { aggregateMetrics, mrrAtK, ndcgAtK, recallAtK } from "../eval/metrics.js";
+import { aggregateMetrics, contradictionPRF, mrrAtK, ndcgAtK, pairKey, recallAtK } from "../eval/metrics.js";
 
 describe("RAG eval metrics", () => {
   it("computes recall@k from retrieved relevant ids", () => {
@@ -50,6 +50,23 @@ describe("RAG eval metrics", () => {
       mrrAt3: (1 + 1 / 3 + 0) / 3,
       ndcgAt1: (1 + 0 + 0) / 3,
       ndcgAt3: (1 + 1 / Math.log2(4) + 0) / 3,
+    });
+  });
+});
+
+describe("contradiction pair metrics", () => {
+  it("computes order-independent pair precision, recall, and F1", () => {
+    const predicted: [string, string][] = [["c-002", "c-001"], ["c-003", "c-004"], ["c-004", "c-003"], ["c-005", "c-006"]];
+    const gold: [string, string][] = [["c-001", "c-002"], ["c-007", "c-008"]];
+
+    expect(pairKey("c-001", "c-002")).toBe(pairKey("c-002", "c-001"));
+    expect(contradictionPRF(predicted, gold)).toEqual({
+      precision: 1 / 3,
+      recall: 1 / 2,
+      f1: 0.4,
+      tp: 1,
+      fp: 2,
+      fn: 1,
     });
   });
 });

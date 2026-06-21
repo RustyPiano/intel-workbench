@@ -139,6 +139,11 @@ export interface Element {
   note?: string;
 }
 
+export interface ElementGraphNode { id: string; name: string; type: ElementType; freq: number; degree: number; }
+export interface ElementGraphEdge { source: string; target: string; weight: number; citations: Citation[]; }
+export interface TimelinePoint { id: string; label: string; sortKey: number | null; related: { id: string; name: string; type: ElementType }[]; citations: Citation[]; }
+export interface ElementGraph { nodes: ElementGraphNode[]; edges: ElementGraphEdge[]; timeline: TimelinePoint[]; anchored: boolean; truncated: boolean; }
+
 export interface Contradiction {
   id: string;
   entity: string;

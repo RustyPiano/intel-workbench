@@ -510,6 +510,15 @@ export function extractElements(caseId: string): Promise<ApiElement[]> {
   );
 }
 
+export interface ElementGraphNode { id: string; name: string; type: ElementType; freq: number; degree: number; }
+export interface ElementGraphEdge { source: string; target: string; weight: number; citations: ApiCitation[]; }
+export interface TimelinePoint { id: string; label: string; sortKey: number | null; related: { id: string; name: string; type: ElementType }[]; citations: ApiCitation[]; }
+export interface ElementGraph { nodes: ElementGraphNode[]; edges: ElementGraphEdge[]; timeline: TimelinePoint[]; anchored: boolean; truncated: boolean; }
+
+export function getElementGraph(caseId: string): Promise<ElementGraph> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/element-graph`, { headers: headers() }).then((r) => unwrap<ElementGraph>(r, "graph"));
+}
+
 // ---- 矛盾检测 ----
 
 export function listContradictions(caseId: string): Promise<Contradiction[]> {

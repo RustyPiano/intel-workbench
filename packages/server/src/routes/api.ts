@@ -4,6 +4,7 @@ import type { AdminService } from "../admin/admin-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { AuthService } from "../auth/auth-service.js";
 import type { ContradictionService } from "../analysis/contradiction-service.js";
+import type { ElementGraphService } from "../analysis/element-graph-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { ElementService } from "../elements/element-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
@@ -14,6 +15,7 @@ import { createAuditRouter } from "./audit.js";
 import { createAuthRouter } from "./auth.js";
 import { createCasesRouter } from "./cases.js";
 import { createContradictionsRouter } from "./contradictions.js";
+import { createElementGraphRouter } from "./element-graph.js";
 import { createElementsRouter } from "./elements.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
@@ -32,6 +34,7 @@ export interface ApiServices {
   materials: MaterialService;
   inquiries: InquiryService;
   elements: ElementService;
+  elementGraph: ElementGraphService;
   contradictions: ContradictionService;
   reports: ReportService;
   admin: AdminService;
@@ -62,6 +65,7 @@ export function createApiRouter(services: ApiServices): Router {
         "GET /api/materials/:mid",
         "GET/POST /api/cases/:id/inquiries",
         "GET/POST /api/cases/:id/elements",
+        "GET /api/cases/:id/element-graph",
         "GET /api/cases/:id/report",
         "POST /api/cases/:id/report/{draft,submit,approve,export}",
         "GET /api/admin/{skills,models,users,prompts}",
@@ -78,6 +82,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
   router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/cases", createElementsRouter(services.elements));
+  router.use("/cases", createElementGraphRouter(services.elementGraph));
   router.use("/cases", createContradictionsRouter(services.contradictions));
   router.use("/cases", createReportsRouter(services.reports));
   router.use("/materials", createMaterialsRouter(services.materials));

@@ -266,3 +266,11 @@
 **编排（用户指定）**：Codex(xhigh) 实现 → Opus + 独立 Codex 双评审 → 本地 `npm run check` 闸。两评审**均无 BLOCKING/MAJOR**：独立 Codex 复核确认零外发（新 server 代码无 `fetch`/adapter/authorize，grep 证）、引用逐字透传、密级强制。采纳的评审意见：① Opus 折叠时间线两段重复渲染为 `TimelinePointRow`（简洁）；② Codex MINOR — `parseTimeKey` 把"型号2026A"之类含四位数串误判为年 → 收紧"年后不接拉丁字母"+回归测试（`型号2026A`/电话号 `13800002026`→null）；③ Codex MINOR — 零共现边时空态吞掉孤立要素 → 改为仅"无要素"才空态，零边时仍列全部要素+诚实提示；④ NIT — 切专题时清选中态/frameCite。季度类（`2026第3季度`）按年粒度锚定=记录在案的 v1 限制（确属 2026，季度解析属 scope creep 不做）。
 
 **测试**：纯函数单测 `element-graph.test.ts`（16 例）——`parseTimeKey` 8 用例+排序不变式+年首/标识符回归；`buildElementGraph` 单 chunk 一边、双 chunk weight=2、孤立 degree=0、时间点 related/sortKey、anchored 真假、同 hash 去重不重复计权。本地 `npm run check` 绿 **614/2**。三红线守住（无出站、引用逐字、读经访问控制）。提交 = C2 检查点（未 push）。
+
+## D16 / D19 — 产品补全·前端去毛刺（NewCase 真上传 + CaseList 搜索）
+
+**D16 NewCase 真上传**：`NewCase.tsx` 原「初始线索素材」dropzone 点击只是把写死的假文件名推进 `attachedFiles:string[]`（假占位）。改为真实文件选择 + 上传：隐藏 `<input type=file multiple>`，dropzone 点击触发选择，存 `File[]`，列表显示真实文件名 + 人类可读体积（`formatSize`）+ 单文件移除；提交时 `createCase` 成功后**复用既有 `uploadMaterial(caseId,file)` 逐个上传**（best-effort：单文件失败不阻断其余，素材状态在工作台 MaterialsPanel 可见），按钮显示「上传素材 i/n…」，完成后跳转新专题工作台。纯前端、零新 API、零后端改动、无红线面。评审（单评审=纯前端）修：Codex 初版收集 `uploadFailures` 后 `void` 丢弃=死代码，删之改为干净 catch+continue。
+
+**D19 CaseList 搜索启用**：`CaseList.tsx:42` 搜索框原 `disabled`（占位「M5 启用」）。启用为客户端过滤：按专题名 + 负责人不区分大小写匹配（trim，空 query→全部），「活动专题 (N)」计数用过滤后数量；保留 加载中/无专题 两态不变，新增「无匹配的专题」独立态（搜索框仍可用以清空）。纯前端。
+
+本地 `npm run typecheck -w @intel-workbench/web` 绿。提交 = D1+D4 检查点（未 push）。

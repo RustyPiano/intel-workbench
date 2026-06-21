@@ -3,7 +3,7 @@
 > **用途**：留存改造过程中的**决策、根因、选项权衡、验证数据**，供后续写实验报告直接取材，并防止对话压缩后丢失过程（体现工作量与规范性）。
 > **范围**：从"上传超时 bug"起，到 RAG 检索质量改造（切块 / bbox / 评测 / Contextual Retrieval / 查询改写）。
 > **维护方式**：每完成一个决策或步骤，**追加**一节（背景 → 根因/选项 → 决策 → 理由/权衡 → 验证 → 状态）。**不删旧节**。
-> **分支**：`feat/intel-p3-harness`　**起始**：2026-06-18　**最后更新**：2026-06-18
+> **分支**：`feat/intel-p3-harness`　**起始**：2026-06-18　**最后更新**：2026-06-22（Phase A–D 全收官；汇总见 `benchmark-summary.md`）
 
 ---
 
@@ -18,10 +18,17 @@
 | D5 | OCR 要不要喂 LLM 整理 | ✅（决策） | 不让 LLM 文本成为被引用原文（守溯源红线） |
 | D6 | 锁定本轮范围与关键取舍 | ✅（决策） | 5 步计划 + CR 逐块 LLM + verbatim 不变量 |
 | D7 | 步骤 1：切块重构（size-target 打包） | ✅ | 75 块 md→3 块；7.1KB/53→~12；554 测试绿 |
-| D8 | 步骤 2：bbox 几何重排（OCR） | ⏭️ 下一步（未动代码） | — |
-| D9 | 步骤 3：评测 / benchmark 闭环 | ⬜ 待办 | — |
-| D10 | 步骤 4：Contextual Retrieval（逐块 LLM） | ⬜ 待办 | — |
-| D11 | 步骤 5：查询改写（rewrite/HyDE） | ⬜ 待办 | — |
+| D8 | 步骤 2：bbox 几何重排（OCR）= A4 | ✅ | linesToParagraphs 灭"每页一块" + chunk locator.bbox 行并集 |
+| D9 | 步骤 3：评测 / benchmark 闭环 = A1 | ✅ | `npm run eval`；45 文档/227 块/100 query；baseline R@10=0.95 |
+| D10 | 步骤 4：Contextual Retrieval = A2 | ✅ | Chunk.context+indexText 只喂索引，引用仍 verbatim；opt-in |
+| D11 | 步骤 5：查询改写 rewrite/HyDE = A3 | ✅ | 仅影响检索；**诚实负结果**（反降，opt-in 默认关） |
+| Phase A 小结 | RAG 横向 benchmark 结论 | ✅ | 强基线饱和，通用增强不增益（见对应节 + benchmark-summary.md） |
+| Phase B | 多模态摄入做实（B1 音/图 + B2 视频 ffmpeg） | ✅ | 摄入即加工；视频真场景分镜（气隙白名单旗标） |
+| D12 | ★ 交叉验证/矛盾检测（C1，中心件） | ✅ | 锚定+成对 NLI；benchmark F1=0.737 vs 直出 0.957、precision 1.0 |
+| D13 | 要素关系网络 + 时间线（C2） | ✅ | 确定性共现聚合，非 LLM，可点跳源 |
+| D16/D19 | 产品补全：NewCase 真上传 + CaseList 搜索 | ✅ | 去假占位接 uploadMaterial；客户端过滤 |
+| D18 | 人工校对 affordance（§9.2） | ✅ | 低置信项「点此校对」→审计 review.mark；审计即存储 |
+| D17 | 跨专题总览 dashboard | ✅ | 只读聚合，密级裁剪边界=cases.list(actor) |
 
 ---
 

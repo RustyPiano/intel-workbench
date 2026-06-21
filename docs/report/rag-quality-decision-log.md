@@ -274,3 +274,13 @@
 **D19 CaseList 搜索启用**：`CaseList.tsx:42` 搜索框原 `disabled`（占位「M5 启用」）。启用为客户端过滤：按专题名 + 负责人不区分大小写匹配（trim，空 query→全部），「活动专题 (N)」计数用过滤后数量；保留 加载中/无专题 两态不变，新增「无匹配的专题」独立态（搜索框仍可用以清空）。纯前端。
 
 本地 `npm run typecheck -w @intel-workbench/web` 绿。提交 = D1+D4 检查点（未 push）。
+
+## D18 — 人工校对 affordance（§9.2，最小实现，审计即存储）
+
+**交付**：低置信问答结论（已回答里的「推断」类 claim + 不足/待核 claim）旁加「点此校对」按钮，点击写审计 `review.mark`（哈希链即唯一存储，不另建审校工作流）；面板加载时读本专题审计回填「✓ 已校对」。
+
+**后端**：新增 `review/review-service.ts`（`mark(actor,caseId,ref)`=先 `cases.get` 校验访问/密级 → trim+长度上限校验 → `audit.append({action:"review.mark",caseId,detail:{ref}})`）+ `routes/review.ts`（`POST /cases/:id/review`，守 `req.body.ref` 非串）+ createApiRouter/app.ts 接线（仿 ElementGraphService）。web `markReview` + InquiryPanel 接入（reviewedRefs 由 `listCaseAudit` 回填，best-effort try/catch 不破问答列表；`ref=${inquiry.id}:${claims.indexOf(c)}` 用原始 claim 下标稳定）。
+
+**红线**：新 server 代码**零外发**（仅 `cases.get`+`audit.append`）；**访问控制先于写入**（cases.get 抛错则不记账，测试用 length 比对锁死）；审计动作码 `review.mark`。
+
+**编排=Codex 实现 + Opus/独立 Codex 双评审**。裁决：独立 Codex 报 1 MAJOR「indexOf 对结构相同 claim 误判 ref 碰撞」——**经深追定为误报**：`Array.indexOf` 用引用相等（`===`），JSON 解析出的 claim 均为不同对象引用，`indexOf(c)` 返回该确切对象下标（即便文本相同），碰撞只会在「同一引用出现两次」时发生而 JSON.parse 不产出此情形；故 ref 恒正确，不改。采纳 Opus 自查 NIT：`String(detail?.ref)` 对缺失 ref 会塞入真值串 `"undefined"` → 改 `typeof ...==="string"` 过滤（防御性，服务端恒写 ref 故实务无害）。其余 MINOR（非串 ref→空串→400、缺密级拒绝测试、推断/待核非对称）均判为安全/有意/冗余不改。服务单测 3 例（记账/不可访问不记账/空 ref 400+trim）。本地 `npm run check` 绿 **617/2**。提交 = D3 检查点（未 push）。**deferred**：ASR 低分段校对（属音频 UI，本轮最小范围只覆盖问答 claim）。

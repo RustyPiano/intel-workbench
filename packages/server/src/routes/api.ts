@@ -10,6 +10,7 @@ import type { ElementService } from "../elements/element-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { MaterialService } from "../materials/material-service.js";
 import type { ReportService } from "../report/report-service.js";
+import type { ReviewService } from "../review/review-service.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createAuthRouter } from "./auth.js";
@@ -19,6 +20,7 @@ import { createElementGraphRouter } from "./element-graph.js";
 import { createElementsRouter } from "./elements.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
+import { createReviewRouter } from "./review.js";
 import { createReportsRouter } from "./reports.js";
 
 /**
@@ -37,6 +39,7 @@ export interface ApiServices {
   elementGraph: ElementGraphService;
   contradictions: ContradictionService;
   reports: ReportService;
+  review: ReviewService;
   admin: AdminService;
 }
 
@@ -66,6 +69,7 @@ export function createApiRouter(services: ApiServices): Router {
         "GET/POST /api/cases/:id/inquiries",
         "GET/POST /api/cases/:id/elements",
         "GET /api/cases/:id/element-graph",
+        "POST /api/cases/:id/review",
         "GET /api/cases/:id/report",
         "POST /api/cases/:id/report/{draft,submit,approve,export}",
         "GET /api/admin/{skills,models,users,prompts}",
@@ -85,6 +89,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createElementGraphRouter(services.elementGraph));
   router.use("/cases", createContradictionsRouter(services.contradictions));
   router.use("/cases", createReportsRouter(services.reports));
+  router.use("/cases", createReviewRouter(services.review));
   router.use("/materials", createMaterialsRouter(services.materials));
   router.use("/admin", createAdminRouter(services.admin));
   router.use("/audit", createAuditRouter(services.audit));

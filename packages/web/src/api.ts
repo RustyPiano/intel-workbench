@@ -377,6 +377,16 @@ export function listCaseAudit(caseId: string): Promise<AuditEvent[]> {
   );
 }
 
+/** 标记一条低置信项为已人工校对（§9.2，写审计 review.mark）。 */
+export async function markReview(caseId: string, ref: string): Promise<void> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/review`, { method: "POST", headers: headers(true), body: JSON.stringify({ ref }) });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `校对标记失败（HTTP ${res.status}）`);
+  }
+}
+
 export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { headers: headers() }).then((r) =>
     unwrap<ApiInquiry[]>(r, "inquiries"),

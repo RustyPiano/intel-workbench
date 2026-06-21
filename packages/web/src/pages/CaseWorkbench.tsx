@@ -20,6 +20,7 @@ import {
   listElements,
   listInquiries,
   listMaterials,
+  markReview,
   processMaterial,
   reindexMaterial,
   submitReport,
@@ -1307,7 +1308,7 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
   );
 }
 
-function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void }) {
+function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void; reviewedRefs: Set<string>; onReview: (ref: string) => void }) {
   if (inquiry.status !== "answered") {
     const unverified = inquiry.claims.filter((c) => c.status === "unverified");
     return (
@@ -1318,9 +1319,18 @@ function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c:
           {unverified.length > 0 ? (
             <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
               （以下为无有效出处的待核提示，不作为事实）
-              {unverified.map((c, i) => (
-                <div key={i} style={{ marginTop: "4px" }}>· {c.text}</div>
-              ))}
+              {unverified.map((c, i) => {
+                const ref = `${inquiry.id}:${inquiry.claims.indexOf(c)}`;
+                return (
+                  <div key={i} style={{ marginTop: "4px" }}>
+                    · {c.text}
+                    {reviewedRefs.has(ref)
+                      ? <span style={{ color: "#4caf50", fontSize: "11px", marginLeft: "6px" }}>✓ 已校对</span>
+                      : <button type="button" className="btn btn--ghost" style={{ padding: "1px 8px", fontSize: "11px", marginLeft: "6px" }} onClick={() => onReview(ref)}>点此校对</button>
+                    }
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -1330,13 +1340,24 @@ function InquiryAnswer({ inquiry, onFrame }: { inquiry: ApiInquiry; onFrame: (c:
   const verified = inquiry.claims.filter((c) => c.status === "verified");
   return (
     <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
-      {verified.map((c, i) => (
-        <div key={i} style={{ marginBottom: "6px" }}>
-          {i + 1}. {c.text}
-          {c.type === "inference" ? <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>（推断）</span> : null}
-          <CitationChips claim={c} onFrame={onFrame} />
-        </div>
-      ))}
+      {verified.map((c, i) => {
+        const ref = `${inquiry.id}:${inquiry.claims.indexOf(c)}`;
+        return (
+          <div key={i} style={{ marginBottom: "6px" }}>
+            {i + 1}. {c.text}
+            {c.type === "inference" ? (
+              <>
+                <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>（推断）</span>
+                {reviewedRefs.has(ref)
+                  ? <span style={{ color: "#4caf50", fontSize: "11px", marginLeft: "6px" }}>✓ 已校对</span>
+                  : <button type="button" className="btn btn--ghost" style={{ padding: "1px 8px", fontSize: "11px", marginLeft: "6px" }} onClick={() => onReview(ref)}>点此校对</button>
+                }
+              </>
+            ) : null}
+            <CitationChips claim={c} onFrame={onFrame} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1355,6 +1376,7 @@ export function InquiryPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const [reviewedRefs, setReviewedRefs] = useState<Set<string>>(new Set());
   const [liveQuestion, setLiveQuestion] = useState<string | null>(null);
   const [liveText, setLiveText] = useState("");
   const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
@@ -1366,9 +1388,22 @@ export function InquiryPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
+    setReviewedRefs(new Set());
     listInquiries(caseId)
       .then((list) => alive && setHistory(list))
       .catch((e: Error) => alive && setError(e.message));
+    void (async () => {
+      try {
+        const events = await listCaseAudit(caseId);
+        if (!alive) return;
+        const refs = new Set(
+          events
+            .filter((e) => e.action === "review.mark" && typeof e.detail?.ref === "string")
+            .map((e) => e.detail!.ref as string),
+        );
+        setReviewedRefs(refs);
+      } catch { /* best-effort; leave empty */ }
+    })();
     return () => {
       alive = false;
     };
@@ -1432,6 +1467,14 @@ export function InquiryPanel() {
     setBusy(false);
   };
 
+  const markReviewed = async (ref: string) => {
+    if (!caseId) return;
+    try {
+      await markReview(caseId, ref);
+      setReviewedRefs((prev) => new Set(prev).add(ref));
+    } catch { /* 忽略：保持未校对态 */ }
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = input.trim();
@@ -1488,7 +1531,7 @@ export function InquiryPanel() {
                 </svg>
               </div>
               <div className="chat-content">
-                <InquiryAnswer inquiry={inq} onFrame={setFrameCite} />
+                <InquiryAnswer inquiry={inq} onFrame={setFrameCite} reviewedRefs={reviewedRefs} onReview={markReviewed} />
               </div>
             </div>
           </div>

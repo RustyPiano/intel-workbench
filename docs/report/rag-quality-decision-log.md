@@ -284,3 +284,13 @@
 **红线**：新 server 代码**零外发**（仅 `cases.get`+`audit.append`）；**访问控制先于写入**（cases.get 抛错则不记账，测试用 length 比对锁死）；审计动作码 `review.mark`。
 
 **编排=Codex 实现 + Opus/独立 Codex 双评审**。裁决：独立 Codex 报 1 MAJOR「indexOf 对结构相同 claim 误判 ref 碰撞」——**经深追定为误报**：`Array.indexOf` 用引用相等（`===`），JSON 解析出的 claim 均为不同对象引用，`indexOf(c)` 返回该确切对象下标（即便文本相同），碰撞只会在「同一引用出现两次」时发生而 JSON.parse 不产出此情形；故 ref 恒正确，不改。采纳 Opus 自查 NIT：`String(detail?.ref)` 对缺失 ref 会塞入真值串 `"undefined"` → 改 `typeof ...==="string"` 过滤（防御性，服务端恒写 ref 故实务无害）。其余 MINOR（非串 ref→空串→400、缺密级拒绝测试、推断/待核非对称）均判为安全/有意/冗余不改。服务单测 3 例（记账/不可访问不记账/空 ref 400+trim）。本地 `npm run check` 绿 **617/2**。提交 = D3 检查点（未 push）。**deferred**：ASR 低分段校对（属音频 UI，本轮最小范围只覆盖问答 claim）。
+
+## D17 — 跨专题总览 dashboard（只读聚合，密级裁剪）
+
+**交付**：新「数据总览」页（OperatorLayout 导航 + `/overview` 路由），只读聚合当前账户**可访问**专题：专题数（进行中/已归档）、素材总数 + 模态分布（doc/audio/video/image）、要素/矛盾总数、密级分布、按更新时间倒序的专题表（名称链入工作台）。无跨专题检索（一期边界）。
+
+**后端**：新增 `overview/overview-service.ts`（`summary(actor)`=`cases.list(actor)` 拿密级裁剪后的清单 → 素材计数直接来自 manifest.materials → 每专题 best-effort 读 `elements.json`/`contradictions.json` 数组长度[`countJsonArray` try/catch→0] → 行按 updated_at 倒序）+ `routes/overview.ts`（`GET /overview` 顶层）+ app.ts/api.ts 接线。web `getOverview` + `pages/Overview.tsx`（复用 elements-table/badge--clearance 类，loading/error/空态）。
+
+**红线**：新 server 代码**零外发**（仅 `cases.list` + 本地 `readFile`）；**访问边界=`cases.list(actor)`**（密级裁剪），per-case 文件读经 `paths.caseDir(manifest.id)`（`assertSafeId` 拒 `..`/斜杠/空字节），低密级用户既看不到高密级专题也读不到其计数；只读无审计写。
+
+**编排=Codex 实现 + Opus/独立 Codex 双评审（均无 BLOCKING/MAJOR）**。独立 Codex 确认零外发/密级边界/无路径穿越/`Promise.all` 不被单坏文件 reject（countJsonArray 内吞错）/聚合正确/测试真实。采纳 NIT：web 本地 `CLEARANCES` 加注释钉死与服务端顺序一致。MINOR（countJsonArray 吞 EPERM 等）判为有意 best-effort（气隙单用户文件库 EPERM 近不可能，坏 JSON→0 正确，下次抽取重写）不改。服务单测 3 例（专题/素材聚合+倒序 / elements+contradictions 计数 / 缺文件=0 不崩）。本地 `npm run check` 绿 **620/2**。提交 = D2 检查点（未 push）。

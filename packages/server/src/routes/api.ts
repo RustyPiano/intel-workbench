@@ -9,6 +9,7 @@ import type { CaseService } from "../cases/case-service.js";
 import type { ElementService } from "../elements/element-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { MaterialService } from "../materials/material-service.js";
+import type { OverviewService } from "../overview/overview-service.js";
 import type { ReportService } from "../report/report-service.js";
 import type { ReviewService } from "../review/review-service.js";
 import { createAdminRouter } from "./admin.js";
@@ -20,6 +21,7 @@ import { createElementGraphRouter } from "./element-graph.js";
 import { createElementsRouter } from "./elements.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createMaterialsRouter } from "./materials.js";
+import { createOverviewRouter } from "./overview.js";
 import { createReviewRouter } from "./review.js";
 import { createReportsRouter } from "./reports.js";
 
@@ -34,6 +36,7 @@ export interface ApiServices {
   cases: CaseService;
   audit: AuditService;
   materials: MaterialService;
+  overview: OverviewService;
   inquiries: InquiryService;
   elements: ElementService;
   elementGraph: ElementGraphService;
@@ -61,6 +64,7 @@ export function createApiRouter(services: ApiServices): Router {
         "GET /api/auth/me",
         "GET/POST /api/cases",
         "GET/PATCH /api/cases/:id",
+        "GET /api/overview",
         "GET/POST /api/cases/:id/materials",
         "POST /api/cases/:id/materials/:mid/{process,reindex}",
         "DELETE /api/cases/:id/materials/:mid",
@@ -83,6 +87,7 @@ export function createApiRouter(services: ApiServices): Router {
   });
 
   router.use("/auth", createAuthRouter(services.auth));
+  router.use("/overview", createOverviewRouter(services.overview));
   router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
   router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/cases", createElementsRouter(services.elements));

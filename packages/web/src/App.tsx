@@ -22,6 +22,7 @@ import {
 } from "./pages/CaseWorkbench";
 import { LoginPage } from "./pages/Login";
 import { NewCasePage } from "./pages/NewCase";
+import { OverviewPage } from "./pages/Overview";
 
 /**
  * §8 全路由（横向骨架）：每屏可进入、可从导航到达。
@@ -42,6 +43,7 @@ export function App() {
         }
       >
         <Route path="/" element={<CaseListPage />} />
+        <Route path="/overview" element={<OverviewPage />} />
         <Route path="/cases/new" element={<NewCasePage />} />
         <Route path="/cases/:id" element={<CaseWorkbench />}>
           <Route index element={<Navigate to="materials" replace />} />

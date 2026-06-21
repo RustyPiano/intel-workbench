@@ -12,6 +12,7 @@ import {
   fetchFrameUrl,
   fetchMaterialRawUrl,
   getCase,
+  getElementGraph,
   getMaterialContent,
   getReport,
   listCaseAudit,
@@ -34,8 +35,10 @@ import {
   type AuditEvent,
   type Contradiction,
   type ElementType,
+  type ElementGraph,
   type ImageMedia,
   type MaterialContent,
+  type TimelinePoint,
   type VideoMedia,
 } from "../api";
 import { useSession } from "../state/session";
@@ -787,6 +790,15 @@ const ELEMENT_TYPE_ICONS: Record<ElementType, React.ReactNode> = {
 
 const ELEMENT_TYPES: ElementType[] = ["person", "org", "location", "event", "equipment", "time"];
 
+const TYPE_COLORS: Record<ElementType, string> = {
+  person: "#38bdf8",
+  org: "#a78bfa",
+  location: "#34d399",
+  event: "#f59e0b",
+  equipment: "#f87171",
+  time: "#facc15",
+};
+
 function mentionSources(el: ApiElement): string {
   return [...new Set(el.mentions.map((m) => m.material_name))].join("、");
 }
@@ -795,6 +807,7 @@ export function ElementsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
   const [elements, setElements] = useState<ApiElement[] | null>(null);
+  const [view, setView] = useState<"list" | "graph" | "timeline">("list");
   const [activeCat, setActiveCat] = useState<ElementType | "all">("all");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
@@ -833,7 +846,21 @@ export function ElementsPanel() {
   });
 
   return (
-    <div className="elements-layout">
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px", minHeight: 0 }}>
+      <div style={{ display: "inline-flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+        <button type="button" className={`btn ${view === "list" ? "btn--primary" : ""}`} style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => setView("list")}>
+          要素列表
+        </button>
+        <button type="button" className={`btn ${view === "graph" ? "btn--primary" : ""}`} style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => setView("graph")}>
+          关系网络
+        </button>
+        <button type="button" className={`btn ${view === "timeline" ? "btn--primary" : ""}`} style={{ padding: "6px 12px", fontSize: "12px" }} onClick={() => setView("timeline")}>
+          时间线
+        </button>
+      </div>
+
+      {view === "list" ? (
+        <div className="elements-layout">
       <div className="elements-categories">
         <div style={{ padding: "8px 12px", fontSize: "11px", fontWeight: "700", color: "var(--text-muted)" }}>分类过滤器</div>
         <button type="button" className={`elements-cat-btn ${activeCat === "all" ? "active" : ""}`} onClick={() => setActiveCat("all")}>
@@ -911,6 +938,223 @@ export function ElementsPanel() {
           </table>
         </div>
       </div>
+        </div>
+      ) : view === "graph" ? (
+        <ElementGraphView caseId={caseId!} />
+      ) : (
+        <ElementTimelineView caseId={caseId!} />
+      )}
+    </div>
+  );
+}
+
+function ElementGraphView({ caseId }: { caseId: string }) {
+  const [graph, setGraph] = useState<ElementGraph | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
+  const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setGraph(null);
+    setError(null);
+    setSelectedNodeId(null);
+    setSelectedEdgeKey(null);
+    setFrameCite(null);
+    getElementGraph(caseId)
+      .then((next) => alive && setGraph(next))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [caseId]);
+
+  if (error) return <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div>;
+  if (!graph) return <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载中…</div>;
+  if (graph.nodes.length === 0) {
+    return (
+      <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
+        尚未抽取要素。请先在「要素列表」抽取要素。
+      </div>
+    );
+  }
+
+  const visibleNodes = graph.nodes.filter((node) => node.degree >= 1);
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const positions = new Map<string, { x: number; y: number }>();
+  const radius = 190;
+  visibleNodes.forEach((node, index) => {
+    const angle = -Math.PI / 2 + (2 * Math.PI * index) / visibleNodes.length;
+    positions.set(node.id, { x: 360 + Math.cos(angle) * radius, y: 250 + Math.sin(angle) * radius });
+  });
+  const selectedEdge = graph.edges.find((edge) => `${edge.source}__${edge.target}` === selectedEdgeKey) ?? null;
+  const selectedClaim: ApiClaim | null = selectedEdge
+    ? {
+        text: `${nodeById.get(selectedEdge.source)?.name ?? selectedEdge.source} × ${nodeById.get(selectedEdge.target)?.name ?? selectedEdge.target}（共现 ${selectedEdge.weight} 次）`,
+        type: "fact",
+        status: "verified",
+        citations: selectedEdge.citations,
+      }
+    : null;
+  const isolated = graph.nodes.filter((node) => node.degree === 0);
+  const hasSelection = Boolean(selectedNodeId || selectedEdgeKey);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px", minHeight: 0 }}>
+      {graph.truncated ? <div style={{ color: "var(--warn-light)", fontSize: "12px" }}>为保持可读，仅展示频次最高的 40 个要素</div> : null}
+      {visibleNodes.length === 0 ? (
+        <div style={{ color: "var(--text-muted)", fontSize: "13px", lineHeight: "1.7" }}>要素之间暂无共现关系（同一片段未同时出现）。下方列出全部要素。</div>
+      ) : (
+      <svg viewBox="0 0 720 520" style={{ width: "100%", minHeight: "360px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "rgba(15, 23, 42, 0.35)" }}>
+        {graph.edges.map((edge) => {
+          const source = positions.get(edge.source);
+          const target = positions.get(edge.target);
+          if (!source || !target) return null;
+          const key = `${edge.source}__${edge.target}`;
+          const active = selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId : selectedEdgeKey === key;
+          return (
+            <line
+              key={key}
+              x1={source.x}
+              y1={source.y}
+              x2={target.x}
+              y2={target.y}
+              stroke={active ? "#facc15" : "#94a3b8"}
+              strokeWidth={1 + Math.min(edge.weight, 5)}
+              opacity={hasSelection ? (active ? 0.85 : 0.12) : 0.4}
+              strokeLinecap="round"
+              style={{ cursor: "pointer" }}
+              onClick={() => {
+                setSelectedEdgeKey(key);
+                setSelectedNodeId(null);
+              }}
+            />
+          );
+        })}
+        {visibleNodes.map((node) => {
+          const pos = positions.get(node.id);
+          if (!pos) return null;
+          const active = selectedNodeId === node.id || graph.edges.some((edge) => selectedEdgeKey === `${edge.source}__${edge.target}` && (edge.source === node.id || edge.target === node.id));
+          return (
+            <g
+              key={node.id}
+              style={{ cursor: "pointer" }}
+              opacity={hasSelection ? (active ? 1 : 0.35) : 1}
+              onClick={() => {
+                setSelectedNodeId(node.id);
+                setSelectedEdgeKey(null);
+              }}
+            >
+              <circle cx={pos.x} cy={pos.y} r={6 + Math.min(node.freq, 8)} fill={TYPE_COLORS[node.type]} stroke="#0f172a" strokeWidth="2" />
+              <text x={pos.x + 12} y={pos.y + 4} fill="#e5e7eb" fontSize="12" fontWeight="700">
+                {node.name}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      )}
+
+      {selectedClaim ? (
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "10px 12px", background: "rgba(16,24,40,0.45)", fontSize: "13px", lineHeight: "1.7" }}>
+          {selectedClaim.text}
+          <CitationChips claim={selectedClaim} onFrame={setFrameCite} />
+        </div>
+      ) : null}
+
+      {isolated.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)" }}>孤立要素（无共现）</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+            {isolated.map((node) => (
+              <span key={node.id} className={`entity-tag entity-tag--${node.type}`}>
+                {node.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {frameCite ? <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} /> : null}
+    </div>
+  );
+}
+
+function TimelinePointRow({ point, accentBorder, onFrame }: { point: TimelinePoint; accentBorder: string; onFrame: (c: ApiCitation) => void }) {
+  const claim: ApiClaim = { text: point.label, type: "fact", status: "verified", citations: point.citations };
+  return (
+    <div style={{ borderLeft: `2px solid ${accentBorder}`, padding: "8px 0 8px 14px", display: "flex", flexDirection: "column", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+        <span style={{ color: TYPE_COLORS.time }}>{ELEMENT_TYPE_ICONS.time}</span>
+        <span>{point.label}</span>
+      </div>
+      {point.related.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+          {point.related.map((item) => (
+            <span key={item.id} className={`entity-tag entity-tag--${item.type}`}>
+              {item.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
+        出处
+        <CitationChips claim={claim} onFrame={onFrame} />
+      </div>
+    </div>
+  );
+}
+
+function ElementTimelineView({ caseId }: { caseId: string }) {
+  const [graph, setGraph] = useState<ElementGraph | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setGraph(null);
+    setError(null);
+    setFrameCite(null);
+    getElementGraph(caseId)
+      .then((next) => alive && setGraph(next))
+      .catch((e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [caseId]);
+
+  if (error) return <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div>;
+  if (!graph) return <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载中…</div>;
+  if (graph.timeline.length === 0) {
+    return (
+      <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
+        无时间锚：本专题要素中未发现时间类要素。
+      </div>
+    );
+  }
+
+  const anchoredPoints = graph.timeline.filter((point) => point.sortKey !== null);
+  const loosePoints = graph.timeline.filter((point) => point.sortKey === null);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px", minHeight: 0 }}>
+      {!graph.anchored ? (
+        <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "12px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
+          时间信息不足，未能建立明确时序。
+        </div>
+      ) : null}
+
+      {anchoredPoints.map((point) => (
+        <TimelinePointRow key={point.id} point={point} accentBorder="var(--accent)" onFrame={setFrameCite} />
+      ))}
+
+      {loosePoints.length > 0 ? <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", paddingTop: anchoredPoints.length > 0 ? "8px" : 0 }}>无明确时序</div> : null}
+      {loosePoints.map((point) => (
+        <TimelinePointRow key={point.id} point={point} accentBorder="var(--border)" onFrame={setFrameCite} />
+      ))}
+
+      {frameCite ? <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} /> : null}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { AuthService } from "./auth/auth-service.js";
 import { UserStore } from "./auth/user-store.js";
 import { CaseService } from "./cases/case-service.js";
 import { ContradictionService } from "./analysis/contradiction-service.js";
+import { ElementGraphService } from "./analysis/element-graph-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
 import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
@@ -52,6 +53,7 @@ export interface AppServices {
   materials: MaterialService;
   inquiries: InquiryService;
   elements: ElementService;
+  elementGraph: ElementGraphService;
   contradictions: ContradictionService;
   reports: ReportService;
   admin: AdminService;
@@ -156,6 +158,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     promptStore,
   );
   const elements = new ElementService(paths, audit, cases, materials, llm, promptStore);
+  const elementGraph = new ElementGraphService(elements);
   const contradictions = new ContradictionService(paths, audit, cases, materials, llm, promptStore);
   const reports = new ReportService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
@@ -167,6 +170,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     materials,
     inquiries,
     elements,
+    elementGraph,
     contradictions,
     reports,
     admin,
@@ -177,7 +181,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, contradictions, reports, admin }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, elementGraph, contradictions, reports, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

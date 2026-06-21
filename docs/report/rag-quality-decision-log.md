@@ -253,3 +253,16 @@
 - **残余漏判=实体串表层变体**（`临时雷达站r-19` vs `r-19临时雷达站（工程队登记）`、`苍鹭无人机分队` vs `…（南堤机场放飞清单）`）确定性聚类仍不合并 → 下一级稳健化=**嵌入式实体归并**（按实体串语义相似聚类，复用 embed 槽），可选。
 
 **诚实结论 + 价值定位**：30 块小语料上 LLM-直出已近天花板（0.96），结构化在**原始 F1 上至多打平**；但结构化的不可替代价值是**逐条可验证 provenance**（每对矛盾绑定 content_hash 精确块、precision 1.0、可点可审）——直出只吐 chunk_id 对、无接地、且在**大语料**上单次调用必丢上下文/掉精度（结构化逐块抽+成对判可扩展）。即"赢"不在玩具集 F1 而在**可溯源+可扩展+可审计**。**可选增强**：嵌入式实体归并（推 recall）/ 更大更难语料（让直出掉精度，empirically 显结构化优势）——属可选实验，视后续投入。本地 `npm run check` 绿。提交 = C1b 检查点。
+
+## D13 — 要素关系网络 + 时间线（C2，确定性可溯源聚合，非 LLM 画图）
+
+**交付形态**：server `ElementGraphService`（analysis/，仅依赖 `ElementService`）+ 纯函数模块 `analysis/element-graph.ts` + 路由 `GET /cases/:id/element-graph`（经 createApiRouter）；工作台「要素」面板加 **要素列表 / 关系网络 / 时间线** 三视图切换（纯 SVG，无新依赖）。
+
+**核心设计判断（拿分点 = 别人没做的"可溯源结构化"，非套壳）**：关系网络/时间线是对**已落盘 `elements.json` 的纯确定性派生**——**无 LLM、无出站、无落盘、无新红线面**。不是"把素材丢给 LLM 让它画图"，而是：
+- **共现边**：两要素在**同一 chunk（content_hash 一致）**出现即连边，`weight`=共现的**不同 chunk 数**，边带 `citations`（每个共现 chunk 一条原文引用，可点跳源）。选 chunk 级而非 material 级共现（material 级信号过宽，会把同素材内距离很远的要素误连）。
+- **时间线**：取 `type==="time"` 要素，`parseTimeKey` 确定性解析时间表达式（要求四位年份，按 `年*1e8+月*1e6+日*1e4+时*1e2+分` 打包；解析不出→`sortKey=null` 归"无明确时序"，**如实标注不编**）；每点带共现要素 chip + 原文引用 chip。`anchored` 标识是否有可锚点。
+- **provenance 结构性成立**：边/时间点的引用都是 `element.mentions` 里**逐字透传**的 `Citation`（content_hash 来自原文，从不合成/改写），访问控制经 `ElementService.get → CaseService.get`（密级）。
+
+**编排（用户指定）**：Codex(xhigh) 实现 → Opus + 独立 Codex 双评审 → 本地 `npm run check` 闸。两评审**均无 BLOCKING/MAJOR**：独立 Codex 复核确认零外发（新 server 代码无 `fetch`/adapter/authorize，grep 证）、引用逐字透传、密级强制。采纳的评审意见：① Opus 折叠时间线两段重复渲染为 `TimelinePointRow`（简洁）；② Codex MINOR — `parseTimeKey` 把"型号2026A"之类含四位数串误判为年 → 收紧"年后不接拉丁字母"+回归测试（`型号2026A`/电话号 `13800002026`→null）；③ Codex MINOR — 零共现边时空态吞掉孤立要素 → 改为仅"无要素"才空态，零边时仍列全部要素+诚实提示；④ NIT — 切专题时清选中态/frameCite。季度类（`2026第3季度`）按年粒度锚定=记录在案的 v1 限制（确属 2026，季度解析属 scope creep 不做）。
+
+**测试**：纯函数单测 `element-graph.test.ts`（16 例）——`parseTimeKey` 8 用例+排序不变式+年首/标识符回归；`buildElementGraph` 单 chunk 一边、双 chunk weight=2、孤立 degree=0、时间点 related/sortKey、anchored 真假、同 hash 去重不重复计权。本地 `npm run check` 绿 **614/2**。三红线守住（无出站、引用逐字、读经访问控制）。提交 = C2 检查点（未 push）。

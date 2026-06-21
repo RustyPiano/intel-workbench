@@ -24,6 +24,7 @@ import type { ModelSlots } from "./model/slots.js";
 import type { LlmDeps } from "./model/structured.js";
 import { readModelConfig } from "./model/model-config.js";
 import { ReportService } from "./report/report-service.js";
+import { ReviewService } from "./review/review-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
 import { createApiRouter } from "./routes/api.js";
 
@@ -56,6 +57,7 @@ export interface AppServices {
   elementGraph: ElementGraphService;
   contradictions: ContradictionService;
   reports: ReportService;
+  review: ReviewService;
   admin: AdminService;
   /** 模型槽适配器（二期 P2.2；mock-first，供媒体管线/稠密检索消费）。 */
   slots: ModelSlots;
@@ -161,6 +163,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const elementGraph = new ElementGraphService(elements);
   const contradictions = new ContradictionService(paths, audit, cases, materials, llm, promptStore);
   const reports = new ReportService(paths, audit, cases);
+  const review = new ReviewService(cases, audit);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
 
   const services: AppServices = {
@@ -173,6 +176,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     elementGraph,
     contradictions,
     reports,
+    review,
     admin,
     slots,
     modelConfigured,
@@ -181,7 +185,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, elementGraph, contradictions, reports, admin }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, elementGraph, contradictions, reports, review, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

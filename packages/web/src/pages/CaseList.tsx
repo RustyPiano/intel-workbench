@@ -17,6 +17,7 @@ function statusLabel(status: ApiCase["status"]): { cls: string; text: string } {
 export function CaseListPage() {
   const { user } = useSession();
   const [cases, setCases] = useState<ApiCase[] | null>(null);
+  const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -30,6 +31,13 @@ export function CaseListPage() {
     };
   }, [user]);
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered =
+    cases?.filter((c) => {
+      if (!normalizedQuery) return true;
+      return c.name.toLowerCase().includes(normalizedQuery) || c.owner.toLowerCase().includes(normalizedQuery);
+    }) ?? [];
+
   return (
     <div className="page">
       <div className="page__head">
@@ -39,7 +47,14 @@ export function CaseListPage() {
             <svg className="icon-svg" style={{ position: "absolute", left: "12px", color: "var(--text-muted)", pointerEvents: "none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
-            <input className="search" type="search" placeholder="搜索专题（M5 启用）" style={{ paddingLeft: "34px" }} disabled />
+            <input
+              className="search"
+              type="search"
+              placeholder="搜索专题名称 / 负责人..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ paddingLeft: "34px" }}
+            />
           </div>
           <Link to="/cases/new" className="btn btn--primary" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
             <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -64,38 +79,44 @@ export function CaseListPage() {
       ) : (
         <>
           <h2 style={{ fontSize: "14px", fontWeight: "700", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "16px" }}>
-            活动专题 ({cases.length})
+            活动专题 ({filtered.length})
           </h2>
-          <div className="dashboard-grid">
-            {cases.map((c) => {
-              const s = statusLabel(c.status);
-              return (
-                <div key={c.id} className="case-card">
-                  <div className="case-card__header">
-                    <span className={`badge badge--clearance tone-${c.clearance}`} style={{ padding: "3px 8px", fontSize: "11px" }}>
-                      {CLEARANCE_LABELS[c.clearance]}
-                    </span>
-                    <span className={`case-card__status ${s.cls}`}>{s.text}</span>
-                  </div>
+          {filtered.length === 0 ? (
+            <div style={{ background: "var(--bg-panel)", padding: "32px 20px", borderRadius: "var(--radius)", border: "1px dashed var(--border)", textAlign: "center", color: "var(--text-dim)" }}>
+              无匹配的专题
+            </div>
+          ) : (
+            <div className="dashboard-grid">
+              {filtered.map((c) => {
+                const s = statusLabel(c.status);
+                return (
+                  <div key={c.id} className="case-card">
+                    <div className="case-card__header">
+                      <span className={`badge badge--clearance tone-${c.clearance}`} style={{ padding: "3px 8px", fontSize: "11px" }}>
+                        {CLEARANCE_LABELS[c.clearance]}
+                      </span>
+                      <span className={`case-card__status ${s.cls}`}>{s.text}</span>
+                    </div>
 
-                  <h3 className="case-card__title">{c.name}</h3>
-                  <p className="case-card__desc">
-                    负责人：{c.owner} · 素材 {c.materials.length} 份
-                  </p>
+                    <h3 className="case-card__title">{c.name}</h3>
+                    <p className="case-card__desc">
+                      负责人：{c.owner} · 素材 {c.materials.length} 份
+                    </p>
 
-                  <div className="case-card__meta">
-                    <span>更新时间: {c.updated_at.slice(0, 10)}</span>
-                    <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost" style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-light)", fontWeight: "600", display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                      进入工作台
-                      <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 18 15 12 9 6"/>
-                      </svg>
-                    </Link>
+                    <div className="case-card__meta">
+                      <span>更新时间: {c.updated_at.slice(0, 10)}</span>
+                      <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost" style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-light)", fontWeight: "600", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                        进入工作台
+                        <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="9 18 15 12 9 6"/>
+                        </svg>
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </>
       )}
     </div>

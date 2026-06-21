@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createCase } from "../api";
+import { createCase, uploadMaterial } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS, type Clearance } from "../types";
 
@@ -24,19 +24,30 @@ const CLEARANCE_DESCS: Record<Clearance, string> = {
   topsecret: "高敏感重点研判及核心特种线索",
 };
 
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kilobytes = bytes / 1024;
+  if (kilobytes < 1024) return `${kilobytes.toFixed(1)} KB`;
+  return `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
 export function NewCasePage() {
   const navigate = useNavigate();
   const { user } = useSession();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [name, setName] = useState("");
   const [clearance, setClearance] = useState<Clearance>("internal");
   const [desc, setDesc] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
 
   const userClearance = user?.clearance ?? "internal";
   const maxRank = CLEARANCE_RANK[userClearance];
+  const submitLabel = uploading ? uploadStatus : submitting ? "创建中..." : "创建专题";
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,27 +61,25 @@ export function NewCasePage() {
     try {
       // M1：真实创建并落盘（POST /api/cases）。开发模式下涉密会被服务端拒绝。
       const created = await createCase({ name: name.trim(), clearance });
+      if (files.length > 0) {
+        setUploading(true);
+        for (const [i, file] of files.entries()) {
+          setUploadStatus(`上传素材 ${i + 1}/${files.length}...`);
+          // best-effort：单个文件上传失败不阻断其余，素材状态在工作台 MaterialsPanel 可见。
+          try {
+            await uploadMaterial(created.id, file);
+          } catch {
+            /* 跳过失败文件，继续上传剩余 */
+          }
+        }
+      }
       navigate(`/cases/${encodeURIComponent(created.id)}`);
     } catch (err) {
       setError((err as Error).message);
       setSubmitting(false);
+      setUploading(false);
+      setUploadStatus("");
     }
-  };
-
-  const handleAddMockFile = () => {
-    const mockFileNames = [
-      "APT29_attack_pattern_log.csv",
-      "intercepted_radio_audio_transcript.txt",
-      "satellite_imagery_analysis.pdf",
-      "firewall_alerts_weekly_report.xlsx",
-    ];
-    
-    if (attachedFiles.length >= mockFileNames.length) {
-      return;
-    }
-    
-    const nextFile = mockFileNames[attachedFiles.length];
-    setAttachedFiles((prev) => [...prev, nextFile]);
   };
 
   return (
@@ -84,7 +93,7 @@ export function NewCasePage() {
 
       <div style={{ background: "var(--bg-panel)", padding: "14px 18px", borderRadius: "var(--radius)", border: "1px solid var(--border)", marginBottom: "28px" }}>
         <p style={{ fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-          <strong>提示：</strong>点击「确认创建」将真实创建专题并落盘（写入 manifest 与审计链）。密级不得高于当前账户权限；开发模式下禁止创建涉密专题（密级须为“内部”）。素材汇入在 M2 阶段启用。
+          <strong>提示：</strong>点击「创建专题」将真实创建专题并落盘（写入 manifest 与审计链）。密级不得高于当前账户权限；开发模式下禁止创建涉密专题（密级须为“内部”）。所选素材将在专题创建后上传。
         </p>
       </div>
 
@@ -160,28 +169,49 @@ export function NewCasePage() {
 
           <div className="form-group">
             <label className="form-label">初始线索素材</label>
-            <div className="dropzone" onClick={handleAddMockFile}>
+            <input
+              type="file"
+              multiple
+              ref={fileInputRef}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const selected = Array.from(e.target.files ?? []);
+                if (selected.length > 0) {
+                  setFiles((prev) => [...prev, ...selected]);
+                }
+                e.target.value = "";
+              }}
+            />
+            <div className="dropzone" onClick={() => fileInputRef.current?.click()}>
               <div className="dropzone__icon" style={{ display: "flex", justifyContent: "center" }}>
                 <svg className="icon-svg" style={{ width: "32px", height: "32px", opacity: 0.6 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
               </div>
-              <div className="dropzone__text">点击此处模拟添加线索文件</div>
-              <div className="dropzone__sub">支持 TXT, PDF, DOCX, MP3, MP4 等素材格式 (M2 阶段启用拖拽)</div>
+              <div className="dropzone__text">点击选择线索文件（可多选）</div>
+              <div className="dropzone__sub">支持 TXT, PDF, DOCX, MP3, MP4 等素材格式</div>
             </div>
 
-            {attachedFiles.length > 0 ? (
+            {files.length > 0 ? (
               <div style={{ marginTop: "12px", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px", background: "rgba(0,0,0,0.15)" }}>
-                <span className="form-label" style={{ fontSize: "11px", display: "block", marginBottom: "8px" }}>已附加的演示文件 ({attachedFiles.length})：</span>
+                <span className="form-label" style={{ fontSize: "11px", display: "block", marginBottom: "8px" }}>待上传文件 ({files.length})</span>
                 <ul style={{ listStyle: "none", fontSize: "13px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                  {attachedFiles.map((file, idx) => (
+                  {files.map((file, idx) => (
                     <li key={idx} style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--accent-light)" }}>
                       <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                         <polyline points="14 2 14 8 20 8"/>
                       </svg>
-                      <span style={{ textDecoration: "underline" }}>{file}</span>
-                      <span style={{ color: "var(--text-muted)", fontSize: "11px" }}> (待上传)</span>
+                      <span style={{ textDecoration: "underline" }}>{file.name}</span>
+                      <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>({formatSize(file.size)})</span>
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        onClick={() => setFiles((prev) => prev.filter((_, fileIndex) => fileIndex !== idx))}
+                        style={{ padding: "2px 8px", fontSize: "12px", marginLeft: "auto" }}
+                      >
+                        x
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -193,8 +223,8 @@ export function NewCasePage() {
             <button type="button" className="btn btn--ghost" onClick={() => navigate("/")}>
               取消
             </button>
-            <button type="submit" className="btn btn--primary" disabled={submitting}>
-              {submitting ? "创 建 中…" : "确 认 创 建"}
+            <button type="submit" className="btn btn--primary" disabled={submitting || uploading}>
+              {submitLabel}
             </button>
           </div>
         </form>

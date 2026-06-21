@@ -37,6 +37,29 @@ export interface ApiCase {
   materials: unknown[];
 }
 
+export interface OverviewCaseRow {
+  id: string;
+  name: string;
+  clearance: Clearance;
+  status: "active" | "archived";
+  materialCount: number;
+  elementCount: number;
+  contradictionCount: number;
+  updated_at: string;
+}
+
+export interface OverviewSummary {
+  caseCount: number;
+  activeCount: number;
+  archivedCount: number;
+  materialCount: number;
+  materialsByModality: Record<Modality, number>;
+  elementCount: number;
+  contradictionCount: number;
+  byClearance: Record<Clearance, number>;
+  rows: OverviewCaseRow[];
+}
+
 export interface AuditEvent {
   id: string;
   ts: string;
@@ -294,6 +317,10 @@ export async function logout(): Promise<void> {
 
 export function listCases(): Promise<ApiCase[]> {
   return fetch(`${BASE}/cases`, { headers: headers() }).then((r) => unwrap<ApiCase[]>(r, "cases"));
+}
+
+export function getOverview(): Promise<OverviewSummary> {
+  return fetch(`${BASE}/overview`, { headers: headers() }).then((r) => unwrap<OverviewSummary>(r, "overview"));
 }
 
 export function createCase(input: { name: string; clearance: Clearance }): Promise<ApiCase> {

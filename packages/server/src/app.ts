@@ -23,6 +23,7 @@ import { readSlotConfigs, slotAllowlistHosts, useMockMedia } from "./model/slot-
 import type { ModelSlots } from "./model/slots.js";
 import type { LlmDeps } from "./model/structured.js";
 import { readModelConfig } from "./model/model-config.js";
+import { OverviewService } from "./overview/overview-service.js";
 import { ReportService } from "./report/report-service.js";
 import { ReviewService } from "./review/review-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
@@ -52,6 +53,7 @@ export interface AppServices {
   audit: AuditService;
   cases: CaseService;
   materials: MaterialService;
+  overview: OverviewService;
   inquiries: InquiryService;
   elements: ElementService;
   elementGraph: ElementGraphService;
@@ -95,6 +97,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const users = new UserStore(paths);
   const auth = new AuthService(users, audit);
   const cases = new CaseService(paths, audit, devMode);
+  const overview = new OverviewService(paths, cases);
 
   // 文本 LLM + 零外发闸门（M3）。开发期白名单仅模型端点 host；未配置则白名单为空
   // → 任何出站皆被拒并落审计（生产置空即一键全断，§7.1）。
@@ -171,6 +174,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     audit,
     cases,
     materials,
+    overview,
     inquiries,
     elements,
     elementGraph,
@@ -185,7 +189,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, inquiries, elements, elementGraph, contradictions, reports, review, admin }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, elements, elementGraph, contradictions, reports, review, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

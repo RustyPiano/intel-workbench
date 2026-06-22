@@ -2,14 +2,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
+import { mapWithConcurrency, splitIntoBatches } from "../analysis/batch-extract.js";
+import { mergeElements } from "../analysis/element-merge.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { Chunk, Element, ElementType, Identity } from "../domain/types.js";
 import { resolveValidCitations } from "../inquiry/citation.js";
-import { fitToBudget } from "../inquiry/retrieval.js";
-import { readCtxBudgetTokens } from "../model/rag-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { shortId } from "../util/hash.js";
@@ -21,7 +21,8 @@ import { shortId } from "../util/hash.js";
  */
 
 const ELEMENT_TYPES: readonly ElementType[] = ["person", "org", "location", "event", "equipment", "time"];
-const MAX_CHUNKS = 60;
+const BATCH_CHUNKS = 40;
+const CONCURRENCY = 4;
 const ELEMENT_EXTRACT_PROMPT = DEFAULT_PROMPT_BODIES["element-extract"];
 
 interface RawMention {
@@ -32,6 +33,16 @@ interface RawElement {
   type?: unknown;
   aliases?: unknown;
   mentions?: unknown;
+}
+interface ExtractOptions {
+  signal?: AbortSignal;
+  onProgress?: (p: { done: number; total: number }) => void;
+}
+
+interface BatchResult {
+  elements: Element[];
+  chunksCovered: number;
+  failed: boolean;
 }
 
 function asType(value: unknown): ElementType {
@@ -53,7 +64,7 @@ export class ElementService {
   ) {}
 
   /** 对专题已加工切块做一次要素抽取，覆盖写 elements.json。 */
-  async extract(actor: Identity, caseId: string): Promise<Element[]> {
+  async extract(actor: Identity, caseId: string, opts: ExtractOptions = {}): Promise<Element[]> {
     const manifest = await this.cases.get(actor, caseId);
     const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
 
@@ -67,16 +78,29 @@ export class ElementService {
       throw new AppError(503, "文本 LLM 未配置：要素抽取不可用");
     }
 
-    // token 预算路由取代静默截断（§5.1）：配置预算则按预算贪心取材，否则退一期 MAX_CHUNKS。
-    const budget = readCtxBudgetTokens();
-    const { used: chunks, truncated } =
-      budget !== null ? fitToBudget(all, budget) : { used: all.slice(0, MAX_CHUNKS), truncated: all.length > MAX_CHUNKS };
-    // 零外发红线：出站前先经 OfflineGuard 授权。
-    await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "text-llm-elements" });
-
-    const raw = await this.callModel(chunks);
-    const retrievedById = new Map(chunks.map((c) => [c.chunk_id, c]));
-    const elements = this.buildElements(raw, retrievedById, nameById);
+    const batches = splitIntoBatches(all, BATCH_CHUNKS);
+    const results = await mapWithConcurrency(batches, async (chunks): Promise<BatchResult> => {
+      // 零外发红线：每个批次出站前先经 OfflineGuard 授权——授权失败必须显式失败，不得当作"失败批次"吞掉。
+      await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "text-llm-elements" });
+      let raw: Record<string, unknown>;
+      try {
+        raw = await this.callModel(chunks, opts.signal);
+      } catch (e) {
+        if (opts.signal?.aborted || e instanceof AppError) throw e;
+        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续。
+        return { elements: [], chunksCovered: 0, failed: true };
+      }
+      // 接地与构建在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
+      const retrievedById = new Map(chunks.map((c) => [c.chunk_id, c]));
+      return { elements: this.buildElements(raw, retrievedById, nameById), chunksCovered: chunks.length, failed: false };
+    }, {
+      concurrency: CONCURRENCY,
+      signal: opts.signal,
+      onSettled: (done, total) => opts.onProgress?.({ done, total }),
+    });
+    const elements = mergeElements(results.map((result) => result.elements));
+    const chunksCovered = results.reduce((sum, result) => sum + result.chunksCovered, 0);
+    const failedBatches = results.filter((result) => result.failed).length;
 
     await this.persist(caseId, elements);
     await this.audit.append({
@@ -84,7 +108,7 @@ export class ElementService {
       action: "element.extract",
       object: `case:${caseId}`,
       caseId,
-      detail: { caseId, count: elements.length, chunks: chunks.length, truncated },
+      detail: { caseId, count: elements.length, batches: batches.length, chunksCovered, chunksTotal: all.length, failedBatches },
     });
     return elements;
   }
@@ -122,11 +146,19 @@ export class ElementService {
     return elements;
   }
 
-  private async callModel(chunks: Chunk[]): Promise<Record<string, unknown>> {
+  private async callModel(chunks: Chunk[], signal?: AbortSignal): Promise<Record<string, unknown>> {
     const context = chunks.map((c) => `[${c.chunk_id}] ${c.text}`).join("\n\n");
     const systemPrompt = this.promptStore ? await this.promptStore.getBody("element-extract") : ELEMENT_EXTRACT_PROMPT;
     const userContent = `素材片段：\n${context}\n\n请只输出 JSON。`;
-    return generateJson(this.deps.adapter!, systemPrompt, userContent, { maxTokens: 2000 });
+    // 批次抽取要素 JSON 本身可达数千 token；2000 会截断成不可解析。
+    // 同时放宽超时：大专题批次抽取留足余量避免 60s 默认超时误杀。
+    // thinking="disabled"：批量抽取关思考，避免推理模型把 token 预算耗在思维链上。
+    return generateJson(this.deps.adapter!, systemPrompt, userContent, {
+      maxTokens: 12000,
+      timeoutMs: 120_000,
+      thinking: "disabled",
+      signal,
+    });
   }
 
   private elementsFile(caseId: string): string {

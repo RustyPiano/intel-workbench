@@ -185,8 +185,15 @@ async function main(): Promise<void> {
   const llm: LlmDeps = { adapter: textLlm.adapter, guard, modelEndpoint: textLlm.endpoint };
   const service = new ContradictionService(paths, audit, cases, materials, llm);
 
+  // 思考分流对照：锚定流水线的成对 NLI 判定分别开/关思考，量化"在难判定处开思考"是否真有增益。
+  process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING = "enabled";
+  const anchoredThink = await runVariant("anchored-think", corpus.gold, () => runAnchored(service, chunks, nameById, chunkIdByHash));
+  process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING = "disabled";
+  const anchoredNoThink = await runVariant("anchored-nothink", corpus.gold, () => runAnchored(service, chunks, nameById, chunkIdByHash));
+  delete process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING;
   const results = [
-    await runVariant("anchored", corpus.gold, () => runAnchored(service, chunks, nameById, chunkIdByHash)),
+    anchoredThink,
+    anchoredNoThink,
     await runVariant("llm-direct", corpus.gold, () => runDirectBaseline(textLlm.adapter, guard, textLlm.endpoint, chunks)),
   ];
 

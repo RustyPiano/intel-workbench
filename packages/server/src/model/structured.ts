@@ -33,6 +33,9 @@ export function parseJsonOutput(content: string): Record<string, unknown> {
 export interface GenerateJsonOptions {
   timeoutMs?: number;
   maxTokens?: number;
+  /** 思考模式分流：批量抽取置 "disabled"（求速度/规模），难判定置 "enabled"（求质量）。 */
+  thinking?: "enabled" | "disabled";
+  signal?: AbortSignal;
 }
 
 /** 调一次结构化生成并解析为 JSON 对象；超时则中止。 */
@@ -43,6 +46,9 @@ export async function generateJson(
   options: GenerateJsonOptions = {},
 ): Promise<Record<string, unknown>> {
   const controller = new AbortController();
+  const abortFromExternal = (): void => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromExternal();
+  else options.signal?.addEventListener("abort", abortFromExternal, { once: true });
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
     const result = await adapter.generate({
@@ -51,10 +57,12 @@ export async function generateJson(
       tools: [],
       temperature: 0,
       maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
+      thinking: options.thinking ? { type: options.thinking } : undefined,
       signal: controller.signal,
     });
     return parseJsonOutput(result.message.content);
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abortFromExternal);
   }
 }

@@ -14,6 +14,9 @@ export interface GenerateInput {
   signal?: AbortSignal;
   temperature?: number;
   maxTokens?: number;
+  /** Provider thinking/reasoning toggle (DeepSeek `thinking:{type}` shape).
+   *  Forwarded verbatim to the request body when set; omitted otherwise. */
+  thinking?: { type: "enabled" | "disabled" };
 }
 
 export interface GenerateResult {

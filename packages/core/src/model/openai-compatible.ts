@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import type {
   ChatCompletionChunk,
+  ChatCompletionCreateParamsNonStreaming,
+  ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionTool,
@@ -338,7 +340,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
   async generate(input: GenerateInput): Promise<GenerateResult> {
     let response;
     try {
-      response = await this.client.chat.completions.create({
+      const body: ChatCompletionCreateParamsNonStreaming = {
         model: this.options.model,
         messages: [
           {
@@ -350,8 +352,15 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         tools: mapTools(input),
         tool_choice: input.tools.length ? "auto" : undefined,
         temperature: input.temperature,
-        max_completion_tokens: input.maxTokens,
-      }, {
+        // OpenAI 兼容端点（DeepSeek/Ollama/vLLM）认 max_tokens；DeepSeek 会忽略
+        // max_completion_tokens，故用 max_tokens 让 token 上限真正生效。
+        max_tokens: input.maxTokens,
+      };
+      // 思考模式（DeepSeek thinking:{type}）：置位时透传该非标准字段，否则不发送。
+      if (input.thinking) {
+        (body as unknown as Record<string, unknown>).thinking = input.thinking;
+      }
+      response = await this.client.chat.completions.create(body, {
         signal: input.signal,
       });
     } catch (error) {
@@ -391,7 +400,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
     let usage: ChatCompletionChunk["usage"];
 
     try {
-      const stream = await this.client.chat.completions.create({
+      const body: ChatCompletionCreateParamsStreaming = {
         model: this.options.model,
         messages: [
           {
@@ -403,10 +412,14 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         tools: mapTools(input),
         tool_choice: input.tools.length ? "auto" : undefined,
         temperature: input.temperature,
-        max_completion_tokens: input.maxTokens,
+        max_tokens: input.maxTokens,
         stream: true,
         stream_options: { include_usage: true },
-      }, {
+      };
+      if (input.thinking) {
+        (body as unknown as Record<string, unknown>).thinking = input.thinking;
+      }
+      const stream = await this.client.chat.completions.create(body, {
         signal: input.signal,
       });
 

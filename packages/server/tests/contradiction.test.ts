@@ -34,6 +34,20 @@ class ScriptedJsonAdapter implements ModelAdapter {
   }
 }
 
+class CallbackJsonAdapter implements ModelAdapter {
+  readonly name = "callback-contradiction";
+  readonly inputs: GenerateInput[] = [];
+
+  constructor(private readonly fn: (input: GenerateInput) => Record<string, unknown> | Error) {}
+
+  async generate(input: GenerateInput): Promise<GenerateResult> {
+    this.inputs.push(input);
+    const body = this.fn(input);
+    if (body instanceof Error) throw body;
+    return { message: { role: "assistant", content: JSON.stringify(body) }, stopReason: "end_turn" };
+  }
+}
+
 interface Fixture {
   root: string;
   paths: DataPaths;
@@ -76,6 +90,10 @@ function extractClaims(chunks: Chunk[], values: string[]): Record<string, unknow
       chunk_id: chunk.chunk_id,
     })),
   };
+}
+
+function chunkIds(content: string): string[] {
+  return [...content.matchAll(/\[([^\]]+#\d+)\]/g)].map((match) => match[1]!);
 }
 
 const contradiction = { relation: "contradiction", rationale: "values differ", certainty: 0.9 };
@@ -157,16 +175,16 @@ describe("ContradictionService", () => {
     expect(result).toEqual([]);
   });
 
-  it("returns an empty result and audits errors when extraction fails", async () => {
+  it("skips a failed extraction batch and records best-effort coverage", async () => {
     const { caseId } = await createCaseWithDocs(fixture, [
       { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },
     ]);
     const adapter = new ScriptedJsonAdapter([new Error("extract failed")]);
 
     await expect(createService(fixture, adapter).detect(OPERATOR, caseId)).resolves.toEqual([]);
-    expect((await fixture.audit.readAll()).some((event) =>
-      event.action === "contradiction.detect" && event.result === "error" && event.detail?.error === "extract failed",
-    )).toBe(true);
+    const event = (await fixture.audit.readAll()).filter((item) => item.action === "contradiction.detect").pop();
+    expect(event?.result).toBe("ok");
+    expect(event?.detail).toMatchObject({ batches: 1, chunksCovered: 0, chunksTotal: 1, failedBatches: 1 });
   });
 
   it("scores cross-source contradictions at least as high as same-source contradictions", async () => {
@@ -192,5 +210,58 @@ describe("ContradictionService", () => {
     const intra = result.find((item) => item.scope === "intra-material");
 
     expect(cross?.confidence).toBeGreaterThanOrEqual(intra?.confidence ?? 1);
+  });
+
+  it("extracts claims from all batches and detects contradictions across batches", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, Array.from({ length: 41 }, (_, i) => ({
+      filename: `doc${i}.txt`,
+      content: `USS Gerald Ford displacement is ${i === 40 ? "85000" : "100000"} tons in source ${i}.`,
+    })));
+    const first = chunks[0]!.chunk_id;
+    const last = chunks[40]!.chunk_id;
+    const adapter = new CallbackJsonAdapter((input) => {
+      const content = input.messages[0]?.content ?? "";
+      if (content.includes("claim_a:")) return contradiction;
+      const ids = chunkIds(content);
+      return {
+        claims: ids.flatMap((id) => {
+          if (id === first) return [{ entity: "USS Gerald Ford", attribute: "displacement", value: "100000", chunk_id: id }];
+          if (id === last) return [{ entity: "USS Gerald Ford", attribute: "displacement", value: "85000", chunk_id: id }];
+          return [];
+        }),
+      };
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(adapter.inputs.filter((input) => !input.messages[0]?.content.includes("claim_a:"))).toHaveLength(2);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.claim_a.citation.content_hash).toBe(chunks[0]!.content_hash);
+    expect(result[0]?.claim_b.citation.content_hash).toBe(chunks[40]!.content_hash);
+    const event = (await fixture.audit.readAll()).filter((item) => item.action === "contradiction.detect").pop();
+    expect(event?.detail).toMatchObject({ batches: 2, chunksCovered: 41, chunksTotal: 41, failedBatches: 0 });
+  });
+
+  it("grounds claims only against the chunks fed to that extraction batch", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, Array.from({ length: 41 }, (_, i) => ({
+      filename: `doc${i}.txt`,
+      content: `USS Gerald Ford displacement is ${i} tons in source ${i}.`,
+    })));
+    const foreign = chunks[40]!.chunk_id;
+    const adapter = new CallbackJsonAdapter((input) => {
+      const content = input.messages[0]?.content ?? "";
+      if (content.includes("claim_a:")) return contradiction;
+      const ids = chunkIds(content);
+      return {
+        claims: ids.length === 40
+          ? [{ entity: "USS Gerald Ford", attribute: "displacement", value: "100000", chunk_id: foreign }]
+          : [],
+      };
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result).toEqual([]);
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(0);
   });
 });

@@ -17,6 +17,8 @@ describe("API 接线（鉴权 + M1）", () => {
   let base: string;
   let operatorToken: string;
   let securityToken: string;
+  let adminToken: string;
+  let services: AppServices;
 
   function login(username: string, password: string): Promise<Response> {
     return fetch(`${base}/api/auth/login`, {
@@ -35,12 +37,14 @@ describe("API 接线（鉴权 + M1）", () => {
   beforeAll(async () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-api-"));
     const app = createApp({ dataDir: root, devMode: true });
+    services = app.locals.services as AppServices;
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     operatorToken = (await (await login("operator", "operator123")).json()).token;
     securityToken = (await (await login("security", "security123")).json()).token;
+    adminToken = (await (await login("admin", "admin123")).json()).token;
   });
 
   afterAll(async () => {
@@ -89,6 +93,86 @@ describe("API 接线（鉴权 + M1）", () => {
   it("作业员无权查审计 → 403", async () => {
     const res = await fetch(`${base}/api/audit`, { headers: authHeaders(operatorToken) });
     expect(res.status).toBe(403);
+  });
+
+  it("后台任务：start → status done，不在状态响应中泄露 result", async () => {
+    const created = await fetch(`${base}/api/cases`, {
+      method: "POST",
+      headers: authHeaders(operatorToken, true),
+      body: JSON.stringify({ name: "jobs 空专题", clearance: "internal" }),
+    });
+    const { case: manifest } = await created.json();
+
+    const started = await fetch(`${base}/api/cases/${manifest.id}/jobs/elements/start`, {
+      method: "POST",
+      headers: authHeaders(operatorToken),
+    });
+    expect(started.status).toBe(202);
+    const startBody = await started.json();
+    expect(startBody.job).toMatchObject({ kind: "elements", state: "running" });
+    expect(startBody.job.result).toBeUndefined();
+
+    let statusBody: { job: { state: string; result?: unknown } | null } | undefined;
+    for (let i = 0; i < 20; i += 1) {
+      const status = await fetch(`${base}/api/cases/${manifest.id}/jobs/elements/status`, { headers: authHeaders(operatorToken) });
+      expect(status.status).toBe(200);
+      statusBody = await status.json();
+      if (statusBody.job?.state === "done") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(statusBody?.job).toMatchObject({ kind: "elements", state: "done" });
+    expect(statusBody?.job?.result).toBeUndefined();
+  });
+
+  it("后台任务：cancel → cancelled=true 并写取消审计", async () => {
+    const created = await fetch(`${base}/api/cases`, {
+      method: "POST",
+      headers: authHeaders(operatorToken, true),
+      body: JSON.stringify({ name: "jobs 取消专题", clearance: "internal" }),
+    });
+    const { case: manifest } = await created.json();
+    services.jobRegistry.start(manifest.id, "elements", (ctx) => new Promise((resolve) => {
+      ctx.signal.addEventListener("abort", () => resolve([]), { once: true });
+    }));
+
+    const cancelled = await fetch(`${base}/api/cases/${manifest.id}/jobs/elements/cancel`, {
+      method: "POST",
+      headers: authHeaders(operatorToken),
+    });
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toEqual({ ok: true, cancelled: true });
+
+    const audit = await (await fetch(`${base}/api/cases/${manifest.id}/audit`, { headers: authHeaders(operatorToken) })).json();
+    expect(audit.events.some((event: { action: string; detail?: { kind?: string } }) => event.action === "job.cancel" && event.detail?.kind === "elements")).toBe(true);
+  });
+
+  it("后台任务：未知类型 → 400", async () => {
+    const created = await fetch(`${base}/api/cases`, {
+      method: "POST",
+      headers: authHeaders(operatorToken, true),
+      body: JSON.stringify({ name: "jobs 未知类型", clearance: "internal" }),
+    });
+    const { case: manifest } = await created.json();
+
+    const res = await fetch(`${base}/api/cases/${manifest.id}/jobs/unknown/start`, {
+      method: "POST",
+      headers: authHeaders(operatorToken),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("后台任务：无权访问的专题 → 拒绝且不启动任务", async () => {
+    // dev 模式不允许创建涉密专题，故用不存在的专题验证关键安全属性：
+    // 起任务前先过 cases.get 门禁，被拒（404/403）即绝不创建任务（密级 403 的判定在 cases.get 已另有覆盖）。
+    const missingId = "不存在的专题-xyz";
+    const res = await fetch(`${base}/api/cases/${encodeURIComponent(missingId)}/jobs/elements/start`, {
+      method: "POST",
+      headers: authHeaders(operatorToken),
+    });
+
+    expect(res.status).toBe(404);
+    expect(services.jobRegistry.status(missingId, "elements")).toBeUndefined();
   });
 });
 

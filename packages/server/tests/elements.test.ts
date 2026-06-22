@@ -20,6 +20,21 @@ function stubAdapter(json: string): ModelAdapter {
   return { name: "stub", generate: async () => ({ message: { role: "assistant", content: json }, stopReason: "end_turn" }) };
 }
 
+function callbackAdapter(fn: (content: string) => Record<string, unknown> | Error): ModelAdapter {
+  return {
+    name: "callback",
+    generate: async (input) => {
+      const result = fn(input.messages[0]?.content ?? "");
+      if (result instanceof Error) throw result;
+      return { message: { role: "assistant", content: JSON.stringify(result) }, stopReason: "end_turn" };
+    },
+  };
+}
+
+function chunkIds(content: string): string[] {
+  return [...content.matchAll(/\[([^\]]+#\d+)\]/g)].map((match) => match[1]!);
+}
+
 describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
   let root: string;
   let paths: DataPaths;
@@ -96,25 +111,62 @@ describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
     await expect(service(stubAdapter("{}"), []).extract(OPERATOR, caseId)).rejects.toMatchObject({ status: 403 });
   });
 
-  it("token 预算配置下超预算按预算截材，如实记 truncated（取代 MAX_CHUNKS，二期 §5.1）", async () => {
-    const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
-    const saved = process.env[KEY];
-    try {
-      const c2 = (await cases.create(OPERATOR, { name: "多块专题", clearance: "internal" })).id;
-      // 两个 ~400 字长段（>CHUNK_TARGET_CHARS 合并阈）→ 切成 2 块，才测得出"超预算截到首块"。
-      const content = `${"第一段含目标甲。".repeat(50)}\n\n${"第二段含目标乙。".repeat(50)}`;
-      await materials.ingest(OPERATOR, c2, [{ filename: "multi.txt", content }]);
-      const all = await materials.loadCaseChunks(c2);
-      expect(all.length).toBe(2);
-      process.env[KEY] = "1"; // 极小预算 → 贪心仅保留首块
-      const json = JSON.stringify({ elements: [{ name: "目标甲", type: "person", mentions: [{ chunk_id: all[0].chunk_id }] }] });
-      const els = await service(stubAdapter(json)).extract(OPERATOR, c2);
-      expect(els).toHaveLength(1);
-      const ev = (await audit.readAll()).filter((e) => e.action === "element.extract").pop();
-      expect(ev?.detail).toMatchObject({ truncated: true, chunks: 1 });
-    } finally {
-      if (saved === undefined) delete process.env[KEY];
-      else process.env[KEY] = saved;
-    }
+  it("超过 40 块时分批覆盖全部块并确定性合并同名要素", async () => {
+    const c2 = (await cases.create(OPERATOR, { name: "多块专题", clearance: "internal" })).id;
+    await materials.ingest(OPERATOR, c2, Array.from({ length: 45 }, (_, i) => ({ filename: `m${i}.txt`, content: `目标甲出现于第 ${i} 份材料。` })));
+    const batches: string[][] = [];
+    const adapter = callbackAdapter((content) => {
+      const ids = chunkIds(content);
+      batches.push(ids);
+      return { elements: [{ name: "目标甲", type: "person", aliases: ["A"], mentions: [{ chunk_id: ids[0] }] }] };
+    });
+
+    const els = await service(adapter).extract(OPERATOR, c2);
+
+    expect(batches.map((batch) => batch.length).sort((a, b) => a - b)).toEqual([5, 40]);
+    expect(els).toHaveLength(1);
+    expect(els[0]).toMatchObject({ name: "目标甲", freq: 2 });
+    const ev = (await audit.readAll()).filter((e) => e.action === "element.extract").pop();
+    expect(ev?.detail).toMatchObject({ caseId: c2, count: 1, batches: 2, chunksCovered: 45, chunksTotal: 45, failedBatches: 0 });
+  });
+
+  it("单个批次失败时跳过该批次并合并其余批次", async () => {
+    const c2 = (await cases.create(OPERATOR, { name: "失败批次专题", clearance: "internal" })).id;
+    await materials.ingest(OPERATOR, c2, Array.from({ length: 81 }, (_, i) => ({ filename: `m${i}.txt`, content: `目标乙出现于第 ${i} 份材料。` })));
+    const adapter = callbackAdapter((content) => {
+      const ids = chunkIds(content);
+      if (ids.length === 40 && content.includes("第 40 份材料")) return new Error("batch failed");
+      return { elements: [{ name: "目标乙", type: "person", mentions: [{ chunk_id: ids[0] }] }] };
+    });
+
+    const els = await service(adapter).extract(OPERATOR, c2);
+
+    expect(els).toHaveLength(1);
+    expect(els[0]?.freq).toBe(2);
+    const ev = (await audit.readAll()).filter((e) => e.action === "element.extract").pop();
+    expect(ev?.detail).toMatchObject({ batches: 3, chunksCovered: 41, chunksTotal: 81, failedBatches: 1 });
+  });
+
+  it("批次本地 grounding 会拒绝引用本批次未看到的 chunk", async () => {
+    const c2 = (await cases.create(OPERATOR, { name: "批次引用专题", clearance: "internal" })).id;
+    await materials.ingest(OPERATOR, c2, Array.from({ length: 41 }, (_, i) => ({ filename: `m${i}.txt`, content: `目标丙出现于第 ${i} 份材料。` })));
+    const all = await materials.loadCaseChunks(c2);
+    const foreign = all[40]!.chunk_id;
+    const adapter = callbackAdapter((content) => {
+      const ids = chunkIds(content);
+      return {
+        elements: [{
+          name: "目标丙",
+          type: "person",
+          mentions: [{ chunk_id: ids.length === 40 ? foreign : ids[0] }],
+        }],
+      };
+    });
+
+    const els = await service(adapter).extract(OPERATOR, c2);
+
+    expect(els).toHaveLength(1);
+    expect(els[0]?.freq).toBe(1);
+    expect(els[0]?.mentions[0]?.content_hash).toBe(all[40]!.content_hash);
   });
 });

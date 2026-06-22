@@ -420,6 +420,15 @@ export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   );
 }
 
+/** 深度分析问答（非流式）：走结构化溯源管线 + thinking on，返回完整带引用结论。 */
+export function askInquiryDeep(caseId: string, question: string): Promise<ApiInquiry> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ question, deep: true }),
+  }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
+}
+
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
@@ -567,6 +576,41 @@ export function listContradictions(caseId: string): Promise<Contradiction[]> {
 export function detectContradictions(caseId: string): Promise<Contradiction[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions`, { method: "POST", headers: headers() }).then((r) =>
     unwrap<Contradiction[]>(r, "contradictions"),
+  );
+}
+
+// ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
+
+export type JobKind = "elements" | "contradictions";
+export type JobState = "running" | "done" | "error" | "cancelled";
+export interface JobProgress { phase: string; done: number; total: number; detail?: Record<string, unknown>; }
+export interface ApiJob {
+  id: string;
+  kind: JobKind;
+  state: JobState;
+  progress: JobProgress;
+  error?: string;
+  startedAt: string;
+}
+
+/** 启动一次后台任务（已在跑则返回同一任务，服务端去重）。 */
+export function startJob(caseId: string, kind: JobKind): Promise<ApiJob> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/jobs/${kind}/start`, { method: "POST", headers: headers() }).then((r) =>
+    unwrap<ApiJob>(r, "job"),
+  );
+}
+
+/** 查当前/最近一次任务状态（刷新恢复：按专题+类型取活跃任务）。无则 null。 */
+export function getJobStatus(caseId: string, kind: JobKind): Promise<ApiJob | null> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/jobs/${kind}/status`, { headers: headers() }).then((r) =>
+    unwrap<ApiJob | null>(r, "job"),
+  );
+}
+
+/** 取消进行中的任务（在批间生效）。返回是否确有任务被取消。 */
+export function cancelJob(caseId: string, kind: JobKind): Promise<boolean> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/jobs/${kind}/cancel`, { method: "POST", headers: headers() }).then((r) =>
+    unwrap<boolean>(r, "cancelled"),
   );
 }
 

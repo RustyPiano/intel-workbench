@@ -22,6 +22,8 @@ export async function rewriteForRetrieval(
     tools: [],
     temperature: 0,
     maxTokens: 300,
+    // 改写是机械短输出：关思考，否则推理模型会把 300 token 全耗在思维链上、返回空串。
+    thinking: { type: "disabled" },
   });
   return result.message.content.trim();
 }

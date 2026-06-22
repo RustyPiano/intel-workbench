@@ -5,6 +5,18 @@ const execFileAsync = promisify(execFile);
 const TIMEOUT_MS = 120_000;
 const MAX_BUFFER = 50 * 1024 * 1024;
 
+export interface PixelDimensions {
+  width: number;
+  height: number;
+}
+
+export interface PixelCrop {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 function ffmpegBin(): string {
   return process.env.MINI_AGENT_FFMPEG_BIN ?? "ffmpeg";
 }
@@ -62,6 +74,48 @@ export async function probeDuration(file: string): Promise<number> {
   const duration = Math.max(...durations);
   if (!Number.isFinite(duration)) throw new Error("ffprobe duration output missing stream duration");
   return duration;
+}
+
+export async function probeImageDimensions(file: string): Promise<PixelDimensions> {
+  assertLocalFile(file);
+  let stdout: string | Buffer;
+  try {
+    ({ stdout } = await execFileAsync(ffprobeBin(), [
+      "-v",
+      "quiet",
+      "-print_format",
+      "json",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height",
+      "-protocol_whitelist",
+      "file",
+      file,
+    ], {
+      timeout: TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+      killSignal: "SIGKILL",
+    }));
+  } catch (error) {
+    throw new Error(`ffprobe dimensions failed: ${errorMessage(error)}`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(String(stdout));
+  } catch (error) {
+    throw new Error(`ffprobe dimensions output is not JSON: ${errorMessage(error)}`);
+  }
+  const streams = (json as { streams?: unknown }).streams;
+  if (!Array.isArray(streams)) throw new Error("ffprobe dimensions output missing streams array");
+  const stream = streams[0] as { width?: unknown; height?: unknown } | undefined;
+  const width = Number(stream?.width);
+  const height = Number(stream?.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new Error("ffprobe dimensions output missing positive width/height");
+  }
+  return { width, height };
 }
 
 export function parseSceneTimestamps(stderr: string): number[] {
@@ -151,6 +205,55 @@ export function buildExtractAudioArgs(file: string): string[] {
   return ["-nostdin", "-protocol_whitelist", "file,pipe", "-i", file, "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "pipe:1"];
 }
 
+function assertNormalizedBbox(bbox: [number, number, number, number]): void {
+  const [x, y, w, h] = bbox;
+  if (![x, y, w, h].every(Number.isFinite)) throw new Error("bbox must contain finite numbers");
+  if (w <= 0 || h <= 0) throw new Error("bbox width/height must be positive");
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function normalizedBboxToPixelCrop(dimensions: PixelDimensions, bbox: [number, number, number, number]): PixelCrop {
+  assertNormalizedBbox(bbox);
+  const imageWidth = Math.trunc(dimensions.width);
+  const imageHeight = Math.trunc(dimensions.height);
+  if (imageWidth <= 0 || imageHeight <= 0) throw new Error("image dimensions must be positive integers");
+  const [x, y, w, h] = bbox;
+  const left = clamp(Math.floor(x * imageWidth), 0, imageWidth - 1);
+  const top = clamp(Math.floor(y * imageHeight), 0, imageHeight - 1);
+  const right = clamp(Math.ceil((x + w) * imageWidth), left + 1, imageWidth);
+  const bottom = clamp(Math.ceil((y + h) * imageHeight), top + 1, imageHeight);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function assertPixelCrop(crop: PixelCrop): void {
+  if (![crop.x, crop.y, crop.width, crop.height].every(Number.isInteger)) throw new Error("pixel crop must contain integers");
+  if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) throw new Error("pixel crop must be positive within image bounds");
+}
+
+export function buildCropImageArgs(file: string, crop: PixelCrop, t?: number): string[] {
+  assertPixelCrop(crop);
+  if (t !== undefined && !Number.isFinite(t)) throw new Error("t must be finite");
+  const inputArgs = t === undefined ? ["-i", file] : ["-ss", String(t), "-i", file];
+  return [
+    "-nostdin",
+    "-protocol_whitelist",
+    "file,pipe",
+    ...inputArgs,
+    "-vf",
+    `crop=w=${crop.width}:h=${crop.height}:x=${crop.x}:y=${crop.y}`,
+    "-frames:v",
+    "1",
+    "-f",
+    "image2",
+    "-c:v",
+    "png",
+    "pipe:1",
+  ];
+}
+
 export async function detectShots(file: string, duration: number): Promise<[number, number][]> {
   assertLocalFile(file);
   // TODO TransNetV2: replace select filter with TransNetV2 shot detector.
@@ -167,5 +270,12 @@ export async function extractFrame(file: string, t: number): Promise<Buffer> {
 export async function extractAudioWav(file: string): Promise<Buffer> {
   assertLocalFile(file);
   const { stdout } = await runFfmpeg(buildExtractAudioArgs(file), true);
+  return stdout;
+}
+
+export async function cropImage(file: string, bbox: [number, number, number, number], t?: number): Promise<Buffer> {
+  assertLocalFile(file);
+  const crop = normalizedBboxToPixelCrop(await probeImageDimensions(file), bbox);
+  const { stdout } = await runFfmpeg(buildCropImageArgs(file, crop, t), true);
   return stdout;
 }

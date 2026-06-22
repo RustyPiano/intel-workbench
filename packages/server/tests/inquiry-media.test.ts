@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,6 +19,7 @@ import { sha256 } from "../src/util/hash.js";
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 const ENDPOINT = "https://stub.local/v1";
+const MEDIA_FIXTURE_DIR = path.join(process.cwd(), "fixtures", "media-integrity");
 
 interface ToolResult {
   ok: boolean;
@@ -221,6 +222,10 @@ async function addRaw(fixture: Fixture, caseId: string, filename: string, bytes:
   return material!;
 }
 
+async function readMediaFixture(name: string): Promise<Buffer> {
+  return readFile(path.join(MEDIA_FIXTURE_DIR, name));
+}
+
 describe.sequential("InquiryService on-demand media tools", () => {
   let savedMode: string | undefined;
   let fixture: Fixture;
@@ -276,7 +281,7 @@ describe.sequential("InquiryService on-demand media tools", () => {
 
   it("caption_frame and ocr_region create citable chunks", async () => {
     const caseId = await createCaseWithSeed(fixture, "media 图像");
-    const image = await addRaw(fixture, caseId, "frame.png", Buffer.from("fake image bytes"));
+    const image = await addRaw(fixture, caseId, "frame.png", await readMediaFixture("test-image.png"));
     const adapter = new MediaInquiryAdapter("caption-ocr", { image: image.id });
 
     const inquiry = await createService(fixture, adapter, { mediaDeps: mockMediaDeps() }).ask(OPERATOR, caseId, "图像里有什么");
@@ -285,11 +290,25 @@ describe.sequential("InquiryService on-demand media tools", () => {
     expect(inquiry.claims).toHaveLength(2);
     const [caption, ocr] = inquiry.claims.map((claim) => claim.citations[0]);
     expect(caption?.material_id).toBe(image.id);
-    expect(caption?.locator.timecode).toBe("3-3");
+    expect(caption?.locator.timecode).toBeUndefined();
+    expect(caption?.locator.bbox).toEqual([0, 0, 1, 1]);
+    expect((caption?.locator as Record<string, unknown> | undefined)?.artifact_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(caption?.content_hash).toBe(sha256(caption?.snippet ?? ""));
     expect(ocr?.material_id).toBe(image.id);
     expect(ocr?.locator.bbox).toEqual([0.2, 0.2, 0.4, 0.3]);
+    expect((ocr?.locator as Record<string, unknown> | undefined)?.artifact_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(ocr?.content_hash).toBe(sha256(ocr?.snippet ?? ""));
+    const [persisted] = await createService(fixture, null).list(OPERATOR, caseId);
+    const persistedHashes = persisted?.claims.flatMap((claim) =>
+      claim.citations.map((citation) => (citation.locator as Record<string, unknown>).artifact_hash),
+    );
+    expect(persistedHashes).toHaveLength(2);
+    expect(persistedHashes).toEqual(expect.arrayContaining([
+      (caption?.locator as Record<string, unknown> | undefined)?.artifact_hash,
+      (ocr?.locator as Record<string, unknown> | undefined)?.artifact_hash,
+    ]));
+    const events = await fixture.audit.readAll();
+    expect(events.some((event) => event.action === "tool.ocr_region" && event.result === "ok")).toBe(true);
   });
 
   it("blocks cross-case raw material reads before adding on-demand chunks", async () => {
@@ -343,18 +362,39 @@ describe.sequential("InquiryService on-demand media tools", () => {
     expect(skippedEvents.some((event) => event.action.startsWith("egress.") && event.detail?.purpose === "asr-transcribe")).toBe(false);
   });
 
+  it("audits ocr_region crop failures without falling back to whole-image OCR", async () => {
+    const caseId = await createCaseWithSeed(fixture, "media OCR 裁剪失败");
+    const image = await addRaw(fixture, caseId, "broken.png", Buffer.from("not an image"));
+    const adapter = new MediaInquiryAdapter("caption-ocr", { image: image.id });
+
+    const inquiry = await createService(fixture, adapter, { mediaDeps: mockMediaDeps() }).ask(OPERATOR, caseId, "图像里有什么");
+
+    expect(inquiry.status).toBe("answered");
+    const ocrResult = adapter.inputs.flatMap((input) => toolResults(input, "ocr_region")).at(-1);
+    expect(ocrResult).toMatchObject({ ok: false });
+    expect(ocrResult?.content).toContain("ocr_region crop failed");
+    const events = await fixture.audit.readAll();
+    expect(events.some((event) => event.action === "tool.ocr_region" && event.result === "error")).toBe(true);
+    expect(await fixture.audit.verify()).toMatchObject({ ok: true });
+  });
+
   it("audits all media tools and preserves a valid audit hash chain", async () => {
     const caseId = await createCaseWithSeed(fixture, "media 审计");
     const audio = await addRaw(fixture, caseId, "audit.wav", Buffer.alloc(6000, 3));
     const video = await addRaw(fixture, caseId, "audit.mp4", Buffer.alloc(8000, 4));
-    const image = await addRaw(fixture, caseId, "audit.png", Buffer.from("audit image"));
+    const image = await addRaw(fixture, caseId, "audit.png", await readMediaFixture("test-image.png"));
     const adapter = new MediaInquiryAdapter("all-tools", { audio: audio.id, video: video.id, image: image.id });
 
     const inquiry = await createService(fixture, adapter, { mediaDeps: mockMediaDeps() }).ask(OPERATOR, caseId, "审计");
 
     expect(inquiry.status).toBe("answered");
     expect(await fixture.audit.verify()).toMatchObject({ ok: true });
-    const actions = (await fixture.audit.readAll()).map((event) => event.action);
+    const captionResult = adapter.inputs.flatMap((input) => toolResults(input, "caption_frame")).at(-1);
+    expect(captionResult).toMatchObject({ ok: false });
+    expect(captionResult?.content).toContain("caption_frame frame extraction failed");
+    const events = await fixture.audit.readAll();
+    expect(events.some((event) => event.action === "tool.caption_frame" && event.result === "error")).toBe(true);
+    const actions = events.map((event) => event.action);
     expect(actions).toEqual(expect.arrayContaining([
       "tool.transcribe",
       "tool.caption_frame",

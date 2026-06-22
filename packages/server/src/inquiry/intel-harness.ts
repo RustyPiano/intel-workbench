@@ -1,10 +1,15 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import type { RuntimeTool } from "mini-agent";
 import { z } from "zod";
 
 import type { Citation, Chunk, ChunkLocator, Identity, Modality } from "../domain/types.js";
+import { cropImage, extractFrame } from "../materials/ffmpeg.js";
 import type { AsrAdapter, OcrAdapter, VlmAdapter } from "../model/slots.js";
 import type { OfflineGuard } from "../security/offline-guard.js";
-import { sha256 } from "../util/hash.js";
+import { sha256, sha256Bytes } from "../util/hash.js";
 import { resolveValidCitations } from "./citation.js";
 
 export interface CitationLedger {
@@ -12,6 +17,12 @@ export interface CitationLedger {
   cited: Map<string, Citation>;
   finalize: { claims: { text: string; cite_ids: string[] }[] } | null;
   readBytes: number;
+}
+
+interface LoadedMaterial {
+  bytes: Buffer;
+  modality: Modality;
+  format?: string;
 }
 
 export function createCitationLedger(): CitationLedger {
@@ -34,7 +45,7 @@ export interface IntelToolDeps {
     vlmEndpoint: string;
     ocrEndpoint: string;
     guard: OfflineGuard;
-    loadMaterial: (materialId: string) => Promise<{ bytes: Buffer; modality: Modality } | null>;
+    loadMaterial: (materialId: string) => Promise<LoadedMaterial | null>;
   };
 }
 
@@ -62,6 +73,50 @@ function isMediaReadable(modality: Modality, allowed: readonly Modality[]): bool
 
 function unavailable() {
   return { ok: false, content: "材料不在本专题或不可读" };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function tempExt(format?: string): string {
+  const ext = (format ?? "").toLowerCase();
+  return /^[a-z0-9]+$/.test(ext) ? ext : "bin";
+}
+
+async function withTempMaterialFile<T>(loaded: LoadedMaterial, fn: (file: string) => Promise<T>): Promise<T> {
+  const tmpDir = await mkdtemp(path.join(tmpdir(), "iw-ondemand-"));
+  try {
+    const file = path.join(tmpDir, `input.${tempExt(loaded.format)}`);
+    await writeFile(file, loaded.bytes);
+    return await fn(file);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function frameArtifact(loaded: LoadedMaterial, t: number): Promise<{ bytes: Buffer; locator: ChunkLocator }> {
+  if (loaded.modality === "image") {
+    return { bytes: loaded.bytes, locator: { bbox: [0, 0, 1, 1], artifact_hash: sha256Bytes(loaded.bytes) } };
+  }
+  try {
+    const bytes = await withTempMaterialFile(loaded, (file) => extractFrame(file, t));
+    return { bytes, locator: { timecode: `${t}-${t}`, artifact_hash: sha256Bytes(bytes) } };
+  } catch (e) {
+    throw new Error(`caption_frame frame extraction failed: ${errorMessage(e)}`);
+  }
+}
+
+async function cropArtifact(loaded: LoadedMaterial, bbox: [number, number, number, number], t?: number): Promise<{ bytes: Buffer; locator: ChunkLocator }> {
+  try {
+    const bytes = await withTempMaterialFile(loaded, (file) => cropImage(file, bbox, t));
+    // locator.bbox is the *requested* normalized rect; artifact_hash is the byte-exact source of truth.
+    const locator: ChunkLocator = { bbox, artifact_hash: sha256Bytes(bytes) };
+    if (loaded.modality === "video" && t !== undefined) locator.timecode = `${t}-${t}`;
+    return { bytes, locator };
+  } catch (e) {
+    throw new Error(`ocr_region crop failed: ${errorMessage(e)}`);
+  }
 }
 
 export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
@@ -199,7 +254,7 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
   if (media.vlm) {
     tools.push({
       name: "caption_frame",
-      description: "按需读取本专题图像/视频素材并生成画面配文；产出的片段可继续 cite。",
+      description: "按需读取本专题图像/视频素材并生成画面配文；t 仅对视频材料有意义，图像材料会忽略 t；产出的片段可继续 cite。",
       inputSchema: z.object({
         material_id: z.string(),
         t: z.number(),
@@ -208,15 +263,14 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
         const { material_id, t } = args as { material_id: string; t: number };
         const loaded = await media.loadMaterial(material_id);
         if (!loaded || !isMediaReadable(loaded.modality, ["video", "image"])) return unavailable();
+        const artifact = await frameArtifact(loaded, t);
         if (media.vlmEndpoint) {
           await media.guard.authorize(media.vlmEndpoint, { user: deps.actor.id, purpose: "vlm-caption" });
         }
-        const text = await media.vlm!.caption([loaded.bytes]);
+        const text = await media.vlm!.caption([artifact.bytes]);
         return {
           ok: true,
-          content: JSON.stringify(
-            synthesize(material_id, loaded.modality, "caption_frame", text, { timecode: `${t}-${t}` }),
-          ),
+          content: JSON.stringify(synthesize(material_id, loaded.modality, "caption_frame", text, artifact.locator)),
         };
       },
     });
@@ -225,25 +279,26 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
   if (media.ocr) {
     tools.push({
       name: "ocr_region",
-      description: "按需读取本专题图像/视频素材并 OCR 指定归一化区域；产出的片段可继续 cite。",
+      description: "按需读取本专题图像/视频素材并 OCR 指定归一化区域；视频材料必须提供 t 并从该时刻帧裁剪，图像材料忽略 t；产出的片段可继续 cite。",
       inputSchema: z.object({
         material_id: z.string(),
         bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+        t: z.number().optional(),
       }),
       async execute(args) {
-        const { material_id, bbox } = args as { material_id: string; bbox: [number, number, number, number] };
+        const { material_id, bbox, t } = args as { material_id: string; bbox: [number, number, number, number]; t?: number };
         const loaded = await media.loadMaterial(material_id);
         if (!loaded || !isMediaReadable(loaded.modality, ["video", "image"])) return unavailable();
+        if (loaded.modality === "video" && !Number.isFinite(t)) return { ok: false, content: "video ocr_region requires t" };
+        const artifact = await cropArtifact(loaded, bbox, loaded.modality === "video" ? t : undefined);
         if (media.ocrEndpoint) {
           await media.guard.authorize(media.ocrEndpoint, { user: deps.actor.id, purpose: "ocr-region" });
         }
-        const result = await media.ocr!.ocr(loaded.bytes);
-        // locator 取本次请求的归一化区域：真实 OCR（P3.D）会先裁剪到该 bbox，故区域即出处；
-        // mock 整图 OCR、无语义，locator 仍记请求区域作为人工复核的定位锚点。
+        const result = await media.ocr!.ocr(artifact.bytes);
         return {
           ok: true,
           content: JSON.stringify(
-            result.lines.map((line) => synthesize(material_id, loaded.modality, "ocr_region", line.text, { bbox })),
+            result.lines.map((line) => synthesize(material_id, loaded.modality, "ocr_region", line.text, artifact.locator)),
           ),
         };
       },

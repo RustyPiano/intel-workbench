@@ -5,6 +5,11 @@ export function sha256(input: string): string {
   return createHash("sha256").update(input, "utf8").digest("hex");
 }
 
+/** Binary artifact hash (frames/crops sent to multimodal adapters). */
+export function sha256Bytes(input: Buffer): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
 /** 短随机 id（素材等业务标识，非密码学用途）。 */
 export function shortId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

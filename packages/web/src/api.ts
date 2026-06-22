@@ -147,7 +147,7 @@ export interface ApiCitation {
   material_id: string;
   material_name: string;
   modality: Modality;
-  locator: { page?: number; paragraph?: number; char_start?: number; char_end?: number; timecode?: string; speaker?: string; bbox?: [number, number, number, number]; frame?: number };
+  locator: { page?: number; paragraph?: number; char_start?: number; char_end?: number; timecode?: string; speaker?: string; bbox?: [number, number, number, number]; artifact_hash?: string; frame?: number };
   snippet: string;
   confidence: number;
   content_hash: string;

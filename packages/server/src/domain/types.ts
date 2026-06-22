@@ -76,6 +76,7 @@ export interface ChunkLocator {
   char_end?: number;
   timecode?: string;    // 音/视频时间码，"start-end"（秒，或 HH:MM:SS.mmm-...）
   bbox?: [number, number, number, number]; // 图像/视频帧区域 [x,y,w,h] 归一化
+  artifact_hash?: string; // 按需多模态工具实际送模态模型的抽帧/裁剪字节 sha256
   speaker?: string;     // 说话人标签（diarization）
   frame?: number;       // 视频帧号（可选）
 }

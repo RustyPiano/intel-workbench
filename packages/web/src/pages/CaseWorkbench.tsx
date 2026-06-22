@@ -435,6 +435,7 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
   const tc = parseTimecode(cite.locator.timecode);
   const frameT = cite.modality === "video" && tc ? tc[0] : undefined;
   const boxes = cite.locator.bbox ? [{ bbox: cite.locator.bbox, label: cite.snippet }] : [];
+  const artifactHash = cite.locator.artifact_hash;
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px", background: "rgba(16,24,40,0.5)", display: "flex", flexDirection: "column", gap: "8px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -451,6 +452,16 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
       </div>
       <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
       <div style={{ fontSize: "12px", color: "var(--text)" }}>{cite.snippet}</div>
+      {artifactHash ? (
+        <button
+          type="button"
+          title={artifactHash}
+          onClick={() => { void navigator.clipboard?.writeText(artifactHash); }}
+          style={{ alignSelf: "flex-start", padding: 0, border: 0, background: "transparent", color: "var(--text-muted)", fontSize: "11px", fontFamily: "monospace", cursor: "copy" }}
+        >
+          frame/crop sha256: {artifactHash.slice(0, 12)}…
+        </button>
+      ) : null}
     </div>
   );
 }

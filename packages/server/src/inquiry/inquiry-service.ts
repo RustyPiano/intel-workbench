@@ -295,7 +295,7 @@ export class InquiryService {
       media: {
         ...this.mediaDeps,
         guard: this.deps.guard,
-        loadMaterial: async (materialId: string): Promise<{ bytes: Buffer; modality: Modality } | null> => {
+        loadMaterial: async (materialId: string): Promise<{ bytes: Buffer; modality: Modality; format?: string } | null> => {
           if (!nameById.has(materialId)) return null;
           try {
             const manifest = await this.cases.get(actor, caseId);
@@ -308,7 +308,7 @@ export class InquiryService {
             const caseMaterialsDir = `${path.resolve(this.paths.caseDir(caseId), "materials")}${path.sep}`;
             const rawPath = path.resolve(raw.path);
             if (raw.filename !== expectedFilename || !rawPath.startsWith(caseMaterialsDir)) return null;
-            return { bytes: await readFile(rawPath), modality: material.modality };
+            return { bytes: await readFile(rawPath), modality: material.modality, format: material.format };
           } catch {
             return null;
           }

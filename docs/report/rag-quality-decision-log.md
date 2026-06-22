@@ -336,4 +336,13 @@
 | anchored（NLI 开思考） | 1.000 | 0.833 | 0.909 |
 | llm-direct 直出 | 1.000 | 0.917 | 0.957 |
 
-**诚实负结果**：曾假设「难判定开思考求质量」并据此把 NLI 路由 thinking-on。实测**反例**——开思考 F1=0.909（R=0.833）**反低于**关思考 0.957（0.917）：推理模型「想多了」把真矛盾判成 unrelated → **按数据默认改回关思考**。「该开则开」此处被 benchmark 判为「不开」=「设计完 benchmark 验证」闭环。**附带强结论**：M1 的 max_tokens 修复+关思考令 anchored **0.737→0.957，追平 llm-direct**，且仍 precision 1.0 + 逐条 provenance + scope + 全语料可扩展 + 全程可审计。详见 `benchmark-summary.md` §2。`npm run check` 绿 **654/2**。M1–M5 三红线守住。**待用户**：浏览器验收 + 提交/push。
+**诚实负结果**：曾假设「难判定开思考求质量」并据此把 NLI 路由 thinking-on。实测**反例**——开思考 F1=0.909（R=0.833）**反低于**关思考 0.957（0.917）：推理模型「想多了」把真矛盾判成 unrelated → **按数据默认改回关思考**。「该开则开」此处被 benchmark 判为「不开」=「设计完 benchmark 验证」闭环。**附带强结论**：M1 的 max_tokens 修复+关思考令 anchored **0.737→0.957，追平 llm-direct**，且仍 precision 1.0 + 逐条 provenance + scope + 全语料可扩展 + 全程可审计。详见 `benchmark-summary.md` §2。`npm run check` 绿 **654/2**。M1–M5 三红线守住。
+
+## D25 — 完整 Codex 审核（补 M1/M4a/M5 二审）+ 三处修复
+
+用户指出 M1 机制层 / M4a 后端深度 / M5 judge 翻默认 / 评审采纳后的自改修复**未过 Codex**（M1 当时 Codex token 过期，我自写自审；M4a/M5 我自做），要求对 M1–M5 全量补一次独立 Codex 审核。Codex 复审 `66fac9b..HEAD` 全 diff：确认 **M1**（核心适配器 thinking 仅置位时透传 + max_tokens，无非 DeepSeek 路径破坏）/ **M2** 并发引擎（封顶/无双结/中止即拒/onSettled 包裹）+ 收窄逐批 catch（authorize 失败显式）/ **M4**（deep 仅认 `deep===true`、持久化原问题、走结构化引用路、`Outlet key`）/ **M5**（judge 默认 disabled、eval 正确翻 env）/ **逐字引用** 全 clean；报 **1 BLOCKING + 2 MAJOR**，逐条裁决为真并修：
+- **BLOCKING（零外发软约束「不得有错误路径隐藏拒绝」）**：`contradiction.detect()` 外层 catch 把 OfflineGuard 出站拒绝也吞成 `return []` → 经后台任务呈「done+空」=把「被拒/出错」误呈为「未发现矛盾」。改为**审计 error 后显式抛出**（任务落 error 态），与 `element.extract` 对齐。+回归测试（空白名单 guard → detect 抛出 + 记 `contradiction.detect` error）。
+- **MAJOR**：取消未贯穿判定阶段——`judgeClusters`/`judgePair` 收 `signal`，批间检查中止 + 透传 `generateJson`，取消后及时停成对 NLI 出站（原仅抽取阶段可取消）。
+- **MAJOR**：`element.extract` 无错误路径审计——包 try/catch，出错（含出站拒绝）落 `element.extract` result:error 并抛出（与 detect 对齐，补审计红线的 error 路径覆盖）。
+
+门禁 `npm run check` 绿 **655/2**。提交 ae7c358。**至此 M1–M5 全部经足额独立审核（M2/M3/M4b 实现时双评审 + 本轮 M1/M4a/M5 补审），三红线复核守住。** **待用户**：浏览器验收 + 是否 push。

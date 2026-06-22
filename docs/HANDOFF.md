@@ -1,8 +1,8 @@
 # 开发交接文档（intel-workbench / 离线情报分析工作台）
 
 > 给接手开发的 Agent / 工程师。读完这份 + `CLAUDE.md`（行为准则）+ `docs/specs/` 就能上手。
-> 最后更新：2026-06-22（本轮 RAG质量 + 多模态摄入做实 + 自研分析 skill + 产品补全 全收官）。当前分支 `feat/intel-p3-harness`（无远端，10 提交本地未 push）。
-> 评测/报告：`docs/report/benchmark-summary.md`（benchmark 汇总）、`docs/report/rag-quality-decision-log.md`（D8–D19 决策日志）、`docs/report/practice-report.md`（实践报告）。
+> 最后更新：2026-06-22（追加 **大专题分析改造 M1–M5**：思考参数机制 + 全语料分批引擎 + 后台任务 + 前端进度/问答深度 + benchmark；详见决策日志 D20–D24）。M1–M5 本地完成 + 双评审 + 门禁绿，**尚未提交**。
+> 评测/报告：`docs/report/benchmark-summary.md`（benchmark 汇总）、`docs/report/rag-quality-decision-log.md`（D8–D24 决策日志）、`docs/report/practice-report.md`（实践报告）。
 
 ---
 
@@ -34,10 +34,17 @@
 **本轮（2026-06-20→22，批准计划 federated-snacking-cake，10 提交 `451f394`→`4ad9619`，均未 push）：**
 - **Phase A 检索质量**（D8–D11）：评测闭环 + 基线（`npm run eval`）、Contextual Retrieval、查询改写 rewrite/HyDE、OCR bbox 几何重排。**诚实负结果**：强基线饱和，通用 RAG 增强不增益 → 三者 opt-in 默认关。
 - **Phase B 多模态摄入做实**（D14–D15）：音频/图像摄入即加工；视频真 ffmpeg 场景分镜+抽帧（气隙白名单 `-nostdin -protocol_whitelist file,pipe`）。
-- **★ Phase C 自研分析（拿分中心件）**：C1 **交叉验证/矛盾检测**（`analysis/contradiction-service.ts`，锚定+成对 NLI，benchmark anchored F1=0.737 vs 直出 0.957、precision 1.0、逐条 provenance）；C2 **要素关系网络/时间线**（`analysis/element-graph.ts`，确定性共现聚合，非 LLM）。
+- **★ Phase C 自研分析（拿分中心件）**：C1 **交叉验证/矛盾检测**（`analysis/contradiction-service.ts`，锚定+成对 NLI，benchmark anchored F1=**0.957（追平直出）**、precision 1.0、逐条 provenance）；C2 **要素关系网络/时间线**（`analysis/element-graph.ts`，确定性共现聚合，非 LLM）。
 - **Phase D 产品补全**：D1 NewCase 真上传、D2 跨专题总览 dashboard（密级裁剪）、D3 人工校对 affordance（审计 `review.mark`）、D4 CaseList 搜索启用。
 
-**门禁**：`npm run check` 本地 **620 passed / 2 skipped** 绿，typecheck 干净。
+**大专题分析改造（M1–M5，本轮追加，决策日志 D20–D24，未提交）：**
+- **M1 机制层**：核心适配器加 `thinking:{type}` 透传（`deepseek-v4-flash` 推理模式开关；`deepseek-chat/reasoner` 别名 2026-07-24 弃用）；`max_completion_tokens`→`max_tokens`（DeepSeek 静默忽略前者，修隐性 bug）；思考分流落各调用点。修复美伊大专题「Run aborted by signal」根因。
+- **M2 分批引擎**：`analysis/batch-extract.ts`（有界并发/取消/进度）；要素抽取/矛盾检测**分批覆盖全部 chunk**（批 40/并发 4）+ 逐批本地接地 + `analysis/element-merge.ts` 确定性合并；诚实覆盖统计。替代旧「截前 60 块」。
+- **M3 后台任务**：`jobs/job-registry.ts`（内存注册表，单活跃任务/取消/刷新恢复）+ `routes/jobs.ts`（`/cases/:id/jobs/:kind/(start|status|cancel)`，kind∈{elements,contradictions}，鉴权先行，result 不外泄）。
+- **M4 前端**：`useExtractionJob` hook（2s 轮询/进度条/取消/刷新恢复）驱动要素/矛盾面板；问答「深度分析」开关（thinking-on 非流式结构化）；`<Outlet key={id}>` 按专题重挂载防串台。
+- **M5 benchmark**：矛盾 NLI **thinking on/off 对照**（`MINI_AGENT_CONTRADICTION_JUDGE_THINKING`，`npm run eval:contradiction`）——**诚实负结果**：开思考 F1=0.909 反低于关思考 0.957 → 数据驱动默认关思考；anchored 经 M1 修复 0.737→0.957 追平直出。
+
+**门禁**：`npm run check` 本地 **654 passed / 2 skipped** 绿，typecheck 干净（含 web）。
 
 ---
 

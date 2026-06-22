@@ -301,3 +301,39 @@
 **红线**：新 server 代码**零外发**（仅 `cases.list` + 本地 `readFile`）；**访问边界=`cases.list(actor)`**（密级裁剪），per-case 文件读经 `paths.caseDir(manifest.id)`（`assertSafeId` 拒 `..`/斜杠/空字节），低密级用户既看不到高密级专题也读不到其计数；只读无审计写。
 
 **编排=Codex 实现 + Opus/独立 Codex 双评审（均无 BLOCKING/MAJOR）**。独立 Codex 确认零外发/密级边界/无路径穿越/`Promise.all` 不被单坏文件 reject（countJsonArray 内吞错）/聚合正确/测试真实。采纳 NIT：web 本地 `CLEARANCES` 加注释钉死与服务端顺序一致。MINOR（countJsonArray 吞 EPERM 等）判为有意 best-effort（气隙单用户文件库 EPERM 近不可能，坏 JSON→0 正确，下次抽取重写）不改。服务单测 3 例（专题/素材聚合+倒序 / elements+contradictions 计数 / 缺文件=0 不崩）。本地 `npm run check` 绿 **620/2**。提交 = D2 检查点（未 push）。
+
+---
+
+## 大专题分析改造（M1–M5）——背景
+
+用户在真专题「美伊形势分析」（62 文档 / 1667 切块）点「提取要素」反复报 `Run aborted by signal`。逐项实测复现根因后，做了一轮「大专题下分析能力做实」的改造（M1 机制层 → M2 分批引擎 → M3 异步任务 → M4 前端进度/问答深度 → M5 benchmark）。编排同前：Codex 实现 + Opus/独立 Codex 双评审 + 本地 `npm run check` 闸；三红线全程守。
+
+## D20 — "Run aborted by signal" 根因诊断（实测复现，非猜）
+
+**实测复现（curl 真打 DeepSeek，未印密钥）**：①端点本身健康（`GET /models` http200/0.11s）。②`deepseek-v4-flash` 是**推理模型**：60 块抽取 `max_tokens=2000` 时 `reasoning_tokens=2000`、content 空（思维链吃光预算）；加大到 16000 才完整但**耗时 88s** → 撞 `structured.ts` 的 60s 默认超时 → abort。③更关键：适配器发 `max_completion_tokens`，而 **DeepSeek 静默忽略它**（实测 `max_completion_tokens=64` 仍出 334 token；`max_tokens=64` 才真截断）→ 所有 token 上限**形同虚设**。**结论**：根因 = 推理模型思维链税 + `max_completion_tokens` 在 DeepSeek 无效 + 60s 超时三者叠加，**非端点故障**；同源问题波及问答/矛盾/改写。
+
+## D21 — M1 思考参数机制层 + max_tokens 修复
+
+**用户关键输入**：`deepseek-chat`/`deepseek-reasoner` 别名 **2026-07-24 弃用**；二者=`deepseek-v4-flash` 的非思考/思考模式，**加思考参数**控制即可。实测确认：**`thinking:{type:"disabled"}`→`reasoning_tokens=None`**（`thinking:false`/`enable_thinking`/`reasoning_effort:none` 均无效或 400）。**改动**：①核心 `GenerateInput.thinking?:{type}` 透传请求体；②`max_completion_tokens`→**`max_tokens`**（令上限真生效，修隐性 bug）；③`generateJson` 加 `thinking`；④思考分流落各调用点（抽取/claim/问答/改写=disabled，NLI=enabled；后被 D24 推翻）；⑤`dev.env.sh` 复位 `deepseek-v4-flash`。`npm run check` 绿 **623/2**。立竿见影：美伊提取要素即通（~40s）。
+
+## D22 — M2 大专题分批引擎 + 确定性合并（全覆盖）
+
+**根问题**：要素/矛盾此前**截前 60 块**（1667→3.6%）。**改动**：①新 `analysis/batch-extract.ts`（`splitIntoBatches`+`mapWithConcurrency` 有界并发/取消/进度）；②`generateJson` 加外部 `signal`；③两服务分批覆盖全部 chunk（批 40/并发 4）+ **逐批本地接地**（每批 retrievedById 仅含该批块，杜绝引用没见过的块）+ `mergeElements` 确定性归并；best-effort 诚实报 `chunksCovered/Total/failedBatches`。**双评审修复（独立 Codex 5 MAJOR/1 NIT 逐条裁决）**：采纳—`onSettled` 抛错包 try/catch；中止优先于"恰好完成"一律 reject；**收窄逐批 catch 至仅模型调用**（原 catch 吞了 `guard.authorize`=授权拒绝被静默记成失败批，**红线隐患**）。驳回—并发引擎"队列回调竞态"（JS 语义不可达）。`npm run check` 绿 **648/2**。
+
+## D23 — M3 异步任务端点 + runners
+
+**用户定**：2–4 分钟级 → **完整后台任务+轮询**。**改动**：①通用 `jobs/job-registry.ts`（内存注册表，每(案,kind)单活跃任务=去重，AbortController 取消，状态可查=刷新恢复；边界：服务重启丢在途任务）；②`routes/jobs.ts`（start/status/cancel，kind∈{elements,contradictions}），**起任务前先 `cases.get` 鉴权**，`serializeJob` 不含 `result`，`job.cancel` 审计；③app.ts/api.ts 接单例。**双评审**均无 BLOCKING/MAJOR；1 MINOR（原始 `job.error` 透给已授权用户）暂缓。修 1 红：Codex 盲写的 403 测试在 dev 模式建 topsecret（被禁）→改「不存在专题→404 且不起任务」。绿 **654/2**。
+
+## D24 — M4 前端进度/问答深度模式 + M5 benchmark（思考分流的诚实负结果）
+
+**M4 后端（自做）**：问答「深度分析」=走结构化溯源管线并开思考（`ask(...,{deep})`→`callModel(...,deep)`），非流式、同引用红线。web 加 `startJob/getJobStatus/cancelJob`+`askInquiryDeep`。**M4b 前端（Codex）**：共享 `useExtractionJob` hook（2s 轮询/进度/取消/刷新恢复/`onDone` 恰一次/卸载清理）驱动要素/矛盾面板；问答加「深度分析」开关。**双评审修复**：采纳「跨专题串台」类（onDone reload 丢清理 + 在途答案未按 caseId 隔离）→ 一招治本 `<Outlet key={id}>` 按专题重挂载面板；驳回「队列轮询竞态」（React 语义不可达）。
+
+**M5 benchmark（headline，`npm run eval:contradiction`）**：建 thinking on/off 可配机制（`MINI_AGENT_CONTRADICTION_JUDGE_THINKING`）跑对照：
+
+| 方案 | P | R | F1 |
+|---|---|---|---|
+| anchored（NLI 关思考，默认） | 1.000 | 0.917 | **0.957** |
+| anchored（NLI 开思考） | 1.000 | 0.833 | 0.909 |
+| llm-direct 直出 | 1.000 | 0.917 | 0.957 |
+
+**诚实负结果**：曾假设「难判定开思考求质量」并据此把 NLI 路由 thinking-on。实测**反例**——开思考 F1=0.909（R=0.833）**反低于**关思考 0.957（0.917）：推理模型「想多了」把真矛盾判成 unrelated → **按数据默认改回关思考**。「该开则开」此处被 benchmark 判为「不开」=「设计完 benchmark 验证」闭环。**附带强结论**：M1 的 max_tokens 修复+关思考令 anchored **0.737→0.957，追平 llm-direct**，且仍 precision 1.0 + 逐条 provenance + scope + 全语料可扩展 + 全程可审计。详见 `benchmark-summary.md` §2。`npm run check` 绿 **654/2**。M1–M5 三红线守住。**待用户**：浏览器验收 + 提交/push。

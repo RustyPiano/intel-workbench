@@ -151,12 +151,19 @@ export interface ApiCitation {
   snippet: string;
   confidence: number;
   content_hash: string;
+  quote?: string;
+  quote_char_start?: number;
+  quote_char_end?: number;
+  quote_hash?: string;
+  support_label?: "supports" | "mentions" | "contradicts" | "context-only" | "unknown";
+  support_status?: "supported" | "support-unverified" | "unsupported";
 }
 
 export interface ApiClaim {
   text: string;
   type: "fact" | "inference";
   status: "verified" | "unverified";
+  support_status?: "supported" | "support-unverified" | "unsupported";
   citations: ApiCitation[];
 }
 
@@ -439,7 +446,7 @@ export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   );
 }
 
-/** 深度分析问答（非流式）：走结构化溯源管线 + thinking on，返回完整带引用结论。 */
+/** 深度分析问答（非流式）：走 agent 证据台账路径 + 扩大检索/读取预算，返回完整带引用结论。 */
 export function askInquiryDeep(caseId: string, question: string): Promise<ApiInquiry> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
     method: "POST",

@@ -28,6 +28,19 @@ function firstSearchChunkId(input: GenerateInput): string {
   return chunks[0]?.chunk_id ?? "missing";
 }
 
+function citedIds(input: GenerateInput): string[] {
+  return toolResults(input, "cite")
+    .filter((result) => result.ok)
+    .map((result) => {
+      try {
+        return (JSON.parse(result.content) as { cite_id?: string }).cite_id;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((id): id is string => typeof id === "string");
+}
+
 export class StreamingInquiryAdapter implements ModelAdapter {
   readonly name = "streaming-agent";
   readonly inputs: GenerateInput[] = [];
@@ -36,6 +49,7 @@ export class StreamingInquiryAdapter implements ModelAdapter {
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
+    if (input.tools.length === 0) return final(JSON.stringify({ label: "supports", rationale: "test support label" }));
     const has = (name: string) => toolResults(input, name).length > 0;
 
     if (this.mode === "no-finalize") {
@@ -53,11 +67,11 @@ export class StreamingInquiryAdapter implements ModelAdapter {
 
     if (!has("cite")) {
       const citeId = this.mode === "invalid-cite" ? "not-returned#999" : chunkId;
-      return toolCall("cite", { chunk_id: citeId, claim: "发现舰船线索" }, `cite_${this.inputs.length}`);
+      return toolCall("cite", { chunk_id: citeId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
     }
 
     if (!has("finalize_answer")) {
-      const citeId = this.mode === "invalid-cite" ? "not-returned#999" : chunkId;
+      const citeId = this.mode === "invalid-cite" ? "not-returned#999" : (citedIds(input)[0] ?? "missing-cite-id");
       return toolCall("finalize_answer", { claims: [{ text: "发现舰船线索", cite_ids: [citeId] }] }, `final_${this.inputs.length}`);
     }
 

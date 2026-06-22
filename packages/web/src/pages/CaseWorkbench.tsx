@@ -434,7 +434,9 @@ function VideoMediaView({ materialId, media }: { materialId: string; media: Vide
 function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => void }) {
   const tc = parseTimecode(cite.locator.timecode);
   const frameT = cite.modality === "video" && tc ? tc[0] : undefined;
-  const boxes = cite.locator.bbox ? [{ bbox: cite.locator.bbox, label: cite.snippet }] : [];
+  const quote = cite.quote ?? cite.snippet;
+  const support = cite.support_status ?? cite.support_label;
+  const boxes = cite.locator.bbox ? [{ bbox: cite.locator.bbox, label: quote }] : [];
   const artifactHash = cite.locator.artifact_hash;
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px", background: "rgba(16,24,40,0.5)", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -451,7 +453,8 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
         </button>
       </div>
       <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
-      <div style={{ fontSize: "12px", color: "var(--text)" }}>{cite.snippet}</div>
+      {support ? <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>支持性：{support}</div> : null}
+      <div style={{ fontSize: "12px", color: "var(--text)" }}>{quote}</div>
       {artifactHash ? (
         <button
           type="button"
@@ -1490,6 +1493,9 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
         // 音频引用带时间码 → 点击回听片段；视频/图像带 bbox/时间码 → 点击取帧框选（硬验收，§4.3/§6）。
         const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
         const framed = (c.modality === "video" || c.modality === "image") && Boolean(c.locator.bbox || c.locator.timecode);
+        const quote = c.quote ?? c.snippet;
+        const supportStatus = c.support_status ?? c.support_label;
+        const support = supportStatus ? ` · 支持性：${supportStatus}` : "";
         const loc = c.locator.timecode
           ? ` · 时间：${c.locator.timecode}秒${c.locator.speaker ? ` · 说话人：${c.locator.speaker}` : ""}`
           : c.locator.paragraph
@@ -1498,23 +1504,26 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
         const onClick = audioTc ? () => void playCitedSegment(c.material_id, audioTc) : framed ? () => onFrame(c) : undefined;
         const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : "";
         return (
-          <span
-            key={i}
-            className="citation"
-            style={onClick ? { cursor: "pointer" } : undefined}
-            title={`${c.material_name}${loc}\n${c.snippet}${hint}`}
-            onClick={onClick}
-          >
-            {audioTc ? (
-              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", fill: "currentColor", verticalAlign: "middle" }} viewBox="0 0 24 24" stroke="none">
-                <polygon points="5 3 19 12 5 21 5 3"/>
-              </svg>
-            ) : framed ? (
-              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-              </svg>
-            ) : null}
-            {i + 1}
+          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", maxWidth: "360px", verticalAlign: "middle" }}>
+            <span
+              className="citation"
+              style={onClick ? { cursor: "pointer" } : undefined}
+              title={`${c.material_name}${loc}\n${quote}${support}${hint}`}
+              onClick={onClick}
+            >
+              {audioTc ? (
+                <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", fill: "currentColor", verticalAlign: "middle" }} viewBox="0 0 24 24" stroke="none">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+              ) : framed ? (
+                <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                </svg>
+              ) : null}
+              {i + 1}
+            </span>
+            {supportStatus ? <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{supportStatus}</span> : null}
+            {c.quote ? <span title={c.quote} style={{ fontSize: "11px", color: "var(--text-dim)", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>“{c.quote}”</span> : null}
           </span>
         );
       })}
@@ -1538,6 +1547,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
                 return (
                   <div key={i} style={{ marginTop: "4px" }}>
                     · {c.text}
+                    {c.support_status ? <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "6px" }}>{c.support_status}</span> : null}
                     {reviewedRefs.has(ref)
                       ? <span style={{ color: "#4caf50", fontSize: "11px", marginLeft: "6px" }}>✓ 已校对</span>
                       : <button type="button" className="btn btn--ghost" style={{ padding: "1px 8px", fontSize: "11px", marginLeft: "6px" }} onClick={() => onReview(ref)}>点此校对</button>
@@ -1551,7 +1561,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
       </div>
     );
   }
-  const verified = inquiry.claims.filter((c) => c.status === "verified");
+  const verified = inquiry.claims.filter((c) => c.status === "verified" || c.support_status === "support-unverified");
   return (
     <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
       {verified.map((c, i) => {
@@ -1559,6 +1569,9 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
         return (
           <div key={i} style={{ marginBottom: "6px" }}>
             {i + 1}. {c.text}
+            {c.support_status === "support-unverified" ? (
+              <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>support-unverified</span>
+            ) : null}
             {c.type === "inference" ? (
               <>
                 <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>（推断）</span>
@@ -1791,7 +1804,7 @@ export function InquiryPanel() {
                 </svg>
               </div>
               <div className="chat-content">
-                <p className="live-narration">{liveText || (activeDeep ? "深度分析中…（已开启思考模式，可能稍慢）" : "研判中…")}</p>
+                <p className="live-narration">{liveText || (activeDeep ? "深度分析中…（已提高检索/读取预算，可能稍慢）" : "研判中…")}</p>
                 {toolTrace.length > 0 ? (
                   <div className="tool-trace" aria-label="工具调用轨迹">
                     {toolTrace.map((entry) => (
@@ -1837,7 +1850,7 @@ export function InquiryPanel() {
               </svg>
             </div>
             <div className="chat-content">
-              <p className="live-narration">{activeDeep ? "深度分析中…（已开启思考模式，可能稍慢）" : "研判中…"}</p>
+              <p className="live-narration">{activeDeep ? "深度分析中…（已提高检索/读取预算，可能稍慢）" : "研判中…"}</p>
             </div>
           </div>
         ) : null}

@@ -7,16 +7,26 @@ import { sha256 } from "../util/hash.js";
  * 其 content_hash 与当前素材一致时才有效（杜绝凭空捏造 / 素材变更后失效）。
  */
 
-export function chunkToCitation(chunk: Chunk, materialName: string, confidence = 0.6): Citation {
+export function chunkToCitation(chunk: Chunk, materialName: string, confidence = 0.6, quote?: string, quoteStart?: number): Citation {
+  const start = quote === undefined ? -1 : quoteStart ?? chunk.text.indexOf(quote);
+  if (quote !== undefined && (start < 0 || chunk.text.slice(start, start + quote.length) !== quote)) {
+    throw new Error("quote is not a substring of chunk.text");
+  }
   return {
     material_id: chunk.material_id,
     material_name: materialName,
     // 透传 chunk 自带模态/出处（二期 Spec §2.2）；旧 chunk 无 modality 字段时缺省 "doc"。
     modality: chunk.modality ?? "doc",
     locator: chunk.locator,
-    snippet: chunk.text.slice(0, 200),
+    snippet: quote ?? chunk.text.slice(0, 200),
     confidence,
     content_hash: chunk.content_hash,
+    ...(quote === undefined ? {} : {
+      quote,
+      quote_char_start: start,
+      quote_char_end: start + quote.length,
+      quote_hash: sha256(quote),
+    }),
   };
 }
 

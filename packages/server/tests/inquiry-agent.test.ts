@@ -39,15 +39,37 @@ function firstSearchChunkId(input: GenerateInput): string {
   return chunks[0]?.chunk_id ?? "missing";
 }
 
+function citedIds(input: GenerateInput): string[] {
+  return toolResults(input, "cite")
+    .filter((result) => result.ok)
+    .map((result) => {
+      try {
+        return (JSON.parse(result.content) as { cite_id?: string }).cite_id;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((id): id is string => typeof id === "string");
+}
+
+type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "duplicate-cites";
+
 class DynamicInquiryAdapter implements ModelAdapter {
   readonly name = "scripted-agent";
   readonly inputs: GenerateInput[] = [];
+  readonly supportInputs: GenerateInput[] = [];
   readonly readContents: string[] = [];
 
-  constructor(private readonly mode: "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget") {}
+  constructor(private readonly mode: DynamicMode) {}
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
+    if (input.tools.length === 0) {
+      this.supportInputs.push(input);
+      if (this.mode === "nli-failure") throw new Error("support verifier failed");
+      const label = this.mode === "context-only" ? "context-only" : "supports";
+      return final(JSON.stringify({ label, rationale: "test support label" }));
+    }
     const has = (name: string) => toolResults(input, name).length > 0;
 
     if (this.mode === "no-finalize") {
@@ -64,10 +86,10 @@ class DynamicInquiryAdapter implements ModelAdapter {
       const reads = toolResults(input, "read_chunk");
       this.readContents.splice(0, this.readContents.length, ...reads.map((result) => result.content));
       if (reads.length === 0) return toolCall("read_chunk", { chunk_id: chunkId }, "read_first");
-      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索" }, "cite_budget");
+      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, "cite_budget");
       if (reads.length === 1) return toolCall("read_chunk", { chunk_id: chunkId }, "read_exhausted");
       if (!has("finalize_answer")) {
-        return toolCall("finalize_answer", { claims: [{ text: "发现舰船线索", cite_ids: [chunkId] }] }, "final_budget");
+        return toolCall("finalize_answer", { claims: [{ text: "发现舰船线索", cite_ids: [citedIds(input)[0] ?? "missing-cite-id"] }] }, "final_budget");
       }
       return final();
     }
@@ -76,14 +98,30 @@ class DynamicInquiryAdapter implements ModelAdapter {
       return toolCall("read_chunk", { chunk_id: chunkId }, `read_${this.inputs.length}`);
     }
 
+    if (this.mode === "two-spans") {
+      if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, "read_two_spans");
+      const cites = toolResults(input, "cite").length;
+      if (cites === 0) return toolCall("cite", { chunk_id: chunkId, claim: "发现蓝色货轮", quote: "雷达记录到蓝色货轮" }, "cite_blue");
+      if (cites === 1) return toolCall("cite", { chunk_id: chunkId, claim: "发现红色拖船", quote: "港口日志显示红色拖船" }, "cite_red");
+      if (!has("finalize_answer")) {
+        const ids = citedIds(input);
+        return toolCall("finalize_answer", { claims: [
+          { text: "发现蓝色货轮", cite_ids: [ids[0] ?? "missing-cite-id-1"] },
+          { text: "发现红色拖船", cite_ids: [ids[1] ?? "missing-cite-id-2"] },
+        ] }, "final_two_spans");
+      }
+      return final();
+    }
+
     if (!has("cite")) {
       const citeId = this.mode === "invalid-cite" ? "not-returned#999" : chunkId;
-      return toolCall("cite", { chunk_id: citeId, claim: "发现舰船线索" }, `cite_${this.inputs.length}`);
+      return toolCall("cite", { chunk_id: citeId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
     }
 
     if (!has("finalize_answer")) {
-      const citeId = this.mode === "invalid-cite" ? "not-returned#999" : chunkId;
-      return toolCall("finalize_answer", { claims: [{ text: "发现舰船线索", cite_ids: [citeId] }] }, `final_${this.inputs.length}`);
+      const citeId = this.mode === "invalid-cite" ? "not-returned#999" : (citedIds(input)[0] ?? "missing-cite-id");
+      const cite_ids = this.mode === "duplicate-cites" ? [citeId, citeId] : [citeId];
+      return toolCall("finalize_answer", { claims: [{ text: "发现舰船线索", cite_ids }] }, `final_${this.inputs.length}`);
     }
 
     return final();
@@ -183,7 +221,71 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.answer).toContain("1. 发现舰船线索");
     expect(inquiry.claims[0]?.status).toBe("verified");
     expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
+    expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[0]?.support_status).toBe("supported");
+    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("supported");
     expect(inquiry.answer).not.toContain("raw final text");
+  });
+
+  it("keeps two claims on one chunk bound to their own quoted spans", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 双 span", [
+      { filename: "intel.txt", content: "雷达记录到蓝色货轮。港口日志显示红色拖船。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("two-spans")).ask(OPERATOR, caseId, "有哪些船只线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.claims).toHaveLength(2);
+    expect(inquiry.claims[0]?.citations[0]?.quote).toBe("雷达记录到蓝色货轮");
+    expect(inquiry.claims[1]?.citations[0]?.quote).toBe("港口日志显示红色拖船");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[1]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[0]?.citations[0]?.quote_hash).not.toBe(inquiry.claims[1]?.citations[0]?.quote_hash);
+  });
+
+  it("does not count a finalized citation as grounded unless support verification says supports", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent context-only", [
+      { filename: "intel.txt", content: "舰船线索：南海周边发现可疑舰船活动，疑似军事演习。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("context-only")).ask(OPERATOR, caseId, "有何舰船线索");
+
+    expect(inquiry.status).toBe("insufficient");
+    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support_status).toBe("unsupported");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("context-only");
+    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("unsupported");
+  });
+
+  it("labels NLI failures unknown, returns the inquiry, and audits the failure", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent nli failure", [
+      { filename: "intel.txt", content: "舰船线索：南海周边发现可疑舰船活动，疑似军事演习。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("nli-failure")).ask(OPERATOR, caseId, "有何舰船线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.answer).toContain("发现舰船线索");
+    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("unknown");
+    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("support-unverified");
+    const events = await fixture.audit.readAll();
+    expect(events.some((event) => event.action === "inquiry.support_verify" && event.result === "error")).toBe(true);
+  });
+
+  it("dedupes repeated cite_ids before support verification", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 重复引用", [
+      { filename: "intel.txt", content: "舰船线索：南海周边发现可疑舰船活动，疑似军事演习。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("duplicate-cites");
+
+    const inquiry = await createService(fixture, adapter).ask(OPERATOR, caseId, "有何舰船线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.claims[0]?.citations).toHaveLength(1);
+    expect(adapter.supportInputs).toHaveLength(1);
   });
 
   it("rejects cites for chunks not returned by search", async () => {
@@ -316,8 +418,23 @@ describe.sequential("InquiryService agent harness", () => {
     expect(invalidOnly.claims[0]?.status).toBe("unverified");
   });
 
-  it("defaults to the existing single path unless MINI_AGENT_INQUIRY_MODE=agent", async () => {
+  it("defaults to the agent ledger path when MINI_AGENT_INQUIRY_MODE is unset", async () => {
     delete process.env.MINI_AGENT_INQUIRY_MODE;
+    const caseId = await createCaseWithDocs(fixture, "agent 默认", [
+      { filename: "intel.txt", content: "舰船线索：默认 agent 路径可回答。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("valid");
+
+    const inquiry: Inquiry = await createService(fixture, adapter).ask(OPERATOR, caseId, "舰船线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(adapter.inputs[0]?.tools.map((tool) => tool.name)).toContain("cite");
+    expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
+  });
+
+  it("keeps the single-shot path only when MINI_AGENT_INQUIRY_MODE=single", async () => {
+    process.env.MINI_AGENT_INQUIRY_MODE = "single";
     const caseId = await createCaseWithDocs(fixture, "single 默认", [
       { filename: "intel.txt", content: "舰船线索：默认单发路径仍可回答。" },
     ]);
@@ -341,5 +458,19 @@ describe.sequential("InquiryService agent harness", () => {
 
     expect(inquiry.status).toBe("answered");
     expect(input?.tools).toEqual([]);
+  });
+
+  it("routes deep inquiries through the agent path with an expanded read budget", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 深度", [
+      { filename: "long.txt", content: `舰船线索：${"A".repeat(100)}` },
+    ]);
+    const adapter = new DynamicInquiryAdapter("budget");
+
+    const inquiry = await createService(fixture, adapter, { readBudgetBytes: 20, perReadCapBytes: 100 }).ask(OPERATOR, caseId, "舰船线索", { deep: true });
+
+    expect(inquiry.status).toBe("answered");
+    expect(adapter.inputs[0]?.tools.map((tool) => tool.name)).toContain("search_chunks");
+    expect(Buffer.byteLength(adapter.readContents[0] ?? "", "utf8")).toBeGreaterThan(20);
+    expect(Buffer.byteLength(adapter.readContents[0] ?? "", "utf8")).toBeLessThanOrEqual(40);
   });
 });

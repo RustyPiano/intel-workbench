@@ -132,9 +132,10 @@ describe("Inquiry on-demand media evidence integrity", () => {
     expect(item.locator.timecode).toBe(`${t}-${t}`);
     expect(item.locator.artifact_hash).toBe(sha256Bytes(expectedFrame));
 
-    const cite = await findTool(tools, "cite").execute({ chunk_id: item.chunk_id, claim: "frame" }, undefined as never);
+    const cite = await findTool(tools, "cite").execute({ chunk_id: item.chunk_id, claim: "frame", quote: item.snippet }, undefined as never);
     expect(cite.ok).toBe(true);
-    expect((ledger.cited.get(item.chunk_id)?.locator as Record<string, unknown> | undefined)?.artifact_hash).toBe(sha256Bytes(expectedFrame));
+    const citeId = (JSON.parse(cite.content) as { cite_id: string }).cite_id;
+    expect((ledger.cited.get(citeId)?.locator as Record<string, unknown> | undefined)?.artifact_hash).toBe(sha256Bytes(expectedFrame));
   });
 
   it("ocr_region sends the cropped image bytes and cites their bbox hash", async () => {
@@ -155,9 +156,10 @@ describe("Inquiry on-demand media evidence integrity", () => {
     expect(item!.locator.bbox).toEqual(bbox);
     expect(item!.locator.artifact_hash).toBe(sha256Bytes(expectedCrop));
 
-    const cite = await findTool(tools, "cite").execute({ chunk_id: item!.chunk_id, claim: "crop" }, undefined as never);
+    const cite = await findTool(tools, "cite").execute({ chunk_id: item!.chunk_id, claim: "crop", quote: item!.snippet }, undefined as never);
     expect(cite.ok).toBe(true);
-    expect((ledger.cited.get(item!.chunk_id)?.locator as Record<string, unknown> | undefined)?.artifact_hash).toBe(sha256Bytes(expectedCrop));
+    const citeId = (JSON.parse(cite.content) as { cite_id: string }).cite_id;
+    expect((ledger.cited.get(citeId)?.locator as Record<string, unknown> | undefined)?.artifact_hash).toBe(sha256Bytes(expectedCrop));
   });
 
   it("ocr_region on video requires t and cites a timestamped deterministic crop hash", async () => {

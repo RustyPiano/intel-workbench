@@ -95,6 +95,9 @@ export interface Chunk {
 }
 
 /** 溯源引用（工程方案 §4.3）。指向被检索出的素材片段。 */
+export type CitationSupportLabel = "supports" | "mentions" | "contradicts" | "context-only" | "unknown";
+export type CitationSupportStatus = "supported" | "support-unverified" | "unsupported";
+
 export interface Citation {
   material_id: string;
   material_name: string;
@@ -104,6 +107,13 @@ export interface Citation {
   confidence: number;
   /** 指向素材内容（≠ 审计 event_hash，§7.2）。 */
   content_hash: string;
+  /** span 级引用：可选，兼容仍按 chunk 级引用的要素抽取路径。 */
+  quote?: string;
+  quote_char_start?: number;
+  quote_char_end?: number;
+  quote_hash?: string;
+  support_label?: CitationSupportLabel;
+  support_status?: CitationSupportStatus;
 }
 
 /** 单条结论。校验不通过降级为"待核"（unverified，§7.3 step 4）。 */
@@ -111,6 +121,7 @@ export interface InquiryClaim {
   text: string;
   type: "fact" | "inference";
   status: "verified" | "unverified";
+  support_status?: CitationSupportStatus;
   citations: Citation[];
 }
 

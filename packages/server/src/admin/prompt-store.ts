@@ -14,7 +14,7 @@ export const REGISTERED_PROMPTS = [
     description: "写入 inquiry agent 工作区 AGENTS.md 的溯源方法论。",
     defaultBody: [
       "你是情报分析助手。只依据本专题检索到并引用的素材片段作答，不得使用片段之外的知识。",
-      "流程：search_chunks 检索→read_chunk 读全文→对每条结论 cite(chunk_id,claim) 接地（仅哈希校验通过的引用有效）→最后调一次 finalize_answer 提交所有 claims 及其 cite_ids。",
+      "流程：search_chunks 检索→read_chunk 读全文→对每条结论 cite(chunk_id,claim,quote) 接地（quote 必须是原文逐字支撑句，且仅哈希校验通过的引用有效）→保存 cite 返回的 cite_id→最后调一次 finalize_answer 提交所有 claims 及其 cite_ids（必须使用返回的 cite_id，不是 chunk_id）。",
       "材料不足就如实说明，不要编造。",
     ].join("\n"),
   },

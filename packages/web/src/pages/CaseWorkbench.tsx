@@ -6,6 +6,9 @@ import {
   askInquiryDeep,
   askInquiryStream,
   cancelJob,
+  advanceTaskStage,
+  confirmTaskStage,
+  createTaskRun,
   deleteMaterial,
   draftReport,
   exportReport,
@@ -16,6 +19,7 @@ import {
   getJobStatus,
   getMaterialContent,
   getReport,
+  getCurrentTaskRun,
   listCaseAudit,
   listContradictions,
   listElements,
@@ -36,6 +40,9 @@ import {
   type ApiJob,
   type ApiMaterial,
   type ApiReport,
+  type ApiTaskRunSnapshot,
+  type ApiTaskStageState,
+  type TaskAdvanceStatus,
   type AuditEvent,
   type Contradiction,
   type ContradictionDetectionResult,
@@ -93,6 +100,8 @@ export function CaseWorkbench() {
         <span className="workbench__hint">覆盖素材解析、要素抽取、溯源问答与报告复核全流程，所有研判结论均可回溯至素材原文出处。</span>
       </div>
 
+      <TaskOverview caseId={id} enabled={Boolean(user && id)} />
+
       <nav className="tabs">
         {TABS.map((t) => (
           <NavLink key={t.to} to={t.to} className="tabs__tab">
@@ -111,6 +120,175 @@ export function CaseWorkbench() {
         <Outlet key={id} />
       </div>
     </div>
+  );
+}
+
+// ==================== Task Overlay ====================
+
+const TASK_RUN_STORAGE_PREFIX = "iw-task-run:";
+
+const TASK_STATUS_LABELS: Record<ApiTaskStageState["status"], string> = {
+  pending: "待处理",
+  active: "当前",
+  done: "完成",
+  failed: "失败",
+  skipped: "跳过",
+};
+
+const REPORT_STATUS_LABELS: Record<ApiReport["status"], string> = {
+  draft: "草稿",
+  in_review: "待复核",
+  approved: "已复核",
+  exported: "已导出",
+};
+
+const MANUAL_STAGE_KEYS = new Set(["proposition-extraction", "assessment"]);
+
+function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }) {
+  const [snapshot, setSnapshot] = useState<ApiTaskRunSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [advancing, setAdvancing] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !caseId) return;
+    let alive = true;
+    const storageKey = `${TASK_RUN_STORAGE_PREFIX}${caseId}`;
+
+    const load = async () => {
+      try {
+        const next = await getCurrentTaskRun(caseId);
+        if (next) localStorage.setItem(storageKey, next.run.id);
+        else localStorage.removeItem(storageKey);
+        if (!alive) return;
+        setSnapshot(next);
+        setError(null);
+      } catch (e) {
+        if (alive) setError((e as Error).message);
+      }
+    };
+
+    void load();
+    const timer = setInterval(() => {
+      void load();
+    }, 5000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [caseId, enabled]);
+
+  const handleStart = async () => {
+    if (!caseId || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const next = await createTaskRun(caseId);
+      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
+      setSnapshot(next);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleConfirm = async () => {
+    const current = snapshot?.overview.currentStage;
+    if (!caseId || !snapshot || !current?.checkpoint || confirming) return;
+    setConfirming(true);
+    setError(null);
+    try {
+      const next = await confirmTaskStage(caseId, snapshot.run.id, current.key);
+      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
+      setSnapshot(next);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleAdvance = async (stageKey: string, status: TaskAdvanceStatus) => {
+    if (!caseId || !snapshot || advancing) return;
+    const key = `${stageKey}:${status}`;
+    setAdvancing(key);
+    setError(null);
+    try {
+      const next = await advanceTaskStage(caseId, snapshot.run.id, stageKey, status);
+      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
+      setSnapshot(next);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setAdvancing(null);
+    }
+  };
+
+  if (!enabled) return null;
+  const overview = snapshot?.overview;
+  const currentStage = overview?.currentStage;
+  const stages = snapshot?.run.stages ?? [];
+  const progressText = overview ? `${overview.completedStageCount}/${overview.totalStageCount}` : "—";
+  const materialText = overview
+    ? `${overview.materials.done}/${overview.materials.total} 完成${overview.materials.processing > 0 ? `，${overview.materials.processing} 加工中` : ""}`
+    : "加载中";
+  const reportText = overview?.reportStatus ? REPORT_STATUS_LABELS[overview.reportStatus] : "未生成";
+
+  return (
+    <section className="task-overview">
+      <div className="task-overview__head">
+        <div>
+          <div className="task-overview__eyebrow">{snapshot?.template.name ?? "多源事件核验"}</div>
+          <div className="task-overview__current">{currentStage ? currentStage.name : snapshot ? "流程完成" : "尚未开始"}</div>
+        </div>
+        <div className="task-overview__summary">
+          <span>{progressText}</span>
+          <span>{overview ? overview.pendingCheckpointCount > 0 ? `${overview.pendingCheckpointCount} 个检查点待确认` : "检查点完成" : "等待启动"}</span>
+        </div>
+      </div>
+
+      <div className="task-overview__metrics">
+        <span>素材 {materialText}</span>
+        <span>高风险矛盾 {overview?.highSeverityContradictionCount ?? 0}</span>
+        <span>报告 {reportText}</span>
+      </div>
+
+      <div className="task-stage-strip" aria-label="任务阶段进度">
+        {stages.map((stage, index) => (
+          <div key={stage.key} className={`task-stage task-stage--${stage.status}`} title={`${index + 1}. ${stage.name} · ${TASK_STATUS_LABELS[stage.status]}`}>
+            <span className="task-stage__index">{index + 1}</span>
+            <span className="task-stage__name">{stage.name}</span>
+            {stage.checkpoint ? <span className="task-stage__checkpoint">检查点</span> : null}
+            {stage.status === "active" && MANUAL_STAGE_KEYS.has(stage.key) ? (
+              <span className="task-stage__actions">
+                <button type="button" onClick={() => void handleAdvance(stage.key, "done")} disabled={Boolean(advancing)}>
+                  {advancing === `${stage.key}:done` ? "处理中…" : "标记完成"}
+                </button>
+                <button type="button" onClick={() => void handleAdvance(stage.key, "failed")} disabled={Boolean(advancing)}>
+                  {advancing === `${stage.key}:failed` ? "处理中…" : "标记失败"}
+                </button>
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="task-overview__footer">
+        {!snapshot ? (
+          <button type="button" className="btn btn--primary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleStart} disabled={creating}>
+            {creating ? "启动中…" : "开始核验任务"}
+          </button>
+        ) : null}
+        {currentStage?.checkpoint && currentStage.status === "active" ? (
+          <button type="button" className="btn btn--primary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleConfirm} disabled={confirming}>
+            {confirming ? "确认中…" : "确认检查点"}
+          </button>
+        ) : null}
+        {error ? <span className="task-overview__error">{error}</span> : null}
+      </div>
+    </section>
   );
 }
 
@@ -2089,6 +2267,9 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "inquiry.create": "智能问答",
   "inquiry.retrieve": "检索取材",
   "element.extract": "提取要素",
+  "task.run.create": "创建任务",
+  "task.stage.advance": "推进任务阶段",
+  "task.stage.confirm": "确认任务检查点",
   "report.draft": "起草通报",
   "report.submit": "提交复核",
   "report.approve": "复核核准",

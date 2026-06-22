@@ -13,6 +13,7 @@ import type { MaterialService } from "../materials/material-service.js";
 import type { OverviewService } from "../overview/overview-service.js";
 import type { ReportService } from "../report/report-service.js";
 import type { ReviewService } from "../review/review-service.js";
+import type { TaskService } from "../task/task-service.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createAuthRouter } from "./auth.js";
@@ -26,6 +27,7 @@ import { createMaterialsRouter } from "./materials.js";
 import { createOverviewRouter } from "./overview.js";
 import { createReviewRouter } from "./review.js";
 import { createReportsRouter } from "./reports.js";
+import { createTaskRouter } from "./tasks.js";
 
 /**
  * API 装配（工程方案 §5）。M1–M5 + 鉴权全部接通：登录/会话、专题 CRUD、
@@ -46,6 +48,7 @@ export interface ApiServices {
   contradictions: ContradictionService;
   reports: ReportService;
   review: ReviewService;
+  tasks: TaskService;
   admin: AdminService;
 }
 
@@ -70,6 +73,10 @@ export function createApiRouter(services: ApiServices): Router {
         "GET/PATCH /api/cases/:id",
         "GET /api/overview",
         "GET/POST /api/cases/:id/materials",
+        "POST /api/cases/:id/task-runs",
+        "GET /api/cases/:id/task-runs/current",
+        "GET /api/cases/:id/task-runs/:runId",
+        "POST /api/cases/:id/task-runs/:runId/stages/:stageKey/{advance,confirm}",
         "POST /api/cases/:id/materials/:mid/{process,reindex}",
         "DELETE /api/cases/:id/materials/:mid",
         "GET /api/cases/:id/audit",
@@ -96,6 +103,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/auth", createAuthRouter(services.auth));
   router.use("/overview", createOverviewRouter(services.overview));
   router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
+  router.use("/cases", createTaskRouter(services.tasks));
   router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/cases", createJobsRouter({ registry: services.jobRegistry, elements: services.elements, contradictions: services.contradictions, cases: services.cases, audit: services.audit }));
   router.use("/cases", createElementsRouter(services.elements));

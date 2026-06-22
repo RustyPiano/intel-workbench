@@ -78,39 +78,54 @@ export class ElementService {
       throw new AppError(503, "文本 LLM 未配置：要素抽取不可用");
     }
 
-    const batches = splitIntoBatches(all, BATCH_CHUNKS);
-    const results = await mapWithConcurrency(batches, async (chunks): Promise<BatchResult> => {
-      // 零外发红线：每个批次出站前先经 OfflineGuard 授权——授权失败必须显式失败，不得当作"失败批次"吞掉。
-      await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "text-llm-elements" });
-      let raw: Record<string, unknown>;
-      try {
-        raw = await this.callModel(chunks, opts.signal);
-      } catch (e) {
-        if (opts.signal?.aborted || e instanceof AppError) throw e;
-        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续。
-        return { elements: [], chunksCovered: 0, failed: true };
-      }
-      // 接地与构建在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
-      const retrievedById = new Map(chunks.map((c) => [c.chunk_id, c]));
-      return { elements: this.buildElements(raw, retrievedById, nameById), chunksCovered: chunks.length, failed: false };
-    }, {
-      concurrency: CONCURRENCY,
-      signal: opts.signal,
-      onSettled: (done, total) => opts.onProgress?.({ done, total }),
-    });
-    const elements = mergeElements(results.map((result) => result.elements));
-    const chunksCovered = results.reduce((sum, result) => sum + result.chunksCovered, 0);
-    const failedBatches = results.filter((result) => result.failed).length;
+    try {
+      const batches = splitIntoBatches(all, BATCH_CHUNKS);
+      const results = await mapWithConcurrency(batches, async (chunks): Promise<BatchResult> => {
+        // 零外发红线：每个批次出站前先经 OfflineGuard 授权——授权失败必须显式失败，不得当作"失败批次"吞掉。
+        await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "text-llm-elements" });
+        let raw: Record<string, unknown>;
+        try {
+          raw = await this.callModel(chunks, opts.signal);
+        } catch (e) {
+          if (opts.signal?.aborted || e instanceof AppError) throw e;
+          // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续。
+          return { elements: [], chunksCovered: 0, failed: true };
+        }
+        // 接地与构建在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
+        const retrievedById = new Map(chunks.map((c) => [c.chunk_id, c]));
+        return { elements: this.buildElements(raw, retrievedById, nameById), chunksCovered: chunks.length, failed: false };
+      }, {
+        concurrency: CONCURRENCY,
+        signal: opts.signal,
+        onSettled: (done, total) => opts.onProgress?.({ done, total }),
+      });
+      const elements = mergeElements(results.map((result) => result.elements));
+      const chunksCovered = results.reduce((sum, result) => sum + result.chunksCovered, 0);
+      const failedBatches = results.filter((result) => result.failed).length;
 
-    await this.persist(caseId, elements);
-    await this.audit.append({
-      user: actor.id,
-      action: "element.extract",
-      object: `case:${caseId}`,
-      caseId,
-      detail: { caseId, count: elements.length, batches: batches.length, chunksCovered, chunksTotal: all.length, failedBatches },
-    });
-    return elements;
+      await this.persist(caseId, elements);
+      await this.audit.append({
+        user: actor.id,
+        action: "element.extract",
+        object: `case:${caseId}`,
+        caseId,
+        detail: { caseId, count: elements.length, batches: batches.length, chunksCovered, chunksTotal: all.length, failedBatches },
+      });
+      return elements;
+    } catch (e) {
+      if (opts.signal?.aborted) throw e;
+      // 失败路径记账（审计红线）：抽取出错（含 OfflineGuard 出站拒绝）落 element.extract error
+      // 并显式抛出 → 任务落「error」态而非「done+空」（与 contradiction.detect 一致）。
+      await this.audit.append({
+        user: actor.id,
+        action: "element.extract",
+        object: `case:${caseId}`,
+        result: "error",
+        caseId,
+        detail: { result: "error", error: e instanceof Error ? e.message : String(e) },
+      });
+      throw e;
+    }
   }
 
   async get(actor: Identity, caseId: string): Promise<Element[]> {

@@ -10,6 +10,18 @@ import { createApp, type AppServices } from "../src/app.js";
 import type { Identity } from "../src/domain/types.js";
 import { StreamingInquiryAdapter } from "./helpers/streaming-adapter.js";
 
+let savedDemo: string | undefined;
+
+beforeAll(() => {
+  savedDemo = process.env.MINI_AGENT_DEMO;
+  process.env.MINI_AGENT_DEMO = "1";
+});
+
+afterAll(() => {
+  if (savedDemo === undefined) delete process.env.MINI_AGENT_DEMO;
+  else process.env.MINI_AGENT_DEMO = savedDemo;
+});
+
 /** 集成：启动真实 app（loopback、随机端口），用 fetch 验证鉴权 + 路由接线。 */
 describe("API 接线（鉴权 + M1）", () => {
   let root: string;

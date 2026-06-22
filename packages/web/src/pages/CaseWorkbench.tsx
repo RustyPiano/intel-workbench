@@ -38,6 +38,7 @@ import {
   type ApiReport,
   type AuditEvent,
   type Contradiction,
+  type ContradictionDetectionResult,
   type ElementType,
   type ElementGraph,
   type ImageMedia,
@@ -1336,7 +1337,7 @@ function citedClaim(text: string, citation: ApiCitation): ApiClaim {
 export function ContradictionsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
-  const [contradictions, setContradictions] = useState<Contradiction[] | null>(null);
+  const [contradictionResult, setContradictionResult] = useState<ContradictionDetectionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
 
@@ -1344,7 +1345,7 @@ export function ContradictionsPanel() {
     if (!user || !caseId) return;
     let alive = true;
     listContradictions(caseId)
-      .then((items) => alive && setContradictions(items))
+      .then((result) => alive && setContradictionResult(result))
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
@@ -1366,11 +1367,14 @@ export function ContradictionsPanel() {
     startDetection();
   };
 
-  const all = contradictions ?? [];
+  const jobResult = job?.kind === "contradictions" && job.result ? job.result as ContradictionDetectionResult : null;
+  const latestResult = jobResult ?? contradictionResult;
+  const all = latestResult?.contradictions ?? [];
   const running = job?.state === "running";
   const total = job?.progress.total ?? 0;
   const done = job?.progress.done ?? 0;
   const progressWidth = running && total > 0 ? `${Math.min(100, Math.round((done / total) * 100))}%` : "38%";
+  const statusLabel = latestResult?.status === "failed" ? "失败" : latestResult?.status === "degraded" ? "降级完成" : latestResult ? "完成" : "未检测";
 
   return (
     <div className="contradictions-layout">
@@ -1379,10 +1383,20 @@ export function ContradictionsPanel() {
           已发现 <strong style={{ color: "#fff" }}>{all.length}</strong> 组矛盾线索
         </span>
         <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleDetect} disabled={running}>
-          {running ? "检测中…" : contradictions && contradictions.length > 0 ? "重新检测" : "检测矛盾"}
+          {running ? "检测中…" : latestResult && latestResult.contradictions.length > 0 ? "重新检测" : "检测矛盾"}
         </button>
       </div>
 
+      {latestResult ? (
+        <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
+          覆盖 {latestResult.processedChunks}/{latestResult.totalChunks} 个素材块 · 状态：{statusLabel}
+          {latestResult.truncated ? " · 覆盖不完整" : ""}
+          {latestResult.warnings.length > 0 ? ` · ${latestResult.warnings.join("；")}` : ""}
+        </div>
+      ) : null}
+      {latestResult?.status === "failed" ? (
+        <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{latestResult.error ?? "矛盾检测失败"}</div>
+      ) : null}
       {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
       {jobError ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{jobError}</div> : null}
       {running ? (
@@ -1404,11 +1418,15 @@ export function ContradictionsPanel() {
       ) : null}
 
       <div className="contradictions-list">
-        {contradictions === null ? (
+        {latestResult === null ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载中…</div>
+        ) : latestResult.status === "failed" ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
+            矛盾检测失败，未产出可复核结果。
+          </div>
         ) : all.length === 0 ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
-            尚未检测到矛盾。点击「检测矛盾」从已加工素材中比对冲突陈述，每条结果都会绑定双方出处。
+            检测完成，未发现矛盾线索。
           </div>
         ) : (
           all.map((item) => (
@@ -2101,7 +2119,7 @@ export function CaseAuditPanel() {
               ；末位指纹 <code style={{ color: "var(--warn-light)", fontFamily: "monospace" }}>{last.event_hash.slice(0, 12)}…{last.event_hash.slice(-6)}</code>
             </>
           ) : null}
-          。任何篡改都会令链校验失败（审计中心可一键 verify）。
+          。局部修改、删除或插入会被 verify 检出（审计中心可一键校验）；非密码学防篡改（无外部签名/锚定）。
         </p>
       </div>
 

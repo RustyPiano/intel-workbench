@@ -51,6 +51,25 @@ interface DetectionStats {
   failedBatches: number;
 }
 
+export type ContradictionDetectionStatus = "succeeded" | "degraded" | "failed";
+
+export interface ContradictionDetectionResult {
+  status: ContradictionDetectionStatus;
+  contradictions: Contradiction[];
+  processedChunks: number;
+  totalChunks: number;
+  truncated: boolean;
+  warnings: string[];
+  error?: string;
+}
+
+export class ContradictionDetectionError extends AppError {
+  constructor(status: number, message: string, public readonly result: ContradictionDetectionResult) {
+    super(status, message);
+    this.name = "ContradictionDetectionError";
+  }
+}
+
 interface DetectOptions {
   signal?: AbortSignal;
   onProgress?: (p: { done: number; total: number }) => void;
@@ -119,21 +138,33 @@ export class ContradictionService {
     private readonly promptStore?: PromptStore,
   ) {}
 
-  async detect(actor: Identity, caseId: string, opts: DetectOptions = {}): Promise<Contradiction[]> {
+  async detect(actor: Identity, caseId: string, opts: DetectOptions = {}): Promise<ContradictionDetectionResult> {
+    let totalChunks = 0;
+    let canPersistFailure = false;
     try {
       const manifest = await this.cases.get(actor, caseId);
+      canPersistFailure = true;
       const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
       const all = await this.materials.loadCaseChunks(caseId);
+      totalChunks = all.length;
       if (all.length === 0) {
-        await this.persist(caseId, []);
+        const result = this.makeResult([], {
+          clusters: 0,
+          pairsJudged: 0,
+          batches: 0,
+          chunksCovered: 0,
+          chunksTotal: 0,
+          failedBatches: 0,
+        });
+        await this.persist(caseId, result);
         await this.audit.append({
           user: actor.id,
           action: "contradiction.detect",
           object: `case:${caseId}`,
           caseId,
-          detail: { caseId, count: 0, clusters: 0, pairsJudged: 0, reason: "无已加工素材" },
+          detail: { caseId, count: 0, clusters: 0, pairsJudged: 0, chunksCovered: 0, chunksTotal: 0, failedBatches: 0, status: result.status, truncated: result.truncated, reason: "无已加工素材" },
         });
-        return [];
+        return result;
       }
       const contradictions = await this.detectFromChunks(actor, all, nameById, opts);
       const stats = this.detectionStats.get(contradictions) ?? {
@@ -144,7 +175,8 @@ export class ContradictionService {
         chunksTotal: all.length,
         failedBatches: 0,
       };
-      await this.persist(caseId, contradictions);
+      const result = this.makeResult(contradictions, stats);
+      await this.persist(caseId, result);
       await this.audit.append({
         user: actor.id,
         action: "contradiction.detect",
@@ -159,22 +191,27 @@ export class ContradictionService {
           chunksCovered: stats.chunksCovered,
           chunksTotal: stats.chunksTotal,
           failedBatches: stats.failedBatches,
+          status: result.status,
+          truncated: result.truncated,
         },
       });
-      return contradictions;
+      return result;
     } catch (e) {
       if (opts.signal?.aborted) throw e;
+      const message = e instanceof Error ? e.message : String(e);
+      const result = this.makeFailedResult(totalChunks, message);
+      if (canPersistFailure) await this.persist(caseId, result);
       await this.audit.append({
         user: actor.id,
         action: "contradiction.detect",
         object: `case:${caseId}`,
         result: "error",
         caseId,
-        detail: { result: "error", error: e instanceof Error ? e.message : String(e) },
+        detail: { result: "error", error: message },
       });
       // 失败（含 OfflineGuard 出站拒绝）必须显式抛出 → 任务落「error」态而非「done+空」，
       // 否则会把"被拒/出错"误呈为"未发现矛盾"（与 element.extract 一致：失败即失败）。
-      throw e;
+      throw new ContradictionDetectionError(e instanceof AppError ? e.status : 500, message, result);
     }
   }
 
@@ -235,6 +272,24 @@ export class ContradictionService {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw e;
     }
+  }
+
+  async getResult(actor: Identity, caseId: string): Promise<ContradictionDetectionResult> {
+    await this.cases.get(actor, caseId);
+    try {
+      return JSON.parse(await readFile(this.contradictionsResultFile(caseId), "utf8")) as ContradictionDetectionResult;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+    const contradictions = await this.get(actor, caseId);
+    return this.makeResult(contradictions, {
+      clusters: 0,
+      pairsJudged: 0,
+      batches: 0,
+      chunksCovered: 0,
+      chunksTotal: 0,
+      failedBatches: 0,
+    });
   }
 
   private async extractClaims(chunks: Chunk[], signal?: AbortSignal): Promise<RawClaim[]> {
@@ -349,9 +404,41 @@ export class ContradictionService {
     return path.join(this.paths.caseDir(caseId), "contradictions.json");
   }
 
-  private async persist(caseId: string, contradictions: Contradiction[]): Promise<void> {
+  private contradictionsResultFile(caseId: string): string {
+    return path.join(this.paths.caseDir(caseId), "contradictions.result.json");
+  }
+
+  private makeResult(contradictions: Contradiction[], stats: DetectionStats): ContradictionDetectionResult {
+    const truncated = stats.chunksCovered < stats.chunksTotal;
+    const warnings: string[] = [];
+    if (stats.failedBatches > 0) warnings.push(`${stats.failedBatches} 个批次处理失败，结果为降级覆盖`);
+    if (truncated && stats.failedBatches === 0) warnings.push(`仅覆盖 ${stats.chunksCovered}/${stats.chunksTotal} 个素材块`);
+    return {
+      status: warnings.length > 0 ? "degraded" : "succeeded",
+      contradictions,
+      processedChunks: stats.chunksCovered,
+      totalChunks: stats.chunksTotal,
+      truncated,
+      warnings,
+    };
+  }
+
+  private makeFailedResult(totalChunks: number, error: string): ContradictionDetectionResult {
+    return {
+      status: "failed",
+      contradictions: [],
+      processedChunks: 0,
+      totalChunks,
+      truncated: totalChunks > 0,
+      warnings: [],
+      error,
+    };
+  }
+
+  private async persist(caseId: string, result: ContradictionDetectionResult): Promise<void> {
     const file = this.contradictionsFile(caseId);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify(contradictions, null, 2)}\n`, "utf8");
+    await writeFile(file, `${JSON.stringify(result.contradictions, null, 2)}\n`, "utf8");
+    await writeFile(this.contradictionsResultFile(caseId), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   }
 }

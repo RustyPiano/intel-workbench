@@ -105,6 +105,9 @@ export class JobRegistry {
 
     job.state = "error";
     job.error = error instanceof Error ? error.message : String(error);
+    if (typeof error === "object" && error !== null && "result" in error) {
+      job.result = (error as { result?: unknown }).result;
+    }
   }
 
   private key(caseId: string, kind: string): string {

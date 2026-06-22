@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { DataPaths } from "../data/paths.js";
@@ -8,7 +8,7 @@ import { CLEARANCES, ROLES, type Clearance, type Role } from "../domain/types.js
 
 /**
  * 本地用户存储（工程方案 §4.2，`config/users.json`）。口令以 scrypt 加盐哈希
- * 落盘，绝不明文。预置三角色（演示口令，可由管理员后续重置）。
+ * 落盘；首启生成一次性管理员口令，演示账号仅在显式开关下创建。
  */
 
 export interface StoredUser {
@@ -17,13 +17,23 @@ export interface StoredUser {
   role: Role;
   clearance: Clearance;
   enabled: boolean;
+  must_change_password?: boolean;
   /** `scrypt:<saltHex>:<dkHex>`，仅服务端持有，不回前端。 */
   pwd_hash: string;
 }
 
-export type PublicUser = Omit<StoredUser, "pwd_hash">;
+export interface PublicUser {
+  id: string;
+  name: string;
+  role: Role;
+  clearance: Clearance;
+  enabled: boolean;
+  mustChangePassword: boolean;
+}
 
 const SCRYPT_KEYLEN = 64;
+const MIN_PASSWORD_LENGTH = 12;
+const INITIAL_ADMIN_PASSWORD_FILE = "initial-admin-password.json";
 
 /** 口令哈希：随机盐 + scrypt，自描述格式便于校验。 */
 export function hashPassword(plain: string): string {
@@ -48,20 +58,28 @@ export function verifyPassword(plain: string, stored: string): boolean {
   return timingSafeEqual(expected, dk);
 }
 
-/** 首次启动预置（演示口令；§8.14 支持后续重置）。 */
+/** 演示账号仅在 MINI_AGENT_DEMO=1 时创建。 */
 const SEED_DEFAULTS: { user: PublicUser; password: string }[] = [
-  { user: { id: "admin", name: "管理员", role: "admin", clearance: "topsecret", enabled: true }, password: "admin123" },
-  { user: { id: "operator", name: "作业员", role: "operator", clearance: "confidential", enabled: true }, password: "operator123" },
-  { user: { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true }, password: "security123" },
+  { user: { id: "admin", name: "管理员", role: "admin", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "admin123" },
+  { user: { id: "operator", name: "作业员", role: "operator", clearance: "confidential", enabled: true, mustChangePassword: false }, password: "operator123" },
+  { user: { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "security123" },
 ];
 
 /** 去除口令哈希，得到可回前端的公开用户。 */
 function strip(user: StoredUser): PublicUser {
-  const { pwd_hash: _pwd, ...pub } = user;
-  return pub;
+  return {
+    id: user.id,
+    name: user.name,
+    role: user.role,
+    clearance: user.clearance,
+    enabled: user.enabled,
+    mustChangePassword: user.must_change_password === true,
+  };
 }
 
 export class UserStore {
+  private seedPromise: Promise<StoredUser[]> | null = null;
+
   constructor(private readonly paths: DataPaths) {}
 
   async list(): Promise<PublicUser[]> {
@@ -77,7 +95,7 @@ export class UserStore {
     if (!id) throw new AppError(400, "账号 id 不能为空");
     if (!ROLES.includes(input.role)) throw new AppError(400, "非法角色");
     if (!CLEARANCES.includes(input.clearance)) throw new AppError(400, "非法密级");
-    if (!input.password) throw new AppError(400, "口令不能为空");
+    await this.assertAcceptablePassword(input.password);
     const users = await this.read();
     if (users.some((u) => u.id === id)) throw new AppError(409, "账号已存在");
     const user: StoredUser = {
@@ -86,6 +104,7 @@ export class UserStore {
       role: input.role,
       clearance: input.clearance,
       enabled: true,
+      must_change_password: false,
       pwd_hash: hashPassword(input.password),
     };
     users.push(user);
@@ -112,12 +131,15 @@ export class UserStore {
   }
 
   async setPassword(id: string, password: string): Promise<void> {
-    if (!password) throw new AppError(400, "口令不能为空");
+    await this.assertAcceptablePassword(password);
     const users = await this.read();
     const user = users.find((u) => u.id === id);
     if (!user) throw new AppError(404, "用户不存在");
+    const removeInitialPassword = id === "admin" && user.must_change_password === true;
     user.pwd_hash = hashPassword(password);
+    user.must_change_password = false;
     await this.write(users);
+    if (removeInitialPassword) await this.removeInitialAdminPassword();
   }
 
   private async read(): Promise<StoredUser[]> {
@@ -125,11 +147,92 @@ export class UserStore {
       return JSON.parse(await readFile(this.paths.usersFile, "utf8")) as StoredUser[];
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        const seeded = SEED_DEFAULTS.map(({ user, password }) => ({ ...user, pwd_hash: hashPassword(password) }));
-        await this.write(seeded);
-        return seeded;
+        return this.seedUsers();
       }
       throw e;
+    }
+  }
+
+  private seedUsers(): Promise<StoredUser[]> {
+    if (!this.seedPromise) {
+      this.seedPromise = this.createSeededUsers().finally(() => {
+        this.seedPromise = null;
+      });
+    }
+    return this.seedPromise;
+  }
+
+  private async createSeededUsers(): Promise<StoredUser[]> {
+    const seeded = process.env.MINI_AGENT_DEMO === "1"
+      ? SEED_DEFAULTS.map(({ user, password }) => ({
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        clearance: user.clearance,
+        enabled: user.enabled,
+        must_change_password: false,
+        pwd_hash: hashPassword(password),
+      }))
+      : [await this.createInitialAdmin()];
+    await this.write(seeded);
+    return seeded;
+  }
+
+  private async createInitialAdmin(): Promise<StoredUser> {
+    let password = await this.readInitialAdminPassword();
+    if (!password) {
+      password = randomBytes(24).toString("base64url");
+      await mkdir(this.paths.configDir, { recursive: true });
+      try {
+        await writeFile(
+          this.initialAdminPasswordFile(),
+          `${JSON.stringify({ username: "admin", password, createdAt: new Date().toISOString() }, null, 2)}\n`,
+          { encoding: "utf8", mode: 0o600, flag: "wx" },
+        );
+        console.log(`Intel Workbench initial admin password: ${password}`);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        const existing = await this.readInitialAdminPassword();
+        if (!existing) throw e;
+        password = existing;
+      }
+    }
+    return {
+      id: "admin",
+      name: "管理员",
+      role: "admin",
+      clearance: "topsecret",
+      enabled: true,
+      must_change_password: true,
+      pwd_hash: hashPassword(password),
+    };
+  }
+
+  private async assertAcceptablePassword(password: string): Promise<void> {
+    if (!password) throw new AppError(400, "口令不能为空");
+    if (password.length < MIN_PASSWORD_LENGTH) throw new AppError(400, "口令长度至少 12 位");
+    if (password === await this.readInitialAdminPassword()) throw new AppError(400, "新口令不能复用首启管理员口令");
+  }
+
+  private async readInitialAdminPassword(): Promise<string | null> {
+    try {
+      const raw = JSON.parse(await readFile(this.initialAdminPasswordFile(), "utf8")) as { password?: unknown };
+      return typeof raw.password === "string" ? raw.password : null;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e;
+    }
+  }
+
+  private initialAdminPasswordFile(): string {
+    return path.join(this.paths.configDir, INITIAL_ADMIN_PASSWORD_FILE);
+  }
+
+  private async removeInitialAdminPassword(): Promise<void> {
+    try {
+      await unlink(this.initialAdminPasswordFile());
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
   }
 

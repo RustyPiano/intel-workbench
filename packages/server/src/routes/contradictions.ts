@@ -7,11 +7,13 @@ export function createContradictionsRouter(contradictions: ContradictionService)
   const router = Router();
 
   router.get("/:id/contradictions", async (req, res) => {
-    res.json({ ok: true, contradictions: await contradictions.get(req.identity, req.params.id) });
+    const result = await contradictions.getResult(req.identity, req.params.id);
+    res.json({ ok: true, result, contradictions: result.contradictions });
   });
 
   router.post("/:id/contradictions", async (req, res) => {
-    res.status(201).json({ ok: true, contradictions: await contradictions.detect(req.identity, req.params.id) });
+    const result = await contradictions.detect(req.identity, req.params.id);
+    res.status(201).json({ ok: true, result, contradictions: result.contradictions });
   });
 
   return router;

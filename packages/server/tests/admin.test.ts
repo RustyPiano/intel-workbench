@@ -27,8 +27,11 @@ describe("AdminService 管理后台（M5）", () => {
   let root: string;
   let paths: DataPaths;
   let audit: AuditService;
+  let savedDemo: string | undefined;
 
   beforeEach(async () => {
+    savedDemo = process.env.MINI_AGENT_DEMO;
+    delete process.env.MINI_AGENT_DEMO;
     root = await mkdtemp(path.join(tmpdir(), "iw-admin-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
@@ -36,6 +39,8 @@ describe("AdminService 管理后台（M5）", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+    if (savedDemo === undefined) delete process.env.MINI_AGENT_DEMO;
+    else process.env.MINI_AGENT_DEMO = savedDemo;
   });
 
   it("listSkills 扫描 .agents/skills，含 intel-bulletin，默认启用", async () => {
@@ -76,6 +81,7 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("listUsers 首次预置三角色，且不回 pwd_hash", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
     const users = await admin.listUsers();
     expect(users.map((u) => u.role).sort()).toEqual(["admin", "operator", "security"]);
@@ -90,21 +96,23 @@ describe("AdminService 管理后台（M5）", () => {
   it("createUser → 列表可见 + 入审计 + 新账号可登录", async () => {
     const users = new UserStore(paths);
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
-    const created = await admin.createUser(ADMIN, { id: "zhang", name: "张三", role: "operator", clearance: "secret", password: "zhang-pwd" });
+    const created = await admin.createUser(ADMIN, { id: "zhang", name: "张三", role: "operator", clearance: "secret", password: "zhang-password-12" });
     expect(created).toMatchObject({ id: "zhang", role: "operator", clearance: "secret", enabled: true });
     expect(JSON.stringify(created)).not.toContain("pwd_hash");
     expect((await admin.listUsers()).some((u) => u.id === "zhang")).toBe(true);
     expect((await audit.readAll()).some((e) => e.action === "user.create")).toBe(true);
     const auth = new AuthService(users, audit);
-    expect((await auth.login("zhang", "zhang-pwd")).identity).toMatchObject({ id: "zhang", role: "operator" });
+    expect((await auth.login("zhang", "zhang-password-12")).identity).toMatchObject({ id: "zhang", role: "operator" });
   });
 
   it("createUser 账号重复 → 409", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], new UserStore(paths));
-    await expect(admin.createUser(ADMIN, { id: "operator", name: "x", role: "operator", clearance: "internal", password: "p" })).rejects.toMatchObject({ status: 409 });
+    await expect(admin.createUser(ADMIN, { id: "operator", name: "x", role: "operator", clearance: "internal", password: "operator-password-12" })).rejects.toMatchObject({ status: 409 });
   });
 
   it("updateUser 改角色/密级/启停并入审计；停用账号被拒登录", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
     const users = new UserStore(paths);
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
     const u = await admin.updateUser(ADMIN, "operator", { role: "security", clearance: "topsecret", enabled: false });
@@ -121,12 +129,13 @@ describe("AdminService 管理后台（M5）", () => {
   });
 
   it("resetPassword：旧口令失效，新口令可登录", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
     const users = new UserStore(paths);
     const admin = new AdminService(paths, audit, UNCONFIGURED, [], users);
-    await admin.resetPassword(ADMIN, "operator", "brand-new-pwd");
+    await admin.resetPassword(ADMIN, "operator", "brand-new-password-12");
     const auth = new AuthService(users, audit);
     await expect(auth.login("operator", "operator123")).rejects.toMatchObject({ status: 401 });
-    expect((await auth.login("operator", "brand-new-pwd")).token).toBeTruthy();
+    expect((await auth.login("operator", "brand-new-password-12")).token).toBeTruthy();
     expect((await audit.readAll()).some((e) => e.action === "user.password")).toBe(true);
   });
 });

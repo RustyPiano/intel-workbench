@@ -23,4 +23,5 @@ export interface SessionUser {
   name: string;
   role: Role;
   clearance: Clearance;
+  mustChangePassword?: boolean;
 }

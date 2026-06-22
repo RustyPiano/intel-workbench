@@ -65,6 +65,19 @@ function mediaItems(input: GenerateInput, name: string): MediaItem[] {
   return Array.isArray(payload) ? payload : [payload];
 }
 
+function citedIds(input: GenerateInput): string[] {
+  return toolResults(input, "cite")
+    .filter((result) => result.ok)
+    .map((result) => {
+      try {
+        return (JSON.parse(result.content) as { cite_id?: string }).cite_id;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((id): id is string => typeof id === "string");
+}
+
 class MediaInquiryAdapter implements ModelAdapter {
   readonly name = "scripted-media-agent";
   readonly inputs: GenerateInput[] = [];
@@ -76,15 +89,16 @@ class MediaInquiryAdapter implements ModelAdapter {
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
+    if (input.tools.length === 0) return final(JSON.stringify({ label: "supports", rationale: "test support label" }));
 
     if (this.mode === "transcribe") {
       if (!hasTool(input, "transcribe")) {
         return toolCall("transcribe", { material_id: this.ids.audio, t0: 6, t1: 12 }, "media_transcribe");
       }
       const chunkId = mediaItems(input, "transcribe")[0]?.chunk_id ?? "missing-transcribe";
-      if (!hasTool(input, "cite")) return toolCall("cite", { chunk_id: chunkId, claim: "转写显示第二段内容" }, "cite_transcribe");
+      if (!hasTool(input, "cite")) return toolCall("cite", { chunk_id: chunkId, claim: "转写显示第二段内容", quote: "第 2 段语音内容" }, "cite_transcribe");
       if (!hasTool(input, "finalize_answer")) {
-        return toolCall("finalize_answer", { claims: [{ text: "转写显示第二段内容", cite_ids: [chunkId] }] }, "final_transcribe");
+        return toolCall("finalize_answer", { claims: [{ text: "转写显示第二段内容", cite_ids: [citedIds(input)[0] ?? "missing-cite-id"] }] }, "final_transcribe");
       }
       return final();
     }
@@ -99,12 +113,13 @@ class MediaInquiryAdapter implements ModelAdapter {
       const capId = mediaItems(input, "caption_frame")[0]?.chunk_id ?? "missing-caption";
       const ocrId = mediaItems(input, "ocr_region")[0]?.chunk_id ?? "missing-ocr";
       const cites = toolResults(input, "cite").length;
-      if (cites === 0) return toolCall("cite", { chunk_id: capId, claim: "画面已有配文" }, "cite_caption");
-      if (cites === 1) return toolCall("cite", { chunk_id: ocrId, claim: "区域 OCR 识别到文字" }, "cite_ocr");
+      if (cites === 0) return toolCall("cite", { chunk_id: capId, claim: "画面已有配文", quote: "（mock 配文）" }, "cite_caption");
+      if (cites === 1) return toolCall("cite", { chunk_id: ocrId, claim: "区域 OCR 识别到文字", quote: "（mock OCR）" }, "cite_ocr");
       if (!hasTool(input, "finalize_answer")) {
+        const ids = citedIds(input);
         return toolCall(
           "finalize_answer",
-          { claims: [{ text: "画面已有配文", cite_ids: [capId] }, { text: "区域 OCR 识别到文字", cite_ids: [ocrId] }] },
+          { claims: [{ text: "画面已有配文", cite_ids: [ids[0] ?? "missing-cite-id-1"] }, { text: "区域 OCR 识别到文字", cite_ids: [ids[1] ?? "missing-cite-id-2"] }] },
           "final_caption_ocr",
         );
       }
@@ -114,9 +129,9 @@ class MediaInquiryAdapter implements ModelAdapter {
     if (this.mode === "cross-case") {
       if (!hasTool(input, "transcribe")) return toolCall("transcribe", { material_id: this.ids.otherAudio }, "media_cross_case");
       const forbiddenId = `${this.ids.otherAudio}.ondemand.transcribe#1`;
-      if (!hasTool(input, "cite")) return toolCall("cite", { chunk_id: forbiddenId, claim: "不应跨专题引用" }, "cite_cross_case");
+      if (!hasTool(input, "cite")) return toolCall("cite", { chunk_id: forbiddenId, claim: "不应跨专题引用", quote: "不应跨专题引用" }, "cite_cross_case");
       if (!hasTool(input, "finalize_answer")) {
-        return toolCall("finalize_answer", { claims: [{ text: "不应跨专题引用", cite_ids: [forbiddenId] }] }, "final_cross_case");
+        return toolCall("finalize_answer", { claims: [{ text: "不应跨专题引用", cite_ids: ["not-returned#999"] }] }, "final_cross_case");
       }
       return final();
     }
@@ -128,13 +143,18 @@ class MediaInquiryAdapter implements ModelAdapter {
     const capId = mediaItems(input, "caption_frame")[0]?.chunk_id ?? "missing-cap";
     const ocrId = mediaItems(input, "ocr_region")[0]?.chunk_id ?? "missing-ocr";
     const cites = toolResults(input, "cite").length;
-    if (cites === 0) return toolCall("cite", { chunk_id: trId, claim: "已有转写" }, "audit_cite_tr");
-    if (cites === 1) return toolCall("cite", { chunk_id: capId, claim: "已有配文" }, "audit_cite_cap");
-    if (cites === 2) return toolCall("cite", { chunk_id: ocrId, claim: "已有 OCR" }, "audit_cite_ocr");
+    if (cites === 0) return toolCall("cite", { chunk_id: trId, claim: "已有转写", quote: "（mock 转写）" }, "audit_cite_tr");
+    if (cites === 1) return toolCall("cite", { chunk_id: capId, claim: "已有配文", quote: "（mock 配文）" }, "audit_cite_cap");
+    if (cites === 2) return toolCall("cite", { chunk_id: ocrId, claim: "已有 OCR", quote: "（mock OCR）" }, "audit_cite_ocr");
     if (!hasTool(input, "finalize_answer")) {
+      const ids = citedIds(input);
       return toolCall(
         "finalize_answer",
-        { claims: [{ text: "已有转写", cite_ids: [trId] }, { text: "已有配文", cite_ids: [capId] }, { text: "已有 OCR", cite_ids: [ocrId] }] },
+        { claims: [
+          { text: "已有转写", cite_ids: [ids[0] ?? "missing-cite-id-1"] },
+          { text: "已有配文", cite_ids: [ids[1] ?? "missing-cite-id-2"] },
+          { text: "已有 OCR", cite_ids: [ids[2] ?? "missing-cite-id-3"] },
+        ] },
         "audit_final",
       );
     }
@@ -276,7 +296,8 @@ describe.sequential("InquiryService on-demand media tools", () => {
     expect(citation?.modality).toBe("audio");
     expect(citation?.locator.timecode).toBe("5-10");
     expect(citation?.locator.speaker).toBe("说话人2");
-    expect(citation?.content_hash).toBe(sha256(citation?.snippet ?? ""));
+    expect(citation?.content_hash).toBeTruthy();
+    expect(citation?.quote_hash).toBe(sha256(citation?.quote ?? ""));
   });
 
   it("caption_frame and ocr_region create citable chunks", async () => {
@@ -293,11 +314,13 @@ describe.sequential("InquiryService on-demand media tools", () => {
     expect(caption?.locator.timecode).toBeUndefined();
     expect(caption?.locator.bbox).toEqual([0, 0, 1, 1]);
     expect((caption?.locator as Record<string, unknown> | undefined)?.artifact_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(caption?.content_hash).toBe(sha256(caption?.snippet ?? ""));
+    expect(caption?.content_hash).toBeTruthy();
+    expect(caption?.quote_hash).toBe(sha256(caption?.quote ?? ""));
     expect(ocr?.material_id).toBe(image.id);
     expect(ocr?.locator.bbox).toEqual([0.2, 0.2, 0.4, 0.3]);
     expect((ocr?.locator as Record<string, unknown> | undefined)?.artifact_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(ocr?.content_hash).toBe(sha256(ocr?.snippet ?? ""));
+    expect(ocr?.content_hash).toBeTruthy();
+    expect(ocr?.quote_hash).toBe(sha256(ocr?.quote ?? ""));
     const [persisted] = await createService(fixture, null).list(OPERATOR, caseId);
     const persistedHashes = persisted?.claims.flatMap((claim) =>
       claim.citations.map((citation) => (citation.locator as Record<string, unknown>).artifact_hash),

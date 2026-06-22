@@ -49,7 +49,7 @@ describe("query rewrite for inquiry retrieval", () => {
     savedRewrite = process.env[REWRITE_KEY];
     savedMode = process.env[MODE_KEY];
     delete process.env[REWRITE_KEY];
-    delete process.env[MODE_KEY];
+    process.env[MODE_KEY] = "single";
     root = await mkdtemp(path.join(tmpdir(), "iw-qrewrite-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);

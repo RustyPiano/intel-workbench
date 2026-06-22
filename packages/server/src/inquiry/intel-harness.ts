@@ -10,13 +10,14 @@ import { cropImage, extractFrame } from "../materials/ffmpeg.js";
 import type { AsrAdapter, OcrAdapter, VlmAdapter } from "../model/slots.js";
 import type { OfflineGuard } from "../security/offline-guard.js";
 import { sha256, sha256Bytes } from "../util/hash.js";
-import { resolveValidCitations } from "./citation.js";
+import { chunkToCitation } from "./citation.js";
 
 export interface CitationLedger {
   retrieved: Map<string, Chunk>;
   cited: Map<string, Citation>;
   finalize: { claims: { text: string; cite_ids: string[] }[] } | null;
   readBytes: number;
+  nextCiteSeq: number;
 }
 
 interface LoadedMaterial {
@@ -26,8 +27,11 @@ interface LoadedMaterial {
 }
 
 export function createCitationLedger(): CitationLedger {
-  return { retrieved: new Map(), cited: new Map(), finalize: null, readBytes: 0 };
+  return { retrieved: new Map(), cited: new Map(), finalize: null, readBytes: 0, nextCiteSeq: 0 };
 }
+
+const MAX_FINAL_CLAIMS = 12;
+const MAX_CITES_PER_CLAIM = 8;
 
 export interface IntelToolDeps {
   ledger: CitationLedger;
@@ -168,28 +172,37 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
     },
     {
       name: "cite",
-      description: "为一条结论绑定已检索片段；只有检索过且 sha256(text) 与 content_hash 一致的片段才会进入溯源台账。",
-      inputSchema: z.object({ chunk_id: z.string(), claim: z.string() }),
+      description: "为一条结论绑定已检索片段；必须传入原文中逐字出现的 exact quote（优先完整支撑句）。只有检索过、sha256(text) 与 content_hash 一致且 quote 命中的片段才会进入溯源台账。",
+      inputSchema: z.object({ chunk_id: z.string(), claim: z.string(), quote: z.string().min(1) }),
       async execute(args) {
-        // claim 用于 tool.cite 审计和促使模型明示推理，ledger 仅按 chunk_id 记账，finalize 时由 cite_ids 重建绑定。
-        const { chunk_id } = args as { chunk_id: string; claim: string };
-        const citations = resolveValidCitations([chunk_id], deps.ledger.retrieved, deps.nameById);
-        if (citations.length === 1) {
-          deps.ledger.cited.set(chunk_id, citations[0]!);
-          return { ok: true, content: `已为该结论接地引用 ${chunk_id}` };
+        const { chunk_id, quote } = args as { chunk_id: string; claim: string; quote: string };
+        const chunk = deps.ledger.retrieved.get(chunk_id);
+        if (!chunk || sha256(chunk.text) !== chunk.content_hash) {
+          return {
+            ok: false,
+            content: "引用无效：该片段未检索到或内容哈希不一致（可能被篡改），请换证据。",
+          };
         }
-        return {
-          ok: false,
-          content: "引用无效：该片段未检索到或内容哈希不一致（可能被篡改），请换证据。",
-        };
+        // indexOf resolves repeated text to the first occurrence; offset disambiguation is deferred to Batch F's 引用定位准确率 metric.
+        const quoteStart = typeof quote === "string" ? chunk.text.indexOf(quote) : -1;
+        if (typeof quote !== "string" || quote.length === 0 || quoteStart < 0) {
+          return {
+            ok: false,
+            content: "引用无效：quote 必须是该片段原文中的逐字子串，请复制原文支撑句。",
+          };
+        }
+        deps.ledger.nextCiteSeq += 1;
+        const cite_id = `cite-${deps.ledger.nextCiteSeq}`;
+        deps.ledger.cited.set(cite_id, chunkToCitation(chunk, deps.nameById.get(chunk.material_id) ?? chunk.material_id, 0.6, quote, quoteStart));
+        return { ok: true, content: JSON.stringify({ cite_id, chunk_id }) };
       },
     },
     {
       name: "finalize_answer",
       description:
-        "最终结论唯一入口，整次问答只调一次；每条 claim 的 cite_ids 必须是你已 cite 过的 chunk_id。最终答案只从这里 + 已接地引用生成，未在此处的内容一律丢弃。",
+        "最终结论唯一入口，整次问答只调一次；每条 claim 的 cite_ids 必须是 cite 工具返回的 cite_id。最终答案只从这里 + 已接地引用生成，未在此处的内容一律丢弃。",
       inputSchema: z.object({
-        claims: z.array(z.object({ text: z.string(), cite_ids: z.array(z.string()) }).strict()),
+        claims: z.array(z.object({ text: z.string(), cite_ids: z.array(z.string()).max(MAX_CITES_PER_CLAIM) }).strict()).max(MAX_FINAL_CLAIMS),
       }),
       async execute(args) {
         const { claims } = args as { claims: { text: string; cite_ids: string[] }[] };

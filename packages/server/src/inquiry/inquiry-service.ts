@@ -8,7 +8,7 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Identity, Inquiry, InquiryClaim, Modality } from "../domain/types.js";
+import type { Chunk, Citation, CitationSupportLabel, CitationSupportStatus, Identity, Inquiry, InquiryClaim, Modality } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readCtxBudgetTokens, readQueryRewriteMode, readRerankMinCandidates } from "../model/rag-config.js";
 import type { AsrAdapter, EmbeddingAdapter, OcrAdapter, RerankerAdapter, VlmAdapter } from "../model/slots.js";
@@ -76,10 +76,18 @@ const TIMEOUT_MS = 60_000;
 /** 按需媒体工具单次 readFile 的体量上限（agent 循环触发，封顶进程内存；真实大媒体流式留 P3.D）。 */
 const MAX_ONDEMAND_MEDIA_BYTES = 64 * 1024 * 1024;
 const TOP_K = 6;
+const DEEP_RETRIEVAL_K = 12;
+const DEEP_READ_BUDGET_MULTIPLIER = 2;
 /** 重排候选过取回深度（§5.2 二阶段）：启用重排时先取宽候选，再由 Reranker 精排回 TOP_K。 */
 const RERANK_CANDIDATES = 24;
 const AGENT_METHODOLOGY = DEFAULT_PROMPT_BODIES["inquiry-methodology"];
 const INQUIRY_STRUCTURED_PROMPT = DEFAULT_PROMPT_BODIES["inquiry-structured"];
+const SUPPORT_JUDGE_PROMPT = [
+  "你是一名情报分析员，负责判断引用原文是否支持结论。",
+  "只判断用户提供的 claim 和 quote，不得引入外部知识。",
+  "请仅输出JSON，格式为 {\"label\":\"supports|mentions|contradicts|context-only\",\"rationale\":\"理由\"}。",
+  "label只能是 supports、mentions、contradicts 或 context-only。",
+].join("\n");
 
 interface RawClaim {
   text?: unknown;
@@ -89,6 +97,28 @@ interface RawClaim {
 interface RawOutput {
   claims?: RawClaim[];
   insufficient?: boolean;
+}
+
+type VerifiedSupportLabel = Exclude<CitationSupportLabel, "unknown">;
+
+function asSupportLabel(raw: Record<string, unknown>): VerifiedSupportLabel {
+  const label = raw.label;
+  if (label === "supports" || label === "mentions" || label === "contradicts" || label === "context-only") return label;
+  throw new Error("support verifier returned an invalid label");
+}
+
+function supportStatusForLabel(label: CitationSupportLabel): CitationSupportStatus {
+  if (label === "supports") return "supported";
+  if (label === "unknown") return "support-unverified";
+  return "unsupported";
+}
+
+function dedupeStrings(ids: readonly string[]): string[] {
+  return [...new Set(ids)];
+}
+
+function supportCacheKey(claim: string, citation: Citation): string {
+  return `${claim}\u0000${citation.quote_hash ?? citation.content_hash}`;
 }
 
 export class InquiryService {
@@ -120,14 +150,10 @@ export class InquiryService {
   ) {}
 
   async ask(actor: Identity, caseId: string, question: string, opts: { deep?: boolean } = {}): Promise<Inquiry> {
-    // 深度分析：强制走结构化溯源管线并开思考（thinking on），不进 agent 流式分支。
-    if (opts.deep) {
-      return this.askSingle(actor, caseId, question, true);
+    if (process.env.MINI_AGENT_INQUIRY_MODE === "single") {
+      return this.askSingle(actor, caseId, question, opts.deep === true);
     }
-    if (process.env.MINI_AGENT_INQUIRY_MODE === "agent") {
-      return this.askViaAgent(actor, caseId, question);
-    }
-    return this.askSingle(actor, caseId, question);
+    return this.askViaAgent(actor, caseId, question, opts.deep === true);
   }
 
   private async askSingle(actor: Identity, caseId: string, question: string, deep = false): Promise<Inquiry> {
@@ -221,7 +247,7 @@ export class InquiryService {
     return inquiry;
   }
 
-  private async askViaAgent(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
+  private async askViaAgent(actor: Identity, caseId: string, question: string, deep = false): Promise<Inquiry> {
     const q = question?.trim();
     if (!q) throw new AppError(400, "问题不能为空");
     const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
@@ -231,14 +257,14 @@ export class InquiryService {
     let inquiry: Inquiry;
     if (chunks.length === 0) {
       inquiry = this.make(actor, q, "insufficient", `${INSUFFICIENT}（专题暂无已加工素材）`, []);
-      await this.persistAgentInquiry(actor, caseId, inquiry, { mode: "agent", used: 0 });
+      await this.persistAgentInquiry(actor, caseId, inquiry, { mode: deep ? "agent-deep" : "agent", used: 0 });
       return inquiry;
     }
     if (!this.deps.adapter || !this.deps.modelEndpoint) {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
     }
 
-    return this.runAgentInquiry(actor, caseId, q, nameById);
+    return this.runAgentInquiry(actor, caseId, q, nameById, { deep });
   }
 
   async askStream(
@@ -274,15 +300,16 @@ export class InquiryService {
     caseId: string,
     q: string,
     nameById: Map<string, string>,
-    hooks?: { signal?: AbortSignal; onEvent?: (event: InquiryStreamEvent) => void },
+    hooks?: { signal?: AbortSignal; onEvent?: (event: InquiryStreamEvent) => void; deep?: boolean },
   ): Promise<Inquiry> {
     const ledger = createCitationLedger();
     const retrieve = async (query: string, k: number): Promise<Chunk[]> => {
       const current = await this.materials.loadCaseChunks(caseId);
-      const sel = selectContext(query, current, readCtxBudgetTokens(), k);
+      const effectiveK = hooks?.deep ? Math.max(k, DEEP_RETRIEVAL_K) : k;
+      const sel = selectContext(query, current, readCtxBudgetTokens(), effectiveK);
       // 全上下文模式会返回全部 chunks（k 只是提示），后续由读取预算约束。
       if (sel.mode !== "retrieval" || !this.dense.embed) return sel.used;
-      return (await this.hybridRetrieve(actor, query, caseId, current, k)).used;
+      return (await this.hybridRetrieve(actor, query, caseId, current, effectiveK)).used;
     };
     const intelTools = createIntelTools({
       ledger,
@@ -290,7 +317,7 @@ export class InquiryService {
       caseId,
       nameById,
       retrieve,
-      readBudgetBytes: this.readBudgetBytes(),
+      readBudgetBytes: this.readBudgetBytes(hooks?.deep === true),
       perReadCapBytes: this.perReadCapBytes(),
       media: {
         ...this.mediaDeps,
@@ -374,14 +401,14 @@ export class InquiryService {
         modelAdapter: guardedAdapter,
         onModelStreamEvent,
       });
-      inquiry = this.makeFromLedger(actor, q, ledger);
+      inquiry = await this.makeFromLedger(actor, caseId, q, ledger, hooks?.signal);
     } catch (e) {
       if (e instanceof AppError) throw e;
       inquiry = this.make(actor, q, "error", `模型调用失败，未生成结论（${(e as Error).message}）。请稍后重试。`, []);
     }
 
     await this.persistAgentInquiry(actor, caseId, inquiry, {
-      mode: "agent",
+      mode: hooks?.deep ? "agent-deep" : "agent",
       runId: runResult?.runId,
       sessionId: runResult?.sessionId,
       used: ledger.retrieved.size,
@@ -504,27 +531,95 @@ export class InquiryService {
     return { id: shortId("q-"), ts: new Date().toISOString(), user: actor.id, question, status, answer, claims };
   }
 
-  private makeFromLedger(actor: Identity, question: string, ledger: CitationLedger): Inquiry {
+  private async makeFromLedger(actor: Identity, caseId: string, question: string, ledger: CitationLedger, signal?: AbortSignal): Promise<Inquiry> {
     if (ledger.finalize === null) {
       return this.make(actor, question, "insufficient", INSUFFICIENT, []);
     }
-    const claims = ledger.finalize.claims.map((claim) => {
-      const ids = claim.cite_ids.filter((id): id is string => typeof id === "string");
-      const citations = ids.map((id) => ledger.cited.get(id)).filter((citation): citation is NonNullable<typeof citation> => Boolean(citation));
-      const verified = ids.length > 0 && citations.length === ids.length;
-      return {
-        text: claim.text.trim(),
+    const claims: InquiryClaim[] = [];
+    const supportCache = new Map<string, Promise<Citation>>();
+    for (const claim of ledger.finalize.claims) {
+      const text = claim.text.trim();
+      const ids = dedupeStrings(claim.cite_ids.filter((id): id is string => typeof id === "string"));
+      const cited = ids.map((id) => ledger.cited.get(id)).filter((citation): citation is NonNullable<typeof citation> => Boolean(citation));
+      const citations: Citation[] = [];
+      const hashGrounded = ids.length > 0 && cited.length === ids.length;
+      if (hashGrounded) {
+        for (const citation of cited) {
+          const key = supportCacheKey(text, citation);
+          let verified = supportCache.get(key);
+          if (!verified) {
+            verified = this.verifyCitationSupport(actor, caseId, text, citation, signal);
+            supportCache.set(key, verified);
+          }
+          citations.push(await verified);
+        }
+      } else {
+        citations.push(...cited.map((citation) => ({ ...citation, support_status: "unsupported" as const })));
+      }
+      const support_status = !hashGrounded
+        ? "unsupported"
+        : citations.some((citation) => citation.support_status === "supported")
+          ? "supported"
+          : citations.some((citation) => citation.support_status === "support-unverified")
+            ? "support-unverified"
+            : "unsupported";
+      claims.push({
+        text,
         type: "fact" as const,
-        status: verified ? "verified" as const : "unverified" as const,
+        status: support_status === "supported" ? "verified" as const : "unverified" as const,
+        support_status,
         citations,
-      };
-    });
-    const verified = claims.filter((claim) => claim.status === "verified");
-    if (verified.length === 0) {
+      });
+    }
+    const answerable = claims.filter((claim) => claim.support_status === "supported" || claim.support_status === "support-unverified");
+    if (answerable.length === 0) {
       return this.make(actor, question, "insufficient", INSUFFICIENT, claims);
     }
-    const answer = verified.map((claim, i) => `${i + 1}. ${claim.text}`).join("\n");
+    const answer = answerable.map((claim, i) => `${i + 1}. ${claim.text}`).join("\n");
     return this.make(actor, question, "answered", answer, claims);
+  }
+
+  private async verifyCitationSupport(actor: Identity, caseId: string, claim: string, citation: Citation, signal?: AbortSignal): Promise<Citation> {
+    try {
+      if (!citation.quote) throw new Error("citation quote is missing");
+      const label = await this.judgeCitationSupport(actor, claim, citation.quote, signal);
+      await this.audit.append({
+        user: actor.id,
+        action: "inquiry.support_verify",
+        object: `case:${caseId}`,
+        caseId,
+        detail: { caseId, label, quote_hash: citation.quote_hash, content_hash: citation.content_hash },
+      });
+      return { ...citation, support_label: label, support_status: supportStatusForLabel(label) };
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      const message = e instanceof Error ? e.message : String(e);
+      await this.audit.append({
+        user: actor.id,
+        action: "inquiry.support_verify",
+        object: `case:${caseId}`,
+        result: "error",
+        caseId,
+        detail: { caseId, label: "unknown", error: message, quote_hash: citation.quote_hash, content_hash: citation.content_hash },
+      });
+      return { ...citation, support_label: "unknown", support_status: "support-unverified" };
+    }
+  }
+
+  private async judgeCitationSupport(actor: Identity, claim: string, quote: string, signal?: AbortSignal): Promise<VerifiedSupportLabel> {
+    if (!this.deps.adapter || !this.deps.modelEndpoint) throw new Error("文本 LLM 未配置：支持性校验不可用");
+    await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "inquiry-support-verify" });
+    const raw = await generateJson(
+      this.deps.adapter,
+      SUPPORT_JUDGE_PROMPT,
+      [
+        `claim: ${claim}`,
+        `quote: ${quote}`,
+        "请只输出 JSON。",
+      ].join("\n"),
+      { maxTokens: 800, thinking: "disabled", signal },
+    );
+    return asSupportLabel(raw);
   }
 
   private async getInquiryAgent(): Promise<RuntimeAgent> {
@@ -566,8 +661,9 @@ export class InquiryService {
    * agent 循环中 token 与字节只能粗略互估；这里按 1 token≈3 bytes 保守折算，
    * 未配置上下文预算时给 8000 tokens 的默认读取预算。
    */
-  private readBudgetBytes(): number {
-    return this.agentConfig.readBudgetBytes ?? (readCtxBudgetTokens() ?? 8000) * 3;
+  private readBudgetBytes(deep = false): number {
+    const base = this.agentConfig.readBudgetBytes ?? (readCtxBudgetTokens() ?? 8000) * 3;
+    return deep ? base * DEEP_READ_BUDGET_MULTIPLIER : base;
   }
 
   private perReadCapBytes(): number {

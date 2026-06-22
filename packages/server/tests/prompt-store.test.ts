@@ -26,7 +26,7 @@ const UNCONFIGURED: ModelConfig = { configured: false, provider: "openai-compati
 const EXPECTED_DEFAULTS = {
   "inquiry-methodology": [
     "你是情报分析助手。只依据本专题检索到并引用的素材片段作答，不得使用片段之外的知识。",
-    "流程：search_chunks 检索→read_chunk 读全文→对每条结论 cite(chunk_id,claim) 接地（仅哈希校验通过的引用有效）→最后调一次 finalize_answer 提交所有 claims 及其 cite_ids。",
+    "流程：search_chunks 检索→read_chunk 读全文→对每条结论 cite(chunk_id,claim,quote) 接地（quote 必须是原文逐字支撑句，且仅哈希校验通过的引用有效）→保存 cite 返回的 cite_id→最后调一次 finalize_answer 提交所有 claims 及其 cite_ids（必须使用返回的 cite_id，不是 chunk_id）。",
     "材料不足就如实说明，不要编造。",
   ].join("\n"),
   "inquiry-structured": [
@@ -222,7 +222,7 @@ describe("PromptStore 接入问答与要素服务", () => {
 
   beforeEach(async () => {
     savedMode = process.env.MINI_AGENT_INQUIRY_MODE;
-    delete process.env.MINI_AGENT_INQUIRY_MODE;
+    process.env.MINI_AGENT_INQUIRY_MODE = "single";
     root = await mkdtemp(path.join(tmpdir(), "iw-prompts-svc-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);

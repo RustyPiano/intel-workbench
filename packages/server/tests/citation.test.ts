@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { Chunk } from "../src/domain/types.js";
+import type { Chunk, Identity } from "../src/domain/types.js";
 import { chunkToCitation, resolveValidCitations } from "../src/inquiry/citation.js";
+import { createCitationLedger, createIntelTools } from "../src/inquiry/intel-harness.js";
 import { sha256 } from "../src/util/hash.js";
 
 /**
@@ -20,6 +21,8 @@ function audioChunk(text: string, id = "m#0"): Chunk {
     content_hash: sha256(text),
   };
 }
+
+const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 
 describe("chunkToCitation 透传（二期 Spec §2.2）", () => {
   it("audio chunk 透传 timecode/speaker + 正确 modality", () => {
@@ -40,6 +43,18 @@ describe("chunkToCitation 透传（二期 Spec §2.2）", () => {
     expect(c.modality).toBe("doc");
     expect(c.locator.paragraph).toBe(1);
   });
+
+  it("传入 quote 时记录 span 偏移与 quote_hash", () => {
+    const chunk = audioChunk("前文。舰船编号已确认，正在港内停泊。后文。");
+    const quote = "舰船编号已确认，正在港内停泊。";
+    const c = chunkToCitation(chunk, "通话录音.mp3", 0.6, quote);
+    expect(c.snippet).toBe(quote);
+    expect(c.quote).toBe(quote);
+    expect(c.quote_char_start).toBe(chunk.text.indexOf(quote));
+    expect(c.quote_char_end).toBe(chunk.text.indexOf(quote) + quote.length);
+    expect(chunk.text.slice(c.quote_char_start, c.quote_char_end)).toBe(quote);
+    expect(c.quote_hash).toBe(sha256(quote));
+  });
 });
 
 describe("resolveValidCitations 红线对媒体 chunk 模态无关（二期 Spec §2.2）", () => {
@@ -59,5 +74,28 @@ describe("resolveValidCitations 红线对媒体 chunk 模态无关（二期 Spec
     const byId = new Map([[tampered.chunk_id, tampered]]);
     const names = new Map([[tampered.material_id, "录音.wav"]]);
     expect(resolveValidCitations([tampered.chunk_id], byId, names)).toHaveLength(0);
+  });
+});
+
+describe("cite tool span 红线", () => {
+  it("拒绝不在 chunk.text 中逐字出现的 quote", async () => {
+    const chunk = audioChunk("舰船线索：码头发现异常装载。");
+    const ledger = createCitationLedger();
+    ledger.retrieved.set(chunk.chunk_id, chunk);
+    const tools = createIntelTools({
+      ledger,
+      actor: OPERATOR,
+      caseId: "case-1",
+      nameById: new Map([[chunk.material_id, "录音.wav"]]),
+      retrieve: async () => [],
+      readBudgetBytes: 1000,
+      perReadCapBytes: 1000,
+    });
+    const cite = tools.find((tool) => tool.name === "cite");
+
+    const result = await cite!.execute({ chunk_id: chunk.chunk_id, claim: "码头有异常装载", quote: "不存在的引用" }) as { ok: boolean; content: string };
+
+    expect(result.ok).toBe(false);
+    expect(ledger.cited.size).toBe(0);
   });
 });

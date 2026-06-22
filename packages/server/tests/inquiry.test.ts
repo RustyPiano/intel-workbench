@@ -34,6 +34,7 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
   let materials: MaterialService;
   let caseId: string;
   let chunkId: string;
+  let savedMode: string | undefined;
 
   function service(adapter: ModelAdapter | null, allowlist: string[] = ["stub.local"]): InquiryService {
     const guard = new OfflineGuard(allowlist, audit);
@@ -41,6 +42,8 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
   }
 
   beforeEach(async () => {
+    savedMode = process.env.MINI_AGENT_INQUIRY_MODE;
+    process.env.MINI_AGENT_INQUIRY_MODE = "single";
     root = await mkdtemp(path.join(tmpdir(), "iw-inq-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
@@ -54,6 +57,8 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
   });
 
   afterEach(async () => {
+    if (savedMode === undefined) delete process.env.MINI_AGENT_INQUIRY_MODE;
+    else process.env.MINI_AGENT_INQUIRY_MODE = savedMode;
     await rm(root, { recursive: true, force: true });
   });
 
@@ -171,6 +176,7 @@ describe("InquiryService 混合检索（二期 P2.4 §5.2）", () => {
   let chunkId: string;
   const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
   let savedBudget: string | undefined;
+  let savedMode: string | undefined;
 
   const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
 
@@ -184,11 +190,15 @@ describe("InquiryService 混合检索（二期 P2.4 §5.2）", () => {
     await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "南海周边发现可疑舰船活动，疑似军事演习。" }]);
     chunkId = (await materials.loadCaseChunks(caseId))[0].chunk_id;
     savedBudget = process.env[KEY];
+    savedMode = process.env.MINI_AGENT_INQUIRY_MODE;
+    process.env.MINI_AGENT_INQUIRY_MODE = "single";
   });
 
   afterEach(async () => {
     if (savedBudget === undefined) delete process.env[KEY];
     else process.env[KEY] = savedBudget;
+    if (savedMode === undefined) delete process.env.MINI_AGENT_INQUIRY_MODE;
+    else process.env.MINI_AGENT_INQUIRY_MODE = savedMode;
     await rm(root, { recursive: true, force: true });
   });
 
@@ -227,6 +237,7 @@ describe("InquiryService 重排门控（二期 P2.5 §5.2）", () => {
   const MIN = "MINI_AGENT_RERANK_MIN_CANDIDATES";
   let savedBudget: string | undefined;
   let savedMin: string | undefined;
+  let savedMode: string | undefined;
 
   const EMBED_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: new MockEmbed(), rerank: null };
 
@@ -242,6 +253,8 @@ describe("InquiryService 重排门控（二期 P2.5 §5.2）", () => {
     await materials.ingest(OPERATOR, caseId, docs);
     savedBudget = process.env[BUDGET];
     savedMin = process.env[MIN];
+    savedMode = process.env.MINI_AGENT_INQUIRY_MODE;
+    process.env.MINI_AGENT_INQUIRY_MODE = "single";
     delete process.env[BUDGET]; // 未设预算 → 检索路（非全上下文）
   });
 
@@ -250,6 +263,8 @@ describe("InquiryService 重排门控（二期 P2.5 §5.2）", () => {
     else process.env[BUDGET] = savedBudget;
     if (savedMin === undefined) delete process.env[MIN];
     else process.env[MIN] = savedMin;
+    if (savedMode === undefined) delete process.env.MINI_AGENT_INQUIRY_MODE;
+    else process.env.MINI_AGENT_INQUIRY_MODE = savedMode;
     await rm(root, { recursive: true, force: true });
   });
 

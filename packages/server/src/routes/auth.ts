@@ -19,6 +19,15 @@ export function createAuthRouter(auth: AuthService): Router {
     res.json({ ok: true, token, user: identity });
   });
 
+  router.post("/change-password", async (req, res) => {
+    const { currentPassword, newPassword } = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+      throw new AppError(400, "缺少当前口令或新口令");
+    }
+    const identity = await auth.changePassword(bearerToken(req), currentPassword, newPassword);
+    res.json({ ok: true, user: identity });
+  });
+
   router.get("/me", (req, res) => {
     res.json({ ok: true, user: req.identity });
   });

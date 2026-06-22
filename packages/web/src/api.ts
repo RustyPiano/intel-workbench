@@ -202,6 +202,17 @@ export interface Contradiction {
   confidence: number;
 }
 
+export type ContradictionStatus = "succeeded" | "degraded" | "failed";
+export interface ContradictionDetectionResult {
+  status: ContradictionStatus;
+  contradictions: Contradiction[];
+  processedChunks: number;
+  totalChunks: number;
+  truncated: boolean;
+  warnings: string[];
+  error?: string;
+}
+
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
 
 export interface ApiReport {
@@ -305,6 +316,14 @@ export async function login(username: string, password: string): Promise<{ token
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
   if (!res.ok || body.ok === false) throw new Error(body.message ?? `登录失败（HTTP ${res.status}）`);
   return { token: body.token as string, user: body.user as SessionUser };
+}
+
+export function changePassword(currentPassword: string, newPassword: string): Promise<SessionUser> {
+  return fetch(`${BASE}/auth/change-password`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ currentPassword, newPassword }),
+  }).then((r) => unwrap<SessionUser>(r, "user"));
 }
 
 export function fetchMe(): Promise<SessionUser> {
@@ -567,15 +586,15 @@ export function getElementGraph(caseId: string): Promise<ElementGraph> {
 
 // ---- 矛盾检测 ----
 
-export function listContradictions(caseId: string): Promise<Contradiction[]> {
+export function listContradictions(caseId: string): Promise<ContradictionDetectionResult> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions`, { headers: headers() }).then((r) =>
-    unwrap<Contradiction[]>(r, "contradictions"),
+    unwrap<ContradictionDetectionResult>(r, "result"),
   );
 }
 
-export function detectContradictions(caseId: string): Promise<Contradiction[]> {
+export function detectContradictions(caseId: string): Promise<ContradictionDetectionResult> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions`, { method: "POST", headers: headers() }).then((r) =>
-    unwrap<Contradiction[]>(r, "contradictions"),
+    unwrap<ContradictionDetectionResult>(r, "result"),
   );
 }
 
@@ -589,6 +608,7 @@ export interface ApiJob {
   kind: JobKind;
   state: JobState;
   progress: JobProgress;
+  result?: unknown;
   error?: string;
   startedAt: string;
 }

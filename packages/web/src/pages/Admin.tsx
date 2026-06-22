@@ -398,7 +398,7 @@ export function AdminModelsPage() {
           <Row label="Provider">{doctor.provider}</Row>
           <Row label="模型代号">{doctor.model || "—"}</Row>
           <Row label="端点 host">{doctor.host || "—"}</Row>
-          <Row label="零外发白名单">
+          <Row label="出站白名单（应用层）">
             <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: doctor.allowlisted ? "var(--ok-light)" : "var(--text-muted)" }}>
               <span className={doctor.allowlisted ? "status-dot" : "status-dot status-dot--empty"} style={{ backgroundColor: doctor.allowlisted ? "currentColor" : "transparent" }} />
               <span>{doctor.allowlisted ? "已放行该 host" : "不在白名单（出站将被拦截）"}</span>

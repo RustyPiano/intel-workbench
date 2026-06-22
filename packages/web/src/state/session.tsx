@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { fetchMe, login as apiLogin, logout as apiLogout, setSessionToken, setUnauthorizedHandler } from "../api";
+import { changePassword as apiChangePassword, fetchMe, login as apiLogin, logout as apiLogout, setSessionToken, setUnauthorizedHandler } from "../api";
 import type { Role, SessionUser } from "../types";
 
 /**
@@ -14,6 +14,7 @@ interface SessionContextValue {
   /** 启动期凭存储令牌恢复会话中——守卫据此避免误跳登录页。 */
   loading: boolean;
   signIn: (username: string, password: string) => Promise<SessionUser>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<SessionUser>;
   signOut: () => void;
 }
 
@@ -88,6 +89,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         persistToken(token);
         setUser(signedIn);
         return signedIn;
+      },
+      changePassword: async (currentPassword, newPassword) => {
+        const changed = await apiChangePassword(currentPassword, newPassword);
+        setUser(changed);
+        return changed;
       },
       signOut: () => {
         void apiLogout();

@@ -33,6 +33,7 @@ export function bearerToken(req: Request): string | undefined {
 
 /** 无需会话即可访问的路由（相对 `/api` 挂载点）。 */
 const PUBLIC_PATHS = new Set(["/health", "/_routes", "/auth/login"]);
+const PASSWORD_CHANGE_PATHS = new Set(["/auth/me", "/auth/logout", "/auth/change-password"]);
 
 /**
  * 鉴权中间件（产品 spec §8.1）。身份**仅**来自服务端会话：从
@@ -49,6 +50,10 @@ export function authMiddleware(auth: AuthService) {
     const identity = auth.resolve(bearerToken(req));
     if (!identity) {
       next(new AppError(401, "未登录或会话已失效"));
+      return;
+    }
+    if (identity.mustChangePassword && !PASSWORD_CHANGE_PATHS.has(req.path)) {
+      next(new AppError(403, "需要先修改初始口令"));
       return;
     }
     req.identity = identity;

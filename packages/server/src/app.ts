@@ -217,9 +217,11 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   }
   const status = err instanceof AppError ? err.status : 500;
   const message = err instanceof Error ? err.message : "服务器错误";
+  const result = typeof err === "object" && err !== null && "result" in err ? (err as { result?: unknown }).result : undefined;
   res.status(status).json({
     ok: false,
     error: status === 500 ? "internal_error" : "request_error",
     message,
+    ...(result ? { result } : {}),
   });
 };

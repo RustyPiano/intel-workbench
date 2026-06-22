@@ -65,10 +65,31 @@ export class AuthService {
 
     this.locks.delete(id);
     const token = randomBytes(32).toString("hex");
-    const identity: Identity = { id: user!.id, name: user!.name, role: user!.role, clearance: user!.clearance };
+    const identity: Identity = {
+      id: user!.id,
+      name: user!.name,
+      role: user!.role,
+      clearance: user!.clearance,
+      mustChangePassword: user!.must_change_password === true,
+    };
     this.sessions.set(token, { identity, expiresAt: t + SESSION_TTL_MS });
     await this.audit.append({ user: identity.id, action: "auth.login", object: `user:${identity.id}`, result: "ok" });
     return { token, identity };
+  }
+
+  async changePassword(token: string | undefined, currentPassword: string, newPassword: string): Promise<Identity> {
+    const session = token ? this.sessions.get(token) : undefined;
+    if (!session || session.expiresAt <= this.now()) throw new AppError(401, "未登录或会话已失效");
+    const user = await this.users.findById(session.identity.id);
+    if (!user?.enabled || !verifyPassword(currentPassword ?? "", user.pwd_hash)) {
+      await this.deny(session.identity.id, "bad_password_change");
+      throw new AppError(401, "当前口令错误");
+    }
+
+    await this.users.setPassword(user.id, newPassword);
+    session.identity = { ...session.identity, mustChangePassword: false };
+    await this.audit.append({ user: user.id, action: "user.password", object: `user:${user.id}`, result: "ok" });
+    return session.identity;
   }
 
   /** 解析令牌为身份；过期或未知返回 null。 */

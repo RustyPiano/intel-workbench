@@ -119,10 +119,11 @@ describe("ContradictionService", () => {
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]?.scope).toBe("cross-material");
-    expect(result[0]?.claim_a.citation.content_hash).toEqual(expect.any(String));
-    expect(result[0]?.claim_b.citation.content_hash).toEqual(expect.any(String));
+    expect(result).toMatchObject({ status: "succeeded", processedChunks: 2, totalChunks: 2, truncated: false, warnings: [] });
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]?.scope).toBe("cross-material");
+    expect(result.contradictions[0]?.claim_a.citation.content_hash).toEqual(expect.any(String));
+    expect(result.contradictions[0]?.claim_b.citation.content_hash).toEqual(expect.any(String));
   });
 
   it("出站被拒时显式抛出并记 error 审计（不静默吞成空结果）", async () => {
@@ -138,9 +139,26 @@ describe("ContradictionService", () => {
       { adapter: new ScriptedJsonAdapter([]), guard: new OfflineGuard([], fixture.audit), modelEndpoint: ENDPOINT },
     );
 
-    await expect(service.detect(OPERATOR, caseId)).rejects.toThrow();
+    await expect(service.detect(OPERATOR, caseId)).rejects.toMatchObject({
+      result: {
+        status: "failed",
+        contradictions: [],
+        processedChunks: 0,
+        totalChunks: 1,
+        truncated: true,
+        error: expect.stringContaining("外发"),
+      },
+    });
     const events = await fixture.audit.readCaseEvents(caseId);
     expect(events.some((e) => e.action === "contradiction.detect" && e.result === "error")).toBe(true);
+    await expect(service.getResult(OPERATOR, caseId)).resolves.toMatchObject({
+      status: "failed",
+      contradictions: [],
+      processedChunks: 0,
+      totalChunks: 1,
+      truncated: true,
+      error: expect.stringContaining("外发"),
+    });
   });
 
   it("detects an intra-material contradiction", async () => {
@@ -157,8 +175,8 @@ describe("ContradictionService", () => {
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
-    expect(result).toHaveLength(1);
-    expect(result[0]?.scope).toBe("intra-material");
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]?.scope).toBe("intra-material");
   });
 
   it("drops fabricated chunk references without crashing", async () => {
@@ -175,7 +193,10 @@ describe("ContradictionService", () => {
       },
     ]);
 
-    await expect(createService(fixture, adapter).detect(OPERATOR, caseId)).resolves.toEqual([]);
+    await expect(createService(fixture, adapter).detect(OPERATOR, caseId)).resolves.toMatchObject({
+      status: "succeeded",
+      contradictions: [],
+    });
   });
 
   it("does not emit agreements", async () => {
@@ -190,7 +211,7 @@ describe("ContradictionService", () => {
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
-    expect(result).toEqual([]);
+    expect(result).toMatchObject({ status: "succeeded", contradictions: [] });
   });
 
   it("skips a failed extraction batch and records best-effort coverage", async () => {
@@ -199,7 +220,14 @@ describe("ContradictionService", () => {
     ]);
     const adapter = new ScriptedJsonAdapter([new Error("extract failed")]);
 
-    await expect(createService(fixture, adapter).detect(OPERATOR, caseId)).resolves.toEqual([]);
+    await expect(createService(fixture, adapter).detect(OPERATOR, caseId)).resolves.toMatchObject({
+      status: "degraded",
+      contradictions: [],
+      processedChunks: 0,
+      totalChunks: 1,
+      truncated: true,
+      warnings: [expect.stringContaining("批次")],
+    });
     const event = (await fixture.audit.readAll()).filter((item) => item.action === "contradiction.detect").pop();
     expect(event?.result).toBe("ok");
     expect(event?.detail).toMatchObject({ batches: 1, chunksCovered: 0, chunksTotal: 1, failedBatches: 1 });
@@ -224,8 +252,8 @@ describe("ContradictionService", () => {
     ]);
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
-    const cross = result.find((item) => item.scope === "cross-material");
-    const intra = result.find((item) => item.scope === "intra-material");
+    const cross = result.contradictions.find((item) => item.scope === "cross-material");
+    const intra = result.contradictions.find((item) => item.scope === "intra-material");
 
     expect(cross?.confidence).toBeGreaterThanOrEqual(intra?.confidence ?? 1);
   });
@@ -253,9 +281,9 @@ describe("ContradictionService", () => {
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
     expect(adapter.inputs.filter((input) => !input.messages[0]?.content.includes("claim_a:"))).toHaveLength(2);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.claim_a.citation.content_hash).toBe(chunks[0]!.content_hash);
-    expect(result[0]?.claim_b.citation.content_hash).toBe(chunks[40]!.content_hash);
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]?.claim_a.citation.content_hash).toBe(chunks[0]!.content_hash);
+    expect(result.contradictions[0]?.claim_b.citation.content_hash).toBe(chunks[40]!.content_hash);
     const event = (await fixture.audit.readAll()).filter((item) => item.action === "contradiction.detect").pop();
     expect(event?.detail).toMatchObject({ batches: 2, chunksCovered: 41, chunksTotal: 41, failedBatches: 0 });
   });
@@ -279,7 +307,7 @@ describe("ContradictionService", () => {
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
-    expect(result).toEqual([]);
+    expect(result).toMatchObject({ status: "succeeded", contradictions: [] });
     expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(0);
   });
 });

@@ -41,7 +41,7 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
         <span className={`badge badge--clearance ${CLEARANCE_TONE[clearance]}`}>
           密级：{CLEARANCE_LABELS[clearance]}
         </span>
-        <span className="badge badge--offline" title="本应用零外发；检测到外发尝试将转为告警态">
+        <span className="badge badge--offline" title="应用层出站经 OfflineGuard 白名单授权并审计；离线部署可置空白名单。">
           离线
         </span>
         <span className="badge badge--devmode" title="开发模式：未接入正式开源模型链路，禁止涉密专题">

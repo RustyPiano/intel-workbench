@@ -8,18 +8,14 @@ import { landingPathForRole, useSession } from "../state/session";
  * 按角色落地。失败/锁定提示由服务端返回。
  */
 
-/** 演示账号（首次启动预置于 config/users.json；可由管理员重置）。 */
-const DEMO_ACCOUNTS = [
-  { id: "operator", label: "作业员", password: "operator123" },
-  { id: "admin", label: "管理员", password: "admin123" },
-  { id: "security", label: "保密员", password: "security123" },
-];
-
 export function LoginPage() {
-  const { signIn } = useSession();
+  const { signIn, changePassword } = useSession();
   const navigate = useNavigate();
-  const [username, setUsername] = useState("operator");
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
+  const [mustChange, setMustChange] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +25,17 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
+      if (mustChange) {
+        if (newPassword !== confirmPassword) throw new Error("两次输入的新口令不一致");
+        const user = await changePassword(password, newPassword);
+        navigate(landingPathForRole(user.role), { replace: true });
+        return;
+      }
       const user = await signIn(username.trim(), password);
+      if (user.mustChangePassword) {
+        setMustChange(true);
+        return;
+      }
       navigate(landingPathForRole(user.role), { replace: true });
     } catch (err) {
       setError((err as Error).message);
@@ -51,9 +57,13 @@ export function LoginPage() {
             className="input-text"
             autoComplete="username"
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setMustChange(false);
+            }}
             placeholder="用户名"
             style={{ padding: "10px 12px", fontSize: "14px" }}
+            disabled={mustChange}
           />
           <div className="form-label" style={{ marginTop: "12px" }}>口令</div>
           <input
@@ -64,26 +74,41 @@ export function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="口令"
             style={{ padding: "10px 12px", fontSize: "14px" }}
+            disabled={mustChange}
           />
+          {mustChange ? (
+            <>
+              <div className="form-label" style={{ marginTop: "12px" }}>新口令</div>
+              <input
+                type="password"
+                className="input-text"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="至少 12 位"
+                style={{ padding: "10px 12px", fontSize: "14px" }}
+              />
+              <div className="form-label" style={{ marginTop: "12px" }}>确认新口令</div>
+              <input
+                type="password"
+                className="input-text"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="再次输入新口令"
+                style={{ padding: "10px 12px", fontSize: "14px" }}
+              />
+            </>
+          ) : null}
 
           {error ? (
             <div style={{ color: "var(--danger-light)", fontSize: "12px", marginTop: "10px" }}>{error}</div>
           ) : null}
 
           <button type="submit" className="btn btn--primary login__enter" disabled={busy} style={{ marginTop: "16px" }}>
-            {busy ? "登 录 中…" : "确 认 登 录"}
+            {busy ? "处 理 中…" : mustChange ? "确认修改口令" : "确 认 登 录"}
           </button>
         </form>
-
-        <div className="login__notice" style={{ marginTop: "16px" }}>
-          <strong>演示账号：</strong>
-          {DEMO_ACCOUNTS.map((a, i) => (
-            <span key={a.id}>
-              {i > 0 ? " · " : ""}
-              {a.label} <code>{a.id}</code> / <code>{a.password}</code>
-            </span>
-          ))}
-        </div>
       </div>
     </div>
   );

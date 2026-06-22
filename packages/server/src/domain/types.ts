@@ -32,6 +32,7 @@ export interface Identity {
   name: string;
   role: Role;
   clearance: Clearance;
+  mustChangePassword?: boolean;
 }
 
 /** 素材模态（产品 spec §5.2）。一期仅文档可加工，其余降级占位。 */

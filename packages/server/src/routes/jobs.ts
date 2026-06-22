@@ -77,6 +77,7 @@ function serializeJob(job: Job) {
     state: job.state,
     progress: job.progress,
     error: job.error,
+    ...(job.kind === "contradictions" && job.result !== undefined ? { result: job.result } : {}),
     startedAt: job.startedAt,
   };
 }

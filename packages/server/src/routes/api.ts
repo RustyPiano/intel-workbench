@@ -63,6 +63,7 @@ export function createApiRouter(services: ApiServices): Router {
       note: "鉴权 + M1–M5 全部做实：登录/会话、专题 CRUD、素材汇入/内容、问答带溯源、要素抽取、报告复核闸门、管理后台、审计 verify/导出。",
       implemented: [
         "POST /api/auth/login",
+        "POST /api/auth/change-password",
         "POST /api/auth/logout",
         "GET /api/auth/me",
         "GET/POST /api/cases",

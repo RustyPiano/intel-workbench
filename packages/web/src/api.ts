@@ -241,6 +241,56 @@ export interface ApiReport {
   rendered: boolean;
 }
 
+export type TaskRunStatus = "active" | "done" | "failed";
+export type TaskStageStatus = "pending" | "active" | "done" | "failed" | "skipped";
+export type TaskAdvanceStatus = "done" | "failed" | "skipped";
+
+export interface ApiTaskStageDef {
+  key: string;
+  name: string;
+  checkpoint?: boolean;
+}
+
+export interface ApiTaskTemplate {
+  id: string;
+  name: string;
+  stages: ApiTaskStageDef[];
+}
+
+export interface ApiTaskStageState {
+  key: string;
+  name: string;
+  status: TaskStageStatus;
+  checkpoint?: boolean;
+  confirmedBy?: string;
+  confirmedAt?: string;
+}
+
+export interface ApiTaskRun {
+  id: string;
+  caseId: string;
+  templateId: string;
+  status: TaskRunStatus;
+  stages: ApiTaskStageState[];
+  createdAt: string;
+}
+
+export interface ApiTaskRunOverview {
+  currentStage: ApiTaskStageState | null;
+  completedStageCount: number;
+  totalStageCount: number;
+  pendingCheckpointCount: number;
+  materials: { total: number; pending: number; processing: number; done: number; failed: number };
+  highSeverityContradictionCount: number;
+  reportStatus: ReportStatus | null;
+}
+
+export interface ApiTaskRunSnapshot {
+  template: ApiTaskTemplate;
+  run: ApiTaskRun;
+  overview: ApiTaskRunOverview;
+}
+
 export interface DraftReportInput {
   title: string;
   body?: string;
@@ -670,6 +720,65 @@ export function exportReport(caseId: string): Promise<{ filename: string; conten
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers() }).then((r) =>
     unwrap<{ filename: string; content: string; status: ReportStatus }>(r, "export"),
   );
+}
+
+// ---- 任务编排（Batch D） ----
+
+export async function getCurrentTaskRun(caseId: string): Promise<ApiTaskRunSnapshot | null> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/current`, { headers: headers() });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; snapshot?: ApiTaskRunSnapshot | null };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
+  return body.snapshot ?? null;
+}
+
+export async function getTaskRun(caseId: string, runId: string): Promise<ApiTaskRunSnapshot> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}`, { headers: headers() });
+  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
+  return { template: body.template, run: body.run, overview: body.overview };
+}
+
+export async function createTaskRun(caseId: string): Promise<ApiTaskRunSnapshot> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs`, { method: "POST", headers: headers(true), body: "{}" });
+  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
+  return { template: body.template, run: body.run, overview: body.overview };
+}
+
+export async function advanceTaskStage(caseId: string, runId: string, stageKey: string, status: TaskAdvanceStatus): Promise<ApiTaskRunSnapshot> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageKey)}/advance`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ status }),
+  });
+  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
+  return { template: body.template, run: body.run, overview: body.overview };
+}
+
+export async function confirmTaskStage(caseId: string, runId: string, stageKey: string): Promise<ApiTaskRunSnapshot> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageKey)}/confirm`, {
+    method: "POST",
+    headers: headers(),
+  });
+  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
+  }
+  return { template: body.template, run: body.run, overview: body.overview };
 }
 
 // ---- 管理后台（M5） ----

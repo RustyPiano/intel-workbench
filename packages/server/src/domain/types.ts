@@ -206,6 +206,40 @@ export interface ReportRecord {
   rendered: boolean;
 }
 
+/** Batch D：专题之上的任务编排层。仅内置单一模板，不引入模板编辑或插件系统。 */
+export interface TaskStageDef {
+  key: string;
+  name: string;
+  checkpoint?: boolean;
+}
+
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  stages: TaskStageDef[];
+}
+
+export type TaskRunStatus = "active" | "done" | "failed";
+export type TaskStageStatus = "pending" | "active" | "done" | "failed" | "skipped";
+
+export interface TaskStageState {
+  key: string;
+  name: string;
+  status: TaskStageStatus;
+  checkpoint?: boolean;
+  confirmedBy?: string;
+  confirmedAt?: string;
+}
+
+export interface TaskRun {
+  id: string;
+  caseId: string;
+  templateId: string;
+  status: TaskRunStatus;
+  stages: TaskStageState[];
+  createdAt: string;
+}
+
 /** `cases/<id>/manifest.json`（工程方案 §4.2）。 */
 export interface CaseManifest {
   id: string;

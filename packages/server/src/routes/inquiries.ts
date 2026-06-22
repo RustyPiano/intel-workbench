@@ -13,8 +13,8 @@ export function createInquiriesRouter(inquiries: InquiryService): Router {
   });
 
   router.post("/:id/inquiries", async (req, res) => {
-    const { question } = (req.body ?? {}) as { question?: string };
-    const inquiry = await inquiries.ask(req.identity, req.params.id, question ?? "");
+    const { question, deep } = (req.body ?? {}) as { question?: string; deep?: boolean };
+    const inquiry = await inquiries.ask(req.identity, req.params.id, question ?? "", { deep: deep === true });
     res.status(201).json({ ok: true, inquiry });
   });
 

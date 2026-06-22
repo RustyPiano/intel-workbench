@@ -119,14 +119,18 @@ export class InquiryService {
     private readonly promptStore?: PromptStore,
   ) {}
 
-  async ask(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
+  async ask(actor: Identity, caseId: string, question: string, opts: { deep?: boolean } = {}): Promise<Inquiry> {
+    // 深度分析：强制走结构化溯源管线并开思考（thinking on），不进 agent 流式分支。
+    if (opts.deep) {
+      return this.askSingle(actor, caseId, question, true);
+    }
     if (process.env.MINI_AGENT_INQUIRY_MODE === "agent") {
       return this.askViaAgent(actor, caseId, question);
     }
     return this.askSingle(actor, caseId, question);
   }
 
-  private async askSingle(actor: Identity, caseId: string, question: string): Promise<Inquiry> {
+  private async askSingle(actor: Identity, caseId: string, question: string, deep = false): Promise<Inquiry> {
     const q = question?.trim();
     if (!q) throw new AppError(400, "问题不能为空");
     const rewriteMode = readQueryRewriteMode();
@@ -203,7 +207,7 @@ export class InquiryService {
       inquiry = this.make(actor, q, "insufficient", `${INSUFFICIENT}（未检索到相关素材片段）`, []);
     } else {
       // ②③ 拒答（模型 insufficient / 全 claim 失效）仍在 generateAndValidate 内守红线。
-      inquiry = await this.generateAndValidate(actor, q, used, nameById);
+      inquiry = await this.generateAndValidate(actor, q, used, nameById, deep);
     }
 
     await this.persist(caseId, inquiry);
@@ -444,6 +448,7 @@ export class InquiryService {
     question: string,
     retrieved: Chunk[],
     nameById: Map<string, string>,
+    deep = false,
   ): Promise<Inquiry> {
     if (!this.deps.adapter || !this.deps.modelEndpoint) {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
@@ -453,7 +458,7 @@ export class InquiryService {
 
     let raw: RawOutput;
     try {
-      raw = await this.callModel(question, retrieved);
+      raw = await this.callModel(question, retrieved, deep);
     } catch (e) {
       return this.make(actor, question, "error", `模型调用失败，未生成结论（${(e as Error).message}）。请稍后重试。`, []);
     }
@@ -487,11 +492,12 @@ export class InquiryService {
     };
   }
 
-  private async callModel(question: string, retrieved: Chunk[]): Promise<RawOutput> {
+  private async callModel(question: string, retrieved: Chunk[], deep = false): Promise<RawOutput> {
     const context = retrieved.map((c) => `[${c.chunk_id}] ${c.text}`).join("\n\n");
     const systemPrompt = await this.promptBody("inquiry-structured", INQUIRY_STRUCTURED_PROMPT);
     const userContent = `素材片段：\n${context}\n\n问题：${question}\n\n请只输出 JSON。`;
-    return (await generateJson(this.deps.adapter!, systemPrompt, userContent, { timeoutMs: TIMEOUT_MS })) as RawOutput;
+    // 默认关思考（检索已聚焦，求快与稳）；深度分析模式开思考（thinking on）求质量。
+    return (await generateJson(this.deps.adapter!, systemPrompt, userContent, { timeoutMs: TIMEOUT_MS, thinking: deep ? "enabled" : "disabled" })) as RawOutput;
   }
 
   private make(actor: Identity, question: string, status: Inquiry["status"], answer: string, claims: InquiryClaim[]): Inquiry {

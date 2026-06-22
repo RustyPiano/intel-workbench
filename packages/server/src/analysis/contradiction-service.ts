@@ -2,18 +2,19 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
+import { mapWithConcurrency, splitIntoBatches } from "./batch-extract.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
+import { AppError } from "../domain/identity.js";
 import type { Chunk, Citation, Contradiction, Identity } from "../domain/types.js";
 import { chunkToCitation, resolveValidCitations } from "../inquiry/citation.js";
-import { fitToBudget } from "../inquiry/retrieval.js";
-import { readCtxBudgetTokens } from "../model/rag-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { shortId } from "../util/hash.js";
 
-const MAX_CHUNKS = 60;
+const BATCH_CHUNKS = 40;
+const CONCURRENCY = 4;
 const MAX_PAIRS_PER_CLUSTER = 30;
 const EXTRACT_PROMPT = DEFAULT_PROMPT_BODIES["contradiction-extract"];
 const JUDGE_PROMPT = DEFAULT_PROMPT_BODIES["contradiction-judge"];
@@ -44,6 +45,21 @@ interface JudgeResult {
 interface DetectionStats {
   clusters: number;
   pairsJudged: number;
+  batches: number;
+  chunksCovered: number;
+  chunksTotal: number;
+  failedBatches: number;
+}
+
+interface DetectOptions {
+  signal?: AbortSignal;
+  onProgress?: (p: { done: number; total: number }) => void;
+}
+
+interface ClaimBatchResult {
+  claims: GroundedClaim[];
+  chunksCovered: number;
+  failed: boolean;
 }
 
 // 按实体聚类（不含 attribute）：同一实体的不同属性表述（如 572号护卫舰 的 "状态"/"部署能力"/"动力测试状态"）
@@ -103,7 +119,7 @@ export class ContradictionService {
     private readonly promptStore?: PromptStore,
   ) {}
 
-  async detect(actor: Identity, caseId: string): Promise<Contradiction[]> {
+  async detect(actor: Identity, caseId: string, opts: DetectOptions = {}): Promise<Contradiction[]> {
     try {
       const manifest = await this.cases.get(actor, caseId);
       const nameById = new Map(manifest.materials.map((m) => [m.id, m.filename]));
@@ -119,18 +135,35 @@ export class ContradictionService {
         });
         return [];
       }
-      const contradictions = await this.detectFromChunks(actor, all, nameById);
-      const stats = this.detectionStats.get(contradictions) ?? { clusters: 0, pairsJudged: 0 };
+      const contradictions = await this.detectFromChunks(actor, all, nameById, opts);
+      const stats = this.detectionStats.get(contradictions) ?? {
+        clusters: 0,
+        pairsJudged: 0,
+        batches: 0,
+        chunksCovered: 0,
+        chunksTotal: all.length,
+        failedBatches: 0,
+      };
       await this.persist(caseId, contradictions);
       await this.audit.append({
         user: actor.id,
         action: "contradiction.detect",
         object: `case:${caseId}`,
         caseId,
-        detail: { caseId, count: contradictions.length, clusters: stats.clusters, pairsJudged: stats.pairsJudged },
+        detail: {
+          caseId,
+          count: contradictions.length,
+          clusters: stats.clusters,
+          pairsJudged: stats.pairsJudged,
+          batches: stats.batches,
+          chunksCovered: stats.chunksCovered,
+          chunksTotal: stats.chunksTotal,
+          failedBatches: stats.failedBatches,
+        },
       });
       return contradictions;
     } catch (e) {
+      if (opts.signal?.aborted) throw e;
       await this.audit.append({
         user: actor.id,
         action: "contradiction.detect",
@@ -143,31 +176,52 @@ export class ContradictionService {
     }
   }
 
-  async detectFromChunks(actor: Identity, chunks: Chunk[], nameById: Map<string, string>): Promise<Contradiction[]> {
+  async detectFromChunks(actor: Identity, chunks: Chunk[], nameById: Map<string, string>, opts: DetectOptions = {}): Promise<Contradiction[]> {
     if (chunks.length === 0) {
       const contradictions: Contradiction[] = [];
-      this.detectionStats.set(contradictions, { clusters: 0, pairsJudged: 0 });
+      this.detectionStats.set(contradictions, { clusters: 0, pairsJudged: 0, batches: 0, chunksCovered: 0, chunksTotal: 0, failedBatches: 0 });
       return contradictions;
     }
     if (!this.llm.adapter || !this.llm.modelEndpoint) throw new Error("文本 LLM 未配置：矛盾检测不可用");
 
-    const budget = readCtxBudgetTokens();
-    const { used: fittedChunks } =
-      budget !== null ? fitToBudget(chunks, budget) : { used: chunks.slice(0, MAX_CHUNKS) };
-    if (budget === null && chunks.length > MAX_CHUNKS) {
-      console.warn(`ContradictionService 无预算回退：截到前 ${MAX_CHUNKS}/${chunks.length} 块（设 MINI_AGENT_CTX_BUDGET_TOKENS 以按预算取材）`);
-    }
-    const retrievedById = new Map(fittedChunks.map((chunk) => [chunk.chunk_id, chunk]));
-    const rawClaims = await this.extractClaims(actor, fittedChunks);
-    const claims = this.groundClaims(rawClaims, retrievedById, nameById);
+    const batches = splitIntoBatches(chunks, BATCH_CHUNKS);
+    const batchResults = await mapWithConcurrency(batches, async (batch): Promise<ClaimBatchResult> => {
+      // 零外发红线：每批出站前先授权——授权失败必须显式失败，不得当作"失败批次"吞掉。
+      await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "contradiction-extract" });
+      let rawClaims: RawClaim[];
+      try {
+        rawClaims = await this.extractClaims(batch, opts.signal);
+      } catch (e) {
+        if (opts.signal?.aborted || e instanceof AppError) throw e;
+        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续。
+        return { claims: [], chunksCovered: 0, failed: true };
+      }
+      // 接地在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
+      const retrievedById = new Map(batch.map((chunk) => [chunk.chunk_id, chunk]));
+      return { claims: this.groundClaims(rawClaims, retrievedById, nameById), chunksCovered: batch.length, failed: false };
+    }, {
+      concurrency: CONCURRENCY,
+      signal: opts.signal,
+      onSettled: (done, total) => opts.onProgress?.({ done, total }),
+    });
+    const claims = batchResults.flatMap((result) => result.claims);
+    const chunksCovered = batchResults.reduce((sum, result) => sum + result.chunksCovered, 0);
+    const failedBatches = batchResults.filter((result) => result.failed).length;
     const clusters = this.clusterClaims(claims);
     if (process.env.MINI_AGENT_CONTRADICTION_DEBUG) {
-      console.error(`[ct-debug] rawClaims=${rawClaims.length} grounded=${claims.length} clusters=${clusters.size} sizes=[${[...clusters.values()].map((c) => c.length).join(",")}] keys=${[...clusters.keys()].slice(0, 20).join(" | ")}`);
+      console.error(`[ct-debug] grounded=${claims.length} clusters=${clusters.size} sizes=[${[...clusters.values()].map((c) => c.length).join(",")}] keys=${[...clusters.keys()].slice(0, 20).join(" | ")}`);
     }
     const { contradictions, pairsJudged } = await this.judgeClusters(actor, clusters);
 
     contradictions.sort((a, b) => b.confidence - a.confidence);
-    this.detectionStats.set(contradictions, { clusters: clusters.size, pairsJudged });
+    this.detectionStats.set(contradictions, {
+      clusters: clusters.size,
+      pairsJudged,
+      batches: batches.length,
+      chunksCovered,
+      chunksTotal: chunks.length,
+      failedBatches,
+    });
     return contradictions;
   }
 
@@ -181,11 +235,11 @@ export class ContradictionService {
     }
   }
 
-  private async extractClaims(actor: Identity, chunks: Chunk[]): Promise<RawClaim[]> {
+  private async extractClaims(chunks: Chunk[], signal?: AbortSignal): Promise<RawClaim[]> {
     const context = chunks.map((chunk) => `[${chunk.chunk_id}] ${chunk.text}`).join("\n\n");
     const systemPrompt = this.promptStore ? await this.promptStore.getBody("contradiction-extract") : EXTRACT_PROMPT;
-    await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "contradiction-extract" });
-    const raw = await generateJson(this.llm.adapter!, systemPrompt, `素材片段：\n${context}\n\n请只输出 JSON。`, { maxTokens: 2500 });
+    // claim 抽取属批量机械抽取：关思考求速度/规模。授权由调用方按批完成（见 detectFromChunks）。
+    const raw = await generateJson(this.llm.adapter!, systemPrompt, `素材片段：\n${context}\n\n请只输出 JSON。`, { maxTokens: 2500, thinking: "disabled", signal });
     return Array.isArray(raw.claims) ? (raw.claims as RawClaim[]) : [];
   }
 
@@ -276,7 +330,9 @@ export class ContradictionService {
         `claim_b: ${claimB.text}`,
         "请只输出 JSON。",
       ].join("\n"),
-      { maxTokens: 800 },
+      // 成对矛盾判定：benchmark 实测开思考反而降召回（F1 0.909 vs 关思考 0.957，见 benchmark-summary.md），
+      // 故默认关思考（更快更省且更准）；env 置 "enabled" 可复跑对比。
+      { maxTokens: 800, thinking: process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING === "enabled" ? "enabled" : "disabled" },
     );
     return asJudgeResult(raw);
   }

@@ -17,6 +17,7 @@ import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.j
 import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
+import { JobRegistry } from "./jobs/job-registry.js";
 import { MaterialService } from "./materials/material-service.js";
 import { buildSlots } from "./model/mock-slots.js";
 import { readSlotConfigs, slotAllowlistHosts, useMockMedia } from "./model/slot-config.js";
@@ -55,6 +56,7 @@ export interface AppServices {
   materials: MaterialService;
   overview: OverviewService;
   inquiries: InquiryService;
+  jobRegistry: JobRegistry;
   elements: ElementService;
   elementGraph: ElementGraphService;
   contradictions: ContradictionService;
@@ -98,6 +100,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const auth = new AuthService(users, audit);
   const cases = new CaseService(paths, audit, devMode);
   const overview = new OverviewService(paths, cases);
+  const jobRegistry = new JobRegistry();
 
   // 文本 LLM + 零外发闸门（M3）。开发期白名单仅模型端点 host；未配置则白名单为空
   // → 任何出站皆被拒并落审计（生产置空即一键全断，§7.1）。
@@ -176,6 +179,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     materials,
     overview,
     inquiries,
+    jobRegistry,
     elements,
     elementGraph,
     contradictions,
@@ -189,7 +193,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, elements, elementGraph, contradictions, reports, review, admin }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, jobRegistry, elements, elementGraph, contradictions, reports, review, admin }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

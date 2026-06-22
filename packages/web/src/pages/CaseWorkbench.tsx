@@ -1,18 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import {
   approveReport,
+  askInquiryDeep,
   askInquiryStream,
+  cancelJob,
   deleteMaterial,
-  detectContradictions,
   draftReport,
   exportReport,
-  extractElements,
   fetchFrameUrl,
   fetchMaterialRawUrl,
   getCase,
   getElementGraph,
+  getJobStatus,
   getMaterialContent,
   getReport,
   listCaseAudit,
@@ -23,6 +24,7 @@ import {
   markReview,
   processMaterial,
   reindexMaterial,
+  startJob,
   submitReport,
   uploadMaterial,
   type ApiCase,
@@ -31,6 +33,7 @@ import {
   type ApiElement,
   type ApiInquiry,
   type ApiInquiryStreamEvent,
+  type ApiJob,
   type ApiMaterial,
   type ApiReport,
   type AuditEvent,
@@ -102,7 +105,9 @@ export function CaseWorkbench() {
       </nav>
 
       <div className="workbench__body">
-        <Outlet />
+        {/* 按专题 id 重挂载当前面板：切换专题时彻底隔离各面板的进行中状态
+            （任务轮询 / 在途请求 / 问答历史），杜绝跨专题串台。 */}
+        <Outlet key={id} />
       </div>
     </div>
   );
@@ -161,6 +166,140 @@ function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+type JobKind = ApiJob["kind"];
+
+function useExtractionJob(
+  caseId: string,
+  kind: JobKind,
+  onDone: () => void,
+): { job: ApiJob | null; error: string | null; start: () => void; cancel: () => void } {
+  const [job, setJob] = useState<ApiJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const aliveRef = useRef(false);
+  const generationRef = useRef(0);
+  const jobRef = useRef<ApiJob | null>(null);
+  const onDoneRef = useRef(onDone);
+  const notifiedDoneJobRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
+
+  const clearPolling = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const applyJob = useCallback((next: ApiJob) => {
+    if (!aliveRef.current) return;
+    const previous = jobRef.current;
+    jobRef.current = next;
+    setJob(next);
+    if (next.state === "done") {
+      clearPolling();
+      if (previous?.state !== "done" && notifiedDoneJobRef.current !== next.id) {
+        notifiedDoneJobRef.current = next.id;
+        onDoneRef.current();
+      }
+      return;
+    }
+    if (next.state === "error" || next.state === "cancelled") {
+      clearPolling();
+      if (next.state === "error") setError(next.error ?? "任务失败");
+    }
+  }, [clearPolling]);
+
+  const pollOnce = useCallback(async () => {
+    if (!caseId) return;
+    const generation = generationRef.current;
+    try {
+      const next = await getJobStatus(caseId, kind);
+      if (!aliveRef.current || generation !== generationRef.current || !next) return;
+      applyJob(next);
+    } catch (e) {
+      if (!aliveRef.current || generation !== generationRef.current) return;
+      clearPolling();
+      setError((e as Error).message);
+    }
+  }, [applyJob, caseId, clearPolling, kind]);
+
+  const startPolling = useCallback(() => {
+    clearPolling();
+    timerRef.current = setInterval(() => {
+      void pollOnce();
+    }, 2000);
+  }, [clearPolling, pollOnce]);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    clearPolling();
+    jobRef.current = null;
+    notifiedDoneJobRef.current = null;
+    setJob(null);
+    setError(null);
+    if (caseId) {
+      void (async () => {
+        try {
+          const existing = await getJobStatus(caseId, kind);
+          if (!aliveRef.current || generation !== generationRef.current) return;
+          if (existing?.state === "running") {
+            applyJob(existing);
+            startPolling();
+          } else if (existing) {
+            jobRef.current = existing;
+            setJob(existing);
+            if (existing.state === "error") setError(existing.error ?? "任务失败");
+          }
+        } catch (e) {
+          if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
+        }
+      })();
+    }
+    return () => {
+      aliveRef.current = false;
+      clearPolling();
+    };
+  }, [applyJob, caseId, clearPolling, kind, startPolling]);
+
+  const start = useCallback(() => {
+    if (!caseId || jobRef.current?.state === "running") return;
+    const generation = generationRef.current;
+    void (async () => {
+      clearPolling();
+      setError(null);
+      try {
+        const next = await startJob(caseId, kind);
+        if (!aliveRef.current || generation !== generationRef.current) return;
+        applyJob(next);
+        if (next.state === "running") startPolling();
+      } catch (e) {
+        if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
+      }
+    })();
+  }, [applyJob, caseId, clearPolling, kind, startPolling]);
+
+  const cancel = useCallback(() => {
+    if (!caseId || jobRef.current?.state !== "running") return;
+    const generation = generationRef.current;
+    void (async () => {
+      setError(null);
+      try {
+        await cancelJob(caseId, kind);
+        if (aliveRef.current && generation === generationRef.current && jobRef.current?.state === "running" && !timerRef.current) startPolling();
+      } catch (e) {
+        if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
+      }
+    })();
+  }, [caseId, kind, startPolling]);
+
+  return { job, error, start, cancel };
 }
 
 /**
@@ -811,10 +950,9 @@ export function ElementsPanel() {
   const [view, setView] = useState<"list" | "graph" | "timeline">("list");
   const [activeCat, setActiveCat] = useState<ElementType | "all">("all");
   const [search, setSearch] = useState("");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const reloadElements = useCallback(() => {
     if (!user || !caseId) return;
     let alive = true;
     listElements(caseId)
@@ -825,20 +963,26 @@ export function ElementsPanel() {
     };
   }, [user, caseId]);
 
+  useEffect(() => {
+    return reloadElements();
+  }, [reloadElements]);
+
+  const onElementsDone = useCallback(() => {
+    void reloadElements();
+  }, [reloadElements]);
+  const { job, error: jobError, start: startExtraction, cancel: cancelExtraction } = useExtractionJob(caseId ?? "", "elements", onElementsDone);
+
   const handleExtract = async () => {
-    if (!user || !caseId || busy) return;
-    setBusy(true);
+    if (!user || !caseId) return;
     setError(null);
-    try {
-      setElements(await extractElements(caseId));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    startExtraction();
   };
 
   const all = elements ?? [];
+  const running = job?.state === "running";
+  const total = job?.progress.total ?? 0;
+  const done = job?.progress.done ?? 0;
+  const progressWidth = running && total > 0 ? `${Math.min(100, Math.round((done / total) * 100))}%` : "38%";
   const filtered = all.filter((e) => {
     const matchCat = activeCat === "all" || e.type === activeCat;
     const q = search.toLowerCase();
@@ -889,12 +1033,30 @@ export function ElementsPanel() {
               style={{ padding: "8px 12px 8px 32px", fontSize: "13px" }}
             />
           </div>
-          <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleExtract} disabled={busy}>
-            {busy ? "抽取中…" : elements && elements.length > 0 ? "重新抽取" : "提取要素"}
+          <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleExtract} disabled={running}>
+            {running ? "抽取中…" : elements && elements.length > 0 ? "重新抽取" : "提取要素"}
           </button>
         </div>
 
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
+        {jobError ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{jobError}</div> : null}
+        {running ? (
+          <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+            <div style={{ flex: 1, height: "6px", borderRadius: "999px", background: "rgba(148, 163, 184, 0.18)", overflow: "hidden" }}>
+              <div style={{ width: progressWidth, height: "100%", background: "var(--accent)", transition: "width 0.2s ease" }} />
+            </div>
+            <span style={{ color: "var(--text-muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
+              抽取中 · 批次 {done}/{total}
+            </span>
+            <button type="button" className="btn" style={{ padding: "4px 10px", fontSize: "12px" }} onClick={cancelExtraction} disabled={!running}>
+              取消
+            </button>
+          </div>
+        ) : job?.state === "error" ? (
+          <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>{job.error ?? "任务失败"}</div>
+        ) : job?.state === "cancelled" ? (
+          <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>已取消</div>
+        ) : null}
 
         <div className="elements-main">
           <table className="elements-table">
@@ -1175,11 +1337,10 @@ export function ContradictionsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
   const [contradictions, setContradictions] = useState<Contradiction[] | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
 
-  useEffect(() => {
+  const reloadContradictions = useCallback(() => {
     if (!user || !caseId) return;
     let alive = true;
     listContradictions(caseId)
@@ -1190,20 +1351,26 @@ export function ContradictionsPanel() {
     };
   }, [user, caseId]);
 
-  const handleDetect = async () => {
-    if (!user || !caseId || busy) return;
-    setBusy(true);
+  useEffect(() => {
+    return reloadContradictions();
+  }, [reloadContradictions]);
+
+  const onContradictionsDone = useCallback(() => {
+    void reloadContradictions();
+  }, [reloadContradictions]);
+  const { job, error: jobError, start: startDetection, cancel: cancelDetection } = useExtractionJob(caseId ?? "", "contradictions", onContradictionsDone);
+
+  const handleDetect = () => {
+    if (!user || !caseId) return;
     setError(null);
-    try {
-      setContradictions(await detectContradictions(caseId));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    startDetection();
   };
 
   const all = contradictions ?? [];
+  const running = job?.state === "running";
+  const total = job?.progress.total ?? 0;
+  const done = job?.progress.done ?? 0;
+  const progressWidth = running && total > 0 ? `${Math.min(100, Math.round((done / total) * 100))}%` : "38%";
 
   return (
     <div className="contradictions-layout">
@@ -1211,12 +1378,30 @@ export function ContradictionsPanel() {
         <span style={{ flex: 1, fontSize: "12px", color: "var(--text-dim)" }}>
           已发现 <strong style={{ color: "#fff" }}>{all.length}</strong> 组矛盾线索
         </span>
-        <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleDetect} disabled={busy}>
-          {busy ? "检测中…" : contradictions && contradictions.length > 0 ? "重新检测" : "检测矛盾"}
+        <button type="button" className="btn btn--primary" style={{ whiteSpace: "nowrap" }} onClick={handleDetect} disabled={running}>
+          {running ? "检测中…" : contradictions && contradictions.length > 0 ? "重新检测" : "检测矛盾"}
         </button>
       </div>
 
       {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
+      {jobError ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{jobError}</div> : null}
+      {running ? (
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          <div style={{ flex: 1, height: "6px", borderRadius: "999px", background: "rgba(148, 163, 184, 0.18)", overflow: "hidden" }}>
+            <div style={{ width: progressWidth, height: "100%", background: "var(--accent)", transition: "width 0.2s ease" }} />
+          </div>
+          <span style={{ color: "var(--text-muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
+            检测中 · 批次 {done}/{total}
+          </span>
+          <button type="button" className="btn" style={{ padding: "4px 10px", fontSize: "12px" }} onClick={cancelDetection} disabled={!running}>
+            取消
+          </button>
+        </div>
+      ) : job?.state === "error" ? (
+        <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>{job.error ?? "任务失败"}</div>
+      ) : job?.state === "cancelled" ? (
+        <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>已取消</div>
+      ) : null}
 
       <div className="contradictions-list">
         {contradictions === null ? (
@@ -1375,6 +1560,8 @@ export function InquiryPanel() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deepMode, setDeepMode] = useState(false);
+  const [activeDeep, setActiveDeep] = useState(false);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const [reviewedRefs, setReviewedRefs] = useState<Set<string>>(new Set());
   const [liveQuestion, setLiveQuestion] = useState<string | null>(null);
@@ -1479,8 +1666,6 @@ export function InquiryPanel() {
     e.preventDefault();
     const q = input.trim();
     if (!q || !user || !caseId || busy) return;
-    const controller = new AbortController();
-    streamControllerRef.current = controller;
     userStoppedRef.current = false;
     toolOrderRef.current = 0;
     setBusy(true);
@@ -1489,6 +1674,28 @@ export function InquiryPanel() {
     setLiveQuestion(q);
     setLiveText("");
     setToolTrace([]);
+    if (deepMode) {
+      setActiveDeep(true);
+      try {
+        const inquiry = await askInquiryDeep(caseId, q);
+        if (!mountedRef.current) return;
+        setHistory((prev) => [...prev, inquiry]);
+        clearLiveState();
+      } catch (err) {
+        if (mountedRef.current) {
+          setError((err as Error).message);
+          clearLiveState();
+        }
+      } finally {
+        if (mountedRef.current) {
+          setActiveDeep(false);
+          setBusy(false);
+        }
+      }
+      return;
+    }
+    const controller = new AbortController();
+    streamControllerRef.current = controller;
     try {
       await askInquiryStream(caseId, q, handleStreamEvent, controller.signal);
     } catch (err) {
@@ -1555,7 +1762,7 @@ export function InquiryPanel() {
                 </svg>
               </div>
               <div className="chat-content">
-                <p className="live-narration">{liveText || "研判中…"}</p>
+                <p className="live-narration">{liveText || (activeDeep ? "深度分析中…（已开启思考模式，可能稍慢）" : "研判中…")}</p>
                 {toolTrace.length > 0 ? (
                   <div className="tool-trace" aria-label="工具调用轨迹">
                     {toolTrace.map((entry) => (
@@ -1601,7 +1808,7 @@ export function InquiryPanel() {
               </svg>
             </div>
             <div className="chat-content">
-              <p className="live-narration">研判中…</p>
+              <p className="live-narration">{activeDeep ? "深度分析中…（已开启思考模式，可能稍慢）" : "研判中…"}</p>
             </div>
           </div>
         ) : null}
@@ -1614,6 +1821,15 @@ export function InquiryPanel() {
       </div>
 
       <form onSubmit={handleSend} className="chat-input-area">
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--text-muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            checked={deepMode}
+            onChange={(e) => setDeepMode(e.target.checked)}
+            disabled={busy}
+          />
+          深度分析
+        </label>
         <input
           type="text"
           className="input-text"
@@ -1625,7 +1841,7 @@ export function InquiryPanel() {
         <button type="submit" className="btn btn--primary" disabled={busy}>
           发送
         </button>
-        {busy ? (
+        {busy && !activeDeep ? (
           <button type="button" className="btn btn--danger" onClick={handleStop}>
             停止
           </button>

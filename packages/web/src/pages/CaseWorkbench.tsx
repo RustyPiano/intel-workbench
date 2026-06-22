@@ -86,7 +86,7 @@ export function CaseWorkbench() {
             </span>
           ) : null}
         </div>
-        <span className="workbench__hint">素材加工 · 要素抽取 · 问答带溯源 · 报告复核闸门 均已接通（结论均绑定素材出处）。</span>
+        <span className="workbench__hint">覆盖素材解析、要素抽取、溯源问答与报告复核全流程，所有研判结论均可回溯至素材原文出处。</span>
       </div>
 
       <nav className="tabs">
@@ -432,7 +432,7 @@ export function MaterialsPanel() {
   // 删除素材（清理落盘 + 从专题摘除）；删当前选中则清空阅读区，列表回落首项。
   const handleDelete = async (mid: string) => {
     if (!user || !caseId || deleting) return;
-    if (!window.confirm("确认删除该素材？将一并清除其解析文本、切块与检索索引，不可恢复。")) return;
+    if (!window.confirm("确认删除该素材？将一并清除其解析文本、片段与检索索引，此操作不可恢复。")) return;
     setDeleting(true);
     setError(null);
     try {
@@ -524,7 +524,7 @@ export function MaterialsPanel() {
           <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ fontSize: "11px", color: "var(--text-dim)", marginBottom: "5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {uploadProgress.fraction >= 1
-                ? `服务端解析+建索引中… ${uploadProgress.index}/${uploadProgress.total} — ${uploadProgress.name}`
+                ? `正在解析并建立检索索引… ${uploadProgress.index}/${uploadProgress.total} — ${uploadProgress.name}`
                 : `上传中 ${uploadProgress.index}/${uploadProgress.total} · ${Math.round(uploadProgress.fraction * 100)}% — ${uploadProgress.name}`}
             </div>
             <div style={{ height: "4px", background: "rgba(255,255,255,0.1)", borderRadius: "2px", overflow: "hidden" }}>
@@ -555,7 +555,7 @@ export function MaterialsPanel() {
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
         ) : materials.length === 0 ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-            还没有素材。点击「+ 汇入」上传：文档（TXT/MD/CSV/JSON/LOG 及 PDF/Word/PPT/Excel 均自动解析切块）；音频/视频/图片汇入后点「加工」转写/解析为带时间码/坐标的可引用片段。
+            暂无素材。点击「+ 汇入」上传线索：支持文档（TXT / Markdown / CSV / JSON / 日志，以及 PDF / Word / PPT / Excel，自动解析），音频、视频与图片可在汇入后进行转写与识别，统一形成可检索、可引用的素材。
           </div>
         ) : (
           materials.map((m) => {
@@ -567,7 +567,7 @@ export function MaterialsPanel() {
                   <span>{MODALITY_LABELS[m.modality]} · {formatSize(m.size)}</span>
                   <span style={{ color: s.color }}>
                     {s.text}
-                    {m.status === "done" && m.chunk_count !== undefined ? ` · ${m.chunk_count} 块` : ""}
+                    {m.status === "done" && m.chunk_count !== undefined ? ` · ${m.chunk_count} 个片段` : ""}
                   </span>
                 </div>
               </div>
@@ -580,7 +580,7 @@ export function MaterialsPanel() {
       <div className="materials-viewer">
         {!content ? (
           <div style={{ padding: "32px", color: "var(--text-dim)", fontSize: "14px" }}>
-            {materials && materials.length === 0 ? "汇入素材后在此阅读归一化原文与切块结果。" : "选择左侧素材查看内容。"}
+            {materials && materials.length === 0 ? "汇入素材后，可在此查看解析后的原文与可引用片段。" : "选择左侧素材查看内容。"}
           </div>
         ) : (
           <>
@@ -601,7 +601,7 @@ export function MaterialsPanel() {
                       style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
                       disabled={reindexing || deleting}
                       onClick={() => void handleReindex(content.material.id)}
-                      title="重新计算并写入稠密检索向量（embed 端点恢复后用）"
+                      title="重新生成该素材的语义检索索引"
                     >
                       <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -626,7 +626,7 @@ export function MaterialsPanel() {
               <div style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "4px" }}>
                 模态: <strong style={{ color: "#fff" }}>{MODALITY_LABELS[content.material.modality]}</strong> | 格式: {content.material.format} | 大小:{" "}
                 {formatSize(content.material.size)} | 汇入: {content.material.ingested_at.replace("T", " ").slice(0, 19)}
-                {content.chunkCount !== undefined ? ` | 切块: ${content.chunkCount}` : ""}
+                {content.chunkCount !== undefined ? ` | 片段: ${content.chunkCount}` : ""}
               </div>
             </div>
 
@@ -733,7 +733,7 @@ export function MaterialsPanel() {
                     <strong>{content.note ?? "该素材尚未加工完成。"}</strong>
                   </div>
                   <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
-                    （视频/图像加工见 P2.3b；该模态待接入本地模型后接通。）
+                    点击上方「开始加工」，对音视频与图像进行转写与识别，生成可引用片段。
                   </div>
                 </div>
               )}
@@ -1825,8 +1825,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "case.update": "更新专题",
   "material.ingest": "汇入素材",
   "material.process": "加工媒体素材",
-  "material.index": "建稠密索引",
-  "material.reindex": "重建稠密索引",
+  "material.index": "建立检索索引",
+  "material.reindex": "重建检索索引",
   "material.delete": "删除素材",
   "inquiry.create": "智能问答",
   "inquiry.retrieve": "检索取材",

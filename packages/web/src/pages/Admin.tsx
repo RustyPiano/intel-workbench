@@ -348,7 +348,7 @@ export function AdminSkillsPage() {
   return (
     <div className="page">
       <h1 className="page__title">Skill 技能管理</h1>
-      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>列表 / 启停 / 自检；离线导入 Skill 不在一期。</p>
+      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>技能列表、启停与健康自检。</p>
       {error ? <p style={{ color: "var(--danger-light)" }}>{error}</p> : null}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
         {(skills ?? []).map((s) => (
@@ -405,7 +405,7 @@ export function AdminModelsPage() {
             </span>
           </Row>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
-            自检为脱敏只读：仅核对配置与白名单，不发起对外探测调用。语音/多模态档位切换不在一期。
+            自检为只读核对：仅校验模型配置与外发白名单，不发起任何对外探测调用。
           </p>
         </div>
       ) : null}

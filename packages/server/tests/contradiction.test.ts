@@ -125,6 +125,24 @@ describe("ContradictionService", () => {
     expect(result[0]?.claim_b.citation.content_hash).toEqual(expect.any(String));
   });
 
+  it("出站被拒时显式抛出并记 error 审计（不静默吞成空结果）", async () => {
+    const { caseId } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },
+    ]);
+    // 端点不在白名单 → OfflineGuard 拒绝出站 → 检测必须失败（抛出），而非返回 [] 让任务呈 done+空。
+    const service = new ContradictionService(
+      fixture.paths,
+      fixture.audit,
+      fixture.cases,
+      fixture.materials,
+      { adapter: new ScriptedJsonAdapter([]), guard: new OfflineGuard([], fixture.audit), modelEndpoint: ENDPOINT },
+    );
+
+    await expect(service.detect(OPERATOR, caseId)).rejects.toThrow();
+    const events = await fixture.audit.readCaseEvents(caseId);
+    expect(events.some((e) => e.action === "contradiction.detect" && e.result === "error")).toBe(true);
+  });
+
   it("detects an intra-material contradiction", async () => {
     const { caseId, chunks } = await createCaseWithDocs(fixture, [
       {

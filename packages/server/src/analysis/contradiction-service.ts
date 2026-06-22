@@ -172,7 +172,9 @@ export class ContradictionService {
         caseId,
         detail: { result: "error", error: e instanceof Error ? e.message : String(e) },
       });
-      return [];
+      // 失败（含 OfflineGuard 出站拒绝）必须显式抛出 → 任务落「error」态而非「done+空」，
+      // 否则会把"被拒/出错"误呈为"未发现矛盾"（与 element.extract 一致：失败即失败）。
+      throw e;
     }
   }
 
@@ -211,7 +213,7 @@ export class ContradictionService {
     if (process.env.MINI_AGENT_CONTRADICTION_DEBUG) {
       console.error(`[ct-debug] grounded=${claims.length} clusters=${clusters.size} sizes=[${[...clusters.values()].map((c) => c.length).join(",")}] keys=${[...clusters.keys()].slice(0, 20).join(" | ")}`);
     }
-    const { contradictions, pairsJudged } = await this.judgeClusters(actor, clusters);
+    const { contradictions, pairsJudged } = await this.judgeClusters(actor, clusters, opts.signal);
 
     contradictions.sort((a, b) => b.confidence - a.confidence);
     this.detectionStats.set(contradictions, {
@@ -279,7 +281,7 @@ export class ContradictionService {
     return clusters;
   }
 
-  private async judgeClusters(actor: Identity, clusters: Map<string, GroundedClaim[]>): Promise<{ contradictions: Contradiction[]; pairsJudged: number }> {
+  private async judgeClusters(actor: Identity, clusters: Map<string, GroundedClaim[]>, signal?: AbortSignal): Promise<{ contradictions: Contradiction[]; pairsJudged: number }> {
     const contradictions: Contradiction[] = [];
     let pairsJudged = 0;
     for (const claims of clusters.values()) {
@@ -289,7 +291,9 @@ export class ContradictionService {
         pairs = pairs.slice(0, MAX_PAIRS_PER_CLUSTER);
       }
       for (const [claimA, claimB] of pairs) {
-        const judge = await this.judgePair(actor, claimA, claimB);
+        // 取消须贯穿判定阶段：批间检查中止信号，及时停掉后续成对 NLI 出站。
+        if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+        const judge = await this.judgePair(actor, claimA, claimB, signal);
         pairsJudged++;
         if (judge.relation !== "contradiction") continue;
         const crossSource = claimA.material_id !== claimB.material_id;
@@ -319,7 +323,7 @@ export class ContradictionService {
     return pairs;
   }
 
-  private async judgePair(actor: Identity, claimA: GroundedClaim, claimB: GroundedClaim): Promise<JudgeResult> {
+  private async judgePair(actor: Identity, claimA: GroundedClaim, claimB: GroundedClaim, signal?: AbortSignal): Promise<JudgeResult> {
     const systemPrompt = this.promptStore ? await this.promptStore.getBody("contradiction-judge") : JUDGE_PROMPT;
     await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "contradiction-judge" });
     const raw = await generateJson(
@@ -331,8 +335,8 @@ export class ContradictionService {
         "请只输出 JSON。",
       ].join("\n"),
       // 成对矛盾判定：benchmark 实测开思考反而降召回（F1 0.909 vs 关思考 0.957，见 benchmark-summary.md），
-      // 故默认关思考（更快更省且更准）；env 置 "enabled" 可复跑对比。
-      { maxTokens: 800, thinking: process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING === "enabled" ? "enabled" : "disabled" },
+      // 故默认关思考（更快更省且更准）；env 置 "enabled" 可复跑对比。取消信号透传以中止在途判定。
+      { maxTokens: 800, thinking: process.env.MINI_AGENT_CONTRADICTION_JUDGE_THINKING === "enabled" ? "enabled" : "disabled", signal },
     );
     return asJudgeResult(raw);
   }

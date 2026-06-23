@@ -7,6 +7,7 @@ import type { ContradictionService } from "../analysis/contradiction-service.js"
 import type { ElementGraphService } from "../analysis/element-graph-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { ElementService } from "../elements/element-service.js";
+import type { FindingService } from "../finding/finding-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { JobRegistry } from "../jobs/job-registry.js";
 import type { MaterialService } from "../materials/material-service.js";
@@ -21,6 +22,7 @@ import { createCasesRouter } from "./cases.js";
 import { createContradictionsRouter } from "./contradictions.js";
 import { createElementGraphRouter } from "./element-graph.js";
 import { createElementsRouter } from "./elements.js";
+import { createFindingsRouter } from "./findings.js";
 import { createInquiriesRouter } from "./inquiries.js";
 import { createJobsRouter } from "./jobs.js";
 import { createMaterialsRouter } from "./materials.js";
@@ -44,6 +46,7 @@ export interface ApiServices {
   inquiries: InquiryService;
   jobRegistry: JobRegistry;
   elements: ElementService;
+  findings: FindingService;
   elementGraph: ElementGraphService;
   contradictions: ContradictionService;
   reports: ReportService;
@@ -83,6 +86,9 @@ export function createApiRouter(services: ApiServices): Router {
         "GET /api/materials/:mid",
         "GET/POST /api/cases/:id/inquiries",
         "GET/POST /api/cases/:id/elements",
+        "GET/POST /api/cases/:id/findings",
+        "POST /api/cases/:id/findings/:findingId/review",
+        "PATCH /api/cases/:id/contradictions/:contradictionId/acknowledge",
         "POST /api/cases/:id/jobs/:kind/start",
         "GET /api/cases/:id/jobs/:kind/status",
         "POST /api/cases/:id/jobs/:kind/cancel",
@@ -107,6 +113,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createInquiriesRouter(services.inquiries));
   router.use("/cases", createJobsRouter({ registry: services.jobRegistry, elements: services.elements, contradictions: services.contradictions, cases: services.cases, audit: services.audit }));
   router.use("/cases", createElementsRouter(services.elements));
+  router.use("/cases", createFindingsRouter(services.findings));
   router.use("/cases", createElementGraphRouter(services.elementGraph));
   router.use("/cases", createContradictionsRouter(services.contradictions));
   router.use("/cases", createReportsRouter(services.reports));

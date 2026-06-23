@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
 
 import {
+  acknowledgeContradiction,
   approveReport,
   askInquiryDeep,
   askInquiryStream,
   cancelJob,
   advanceTaskStage,
   confirmTaskStage,
+  createFinding,
   createTaskRun,
   deleteMaterial,
   draftReport,
@@ -23,11 +25,13 @@ import {
   listCaseAudit,
   listContradictions,
   listElements,
+  listFindings,
   listInquiries,
   listMaterials,
   markReview,
   processMaterial,
   reindexMaterial,
+  reviewFinding,
   startJob,
   submitReport,
   uploadMaterial,
@@ -35,6 +39,7 @@ import {
   type ApiCitation,
   type ApiClaim,
   type ApiElement,
+  type ApiFinding,
   type ApiInquiry,
   type ApiInquiryStreamEvent,
   type ApiJob,
@@ -45,6 +50,7 @@ import {
   type TaskAdvanceStatus,
   type AuditEvent,
   type Contradiction,
+  type ContradictionAcknowledgementStatus,
   type ContradictionDetectionResult,
   type ElementType,
   type ElementGraph,
@@ -61,6 +67,7 @@ const TABS: { to: string; label: string }[] = [
   { to: "elements", label: "要素提取" },
   { to: "contradictions", label: "矛盾检测" },
   { to: "inquiry", label: "智能问答" },
+  { to: "findings", label: "研判结论" },
   { to: "report", label: "通报起草" },
   { to: "audit", label: "专题审计" },
 ];
@@ -1532,6 +1539,8 @@ export function ContradictionsPanel() {
   const [contradictionResult, setContradictionResult] = useState<ContradictionDetectionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const [resolving, setResolving] = useState<string | null>(null);
+  const [ackNotes, setAckNotes] = useState<Record<string, string>>({});
 
   const reloadContradictions = useCallback(() => {
     if (!user || !caseId) return;
@@ -1559,9 +1568,26 @@ export function ContradictionsPanel() {
     startDetection();
   };
 
+  const handleAcknowledge = async (contradictionId: string, status: Exclude<ContradictionAcknowledgementStatus, "open">) => {
+    if (!user || !caseId || resolving) return;
+    const key = `${contradictionId}:${status}`;
+    setResolving(key);
+    setError(null);
+    try {
+      await acknowledgeContradiction(caseId, contradictionId, { status, note: (ackNotes[contradictionId] ?? "").trim() });
+      void reloadContradictions();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setResolving(null);
+    }
+  };
+
   const jobResult = job?.kind === "contradictions" && job.result ? job.result as ContradictionDetectionResult : null;
   const latestResult = jobResult ?? contradictionResult;
   const all = latestResult?.contradictions ?? [];
+  const ackByContradiction = new Map((latestResult?.acknowledgements ?? []).map((ack) => [ack.contradiction_id, ack]));
+  const canResolve = user?.role === "security" || user?.role === "admin";
   const running = job?.state === "running";
   const total = job?.progress.total ?? 0;
   const done = job?.progress.done ?? 0;
@@ -1621,11 +1647,20 @@ export function ContradictionsPanel() {
             检测完成，未发现矛盾线索。
           </div>
         ) : (
-          all.map((item) => (
-            <div key={item.id} className="contradiction-row">
+          all.map((item) => {
+            const ack = ackByContradiction.get(item.id);
+            const ackStatus = ack?.status ?? "open";
+            const unresolvedHigh = item.confidence >= 0.75 && ackStatus === "open";
+            return (
+            <div key={item.id} className="contradiction-row" style={unresolvedHigh ? { borderLeft: "3px solid var(--danger-light)" } : undefined}>
               <div className="contradiction-row__head">
                 <div style={{ fontWeight: 700 }}>{item.attribute ? `${item.entity} · ${item.attribute}` : item.entity}</div>
                 <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+                  {unresolvedHigh ? (
+                    <span className="badge badge--devmode" style={{ padding: "3px 8px", fontSize: "11px" }}>未解决</span>
+                  ) : ackStatus !== "open" ? (
+                    <span className="badge badge--offline" style={{ padding: "3px 8px", fontSize: "11px" }}>{ackStatus === "resolved" ? "已解决" : "已忽略"}</span>
+                  ) : null}
                   <span className={`contradiction-scope contradiction-scope--${item.scope === "cross-material" ? "cross" : "intra"}`}>
                     {CONTRADICTION_SCOPE_LABELS[item.scope]}
                   </span>
@@ -1651,8 +1686,41 @@ export function ContradictionsPanel() {
               </div>
 
               <div style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.7" }}>{item.rationale}</div>
+              {item.confidence >= 0.75 ? (
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    placeholder="处理说明（可选）"
+                    value={ackNotes[item.id] ?? ""}
+                    onChange={(e) => setAckNotes((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                    disabled={!canResolve || ackStatus !== "open" || Boolean(resolving)}
+                    style={{ minWidth: "220px", flex: "1 1 220px", background: "rgba(15,23,42,0.45)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text)", padding: "5px 8px", fontSize: "12px" }}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "4px 10px", fontSize: "12px" }}
+                    disabled={!canResolve || Boolean(resolving) || ackStatus !== "open"}
+                    title={canResolve ? "标记为已解决" : "仅保密员或管理员可处理矛盾"}
+                    onClick={() => handleAcknowledge(item.id, "resolved")}
+                  >
+                    {resolving === `${item.id}:resolved` ? "处理中…" : "解决"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "4px 10px", fontSize: "12px" }}
+                    disabled={!canResolve || Boolean(resolving) || ackStatus !== "open"}
+                    title={canResolve ? "驳回或忽略该矛盾" : "仅保密员或管理员可处理矛盾"}
+                    onClick={() => handleAcknowledge(item.id, "dismissed")}
+                  >
+                    {resolving === `${item.id}:dismissed` ? "处理中…" : "驳回/忽略"}
+                  </button>
+                </div>
+              ) : null}
             </div>
-          ))
+          );
+          })
         )}
       </div>
 
@@ -2071,6 +2139,168 @@ export function InquiryPanel() {
   );
 }
 
+// ==================== 5. Findings Sub-panel ====================
+
+const FINDING_STATUS_LABELS: Record<ApiFinding["review_status"], string> = {
+  draft: "待复核",
+  approved: "已核准",
+  rejected: "已驳回",
+};
+
+const SUPPORT_STATUS_LABELS: Record<NonNullable<ApiCitation["support_status"]>, string> = {
+  supported: "supported",
+  "support-unverified": "support-unverified",
+  unsupported: "unsupported",
+};
+
+function isPromotableClaim(claim: ApiClaim): boolean {
+  if (claim.citations.length === 0) return false;
+  if (claim.support_status === "unsupported") return false;
+  return claim.support_status === "supported" || claim.support_status === "support-unverified" || claim.status === "verified";
+}
+
+function averageCitationConfidence(claim: ApiClaim): number {
+  if (claim.citations.length === 0) return 0.5;
+  return claim.citations.reduce((sum, citation) => sum + citation.confidence, 0) / claim.citations.length;
+}
+
+export function FindingsPanel() {
+  const { id: caseId } = useParams<{ id: string }>();
+  const { user } = useSession();
+  const [caseInfo, setCaseInfo] = useState<ApiCase | null>(null);
+  const [findings, setFindings] = useState<ApiFinding[]>([]);
+  const [inquiries, setInquiries] = useState<ApiInquiry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+
+  const load = useCallback(async () => {
+    if (!user || !caseId) return;
+    try {
+      const [nextCase, nextFindings, nextInquiries] = await Promise.all([
+        getCase(caseId),
+        listFindings(caseId),
+        listInquiries(caseId),
+      ]);
+      setCaseInfo(nextCase);
+      setFindings(nextFindings);
+      setInquiries(nextInquiries);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [user, caseId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const canCreate = Boolean(user && (user.role === "admin" || caseInfo?.owner === user.id));
+  const canReview = user?.role === "security" || user?.role === "admin";
+  const createTitle = canCreate ? "创建 Finding" : "仅专题创建者或管理员可创建 Finding";
+  const reviewTitle = canReview ? "复核 Finding" : "仅保密员或管理员可复核 Finding";
+  const claimRows = inquiries.flatMap((inquiry) =>
+    inquiry.claims.map((claim, index) => ({ inquiry, claim, ref: `${inquiry.id}:${index}` })).filter((row) => isPromotableClaim(row.claim)),
+  );
+
+  const handleCreate = async (claim: ApiClaim, ref: string) => {
+    if (!caseId || busy) return;
+    setBusy(`create:${ref}`);
+    setError(null);
+    try {
+      await createFinding(caseId, { claim, confidence: averageCitationConfidence(claim) });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleReview = async (findingId: string, review_status: "approved" | "rejected") => {
+    if (!caseId || busy) return;
+    setBusy(`${review_status}:${findingId}`);
+    setError(null);
+    try {
+      await reviewFinding(caseId, findingId, review_status);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: "20px", height: "520px" }}>
+      <div className="contradictions-list">
+        {findings.length === 0 ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>暂无 Finding。</div>
+        ) : (
+          findings.map((finding) => (
+            <div key={finding.id} className="contradiction-row">
+              <div className="contradiction-row__head">
+                <div style={{ fontWeight: 700 }}>{finding.conclusion}</div>
+                <span className={`badge ${finding.review_status === "approved" ? "badge--offline" : finding.review_status === "rejected" ? "badge--devmode" : ""}`} style={{ padding: "3px 8px", fontSize: "11px" }}>
+                  {FINDING_STATUS_LABELS[finding.review_status]}
+                </span>
+              </div>
+              <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>置信度 {Math.round(finding.confidence * 100)}%</div>
+              <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
+                支持引用
+                <CitationChips claim={{ text: finding.conclusion, type: "fact", status: "verified", citations: finding.supporting_citations }} onFrame={setFrameCite} />
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
+                {finding.supporting_citations.map((citation, index) => (
+                  <span key={`${citation.material_id}:${citation.content_hash}:${index}`}>
+                    引用 {index + 1} support_status: {citation.support_status ? SUPPORT_STATUS_LABELS[citation.support_status] : "未标注"}
+                  </span>
+                ))}
+              </div>
+              {finding.opposing_citations.length > 0 ? (
+                <div style={{ fontSize: "13px", lineHeight: "1.7", color: "var(--text-dim)" }}>
+                  相反引用
+                  <CitationChips claim={{ text: finding.conclusion, type: "fact", status: "verified", citations: finding.opposing_citations }} onFrame={setFrameCite} />
+                </div>
+              ) : null}
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button type="button" className="btn" style={{ padding: "4px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canReview || finding.review_status === "approved"} title={reviewTitle} onClick={() => handleReview(finding.id, "approved")}>
+                  核准
+                </button>
+                <button type="button" className="btn btn--danger" style={{ padding: "4px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canReview || finding.review_status === "rejected"} title={reviewTitle} onClick={() => handleReview(finding.id, "rejected")}>
+                  驳回
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="report-sidebar" style={{ overflow: "auto" }}>
+        <div className="report-sidebar__title">从问答结论创建</div>
+        {claimRows.length === 0 ? (
+          <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>暂无可创建 Finding 的支撑结论。</div>
+        ) : (
+          claimRows.map(({ claim, ref }) => (
+            <div key={ref} style={{ borderBottom: "1px solid var(--border)", paddingBottom: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div style={{ fontSize: "13px", lineHeight: "1.6" }}>
+                {claim.text}
+                <CitationChips claim={claim} onFrame={setFrameCite} />
+              </div>
+              <button type="button" className="btn btn--primary" style={{ padding: "5px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canCreate} title={createTitle} onClick={() => handleCreate(claim, ref)}>
+                {busy === `create:${ref}` ? "创建中…" : "创建 Finding"}
+              </button>
+            </div>
+          ))
+        )}
+        {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
+      </div>
+
+      {frameCite ? <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} /> : null}
+    </div>
+  );
+}
+
 // ==================== 5. Report Sub-panel ====================
 
 const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: string }[] = [
@@ -2079,6 +2309,21 @@ const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: string }
   { status: "approved", label: "已复核", hint: "复核通过，方可导出" },
   { status: "exported", label: "已导出", hint: "导出留存（动作入审计）" },
 ];
+
+const GATE_REASON_GLOSSES: Record<string, string> = {
+  "coverage:uncited-fact": "存在无引用支撑的事实性内容",
+  "coverage:body-unsupported": "正文未逐字复述所选已审 Finding 结论",
+  "citation:no-span": "引用缺少有效 span 原文",
+  "citation:invalid": "引用无法匹配当前素材原文或哈希",
+  "finding:missing": "报告引用的 Finding 不存在",
+  "finding:rejected": "报告引用了已驳回 Finding",
+  "finding:not-approved": "报告引用了未核准 Finding",
+  "contradiction:high-severity-unresolved": "存在未处理的高置信矛盾",
+};
+
+function gateReasonGloss(reason: string): string {
+  return GATE_REASON_GLOSSES[reason] ?? "导出闸门未通过";
+}
 
 function specToBody(report: ApiReport | null): string {
   if (!report) return "";
@@ -2093,6 +2338,9 @@ export function ReportPanel() {
   const [report, setReport] = useState<ApiReport | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [approvedFindings, setApprovedFindings] = useState<ApiFinding[]>([]);
+  const [selectedFindingIds, setSelectedFindingIds] = useState<string[]>([]);
+  const [gateReasons, setGateReasons] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -2100,13 +2348,15 @@ export function ReportPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
-    getReport(caseId)
-      .then((r) => {
+    Promise.all([getReport(caseId), listFindings(caseId)])
+      .then(([r, fs]) => {
         if (!alive) return;
+        setApprovedFindings(fs.filter((finding) => finding.review_status === "approved"));
         setReport(r);
         if (r) {
           setTitle(r.spec.title);
           setBody(specToBody(r));
+          setSelectedFindingIds([...new Set(r.spec.sections.flatMap((section) => section.finding_ids ?? []))]);
         }
         setLoaded(true);
       })
@@ -2120,8 +2370,12 @@ export function ReportPanel() {
     if (!user || !caseId || busy) return;
     setBusy(true);
     setError(null);
+    setGateReasons([]);
     try {
-      setReport(await fn());
+      const next = await fn();
+      setReport(next);
+      setTitle(next.spec.title);
+      setBody(specToBody(next));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -2134,13 +2388,15 @@ export function ReportPanel() {
       setError("报告标题为必填项");
       return;
     }
-    void run(() => draftReport(caseId!, { title: title.trim(), body }));
+    const finding_ids = selectedFindingIds.filter((findingId) => approvedFindings.some((finding) => finding.id === findingId));
+    void run(() => draftReport(caseId!, finding_ids.length > 0 ? { title: title.trim(), finding_ids } : { title: title.trim(), body }));
   };
 
   const handleExport = async () => {
     if (!user || !caseId) return;
     setBusy(true);
     setError(null);
+    setGateReasons([]);
     try {
       const out = await exportReport(caseId);
       const blob = new Blob([out.content], { type: "text/markdown" });
@@ -2152,6 +2408,8 @@ export function ReportPanel() {
       URL.revokeObjectURL(url);
       setReport((prev) => (prev ? { ...prev, status: out.status } : prev));
     } catch (e) {
+      const reasons = ((e as Error & { result?: { reasons?: string[] } }).result?.reasons ?? []);
+      setGateReasons(reasons);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -2160,6 +2418,9 @@ export function ReportPanel() {
 
   const status = report?.status ?? "draft";
   const stepIndex = REPORT_STEPS.findIndex((s) => s.status === status);
+  const toggleFinding = (findingId: string) => {
+    setSelectedFindingIds((prev) => prev.includes(findingId) ? prev.filter((id) => id !== findingId) : [...prev, findingId]);
+  };
 
   return (
     <div className="report-layout">
@@ -2185,15 +2446,41 @@ export function ReportPanel() {
 
         <textarea
           className="report-textarea"
-          placeholder="正文：可分多段填写基本情况、分析研判、处置建议……保存后由 intel-bulletin 渲染为公文格式。"
+          placeholder={selectedFindingIds.length > 0 ? "已选择 Finding，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后由 intel-bulletin 渲染为公文格式。"}
           value={body}
           onChange={(e) => setBody(e.target.value)}
+          disabled={selectedFindingIds.length > 0}
         />
+        <div style={{ color: "var(--text-muted)", fontSize: "12px", paddingTop: "6px" }}>
+          正文须逐字复述所选已审 Finding 结论；自由叙述暂不支持
+        </div>
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px 0" }}>{error}</div> : null}
+        {gateReasons.length > 0 ? (
+          <div style={{ border: "1px solid rgba(248,113,113,0.35)", background: "rgba(127,29,29,0.22)", borderRadius: "var(--radius)", padding: "10px 12px", color: "var(--danger-light)", fontSize: "12px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            {gateReasons.map((reason) => (
+              <div key={reason} style={{ display: "flex", gap: "8px", alignItems: "baseline", flexWrap: "wrap" }}>
+                <code>{reason}</code>
+                <span>{gateReasonGloss(reason)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="report-sidebar">
         <div className="report-sidebar__title">报告复核状态</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准 Finding</div>
+          {approvedFindings.length === 0 ? (
+            <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>暂无已核准 Finding</span>
+          ) : approvedFindings.map((finding) => (
+            <label key={finding.id} style={{ display: "flex", gap: "8px", alignItems: "flex-start", color: "var(--text-dim)", fontSize: "12px", lineHeight: "1.5" }}>
+              <input type="checkbox" checked={selectedFindingIds.includes(finding.id)} onChange={() => toggleFinding(finding.id)} disabled={busy} />
+              <span>{finding.conclusion}</span>
+            </label>
+          ))}
+        </div>
 
         <div className="workflow-steps">
           {REPORT_STEPS.map((step, i) => (

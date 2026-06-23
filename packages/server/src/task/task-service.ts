@@ -15,6 +15,7 @@ import type {
   TaskStageState,
   TaskTemplate,
 } from "../domain/types.js";
+import { readFindings } from "../finding/finding-store.js";
 import { writeFileAtomic } from "../util/atomic.js";
 import { shortId } from "../util/hash.js";
 
@@ -68,6 +69,7 @@ interface CaseFacts {
   contradictionStatus: string | null;
   highSeverityContradictionCount: number;
   reportStatus: ReportStatus | null;
+  approvedFindingCount: number;
 }
 
 interface ContradictionResultLike {
@@ -310,6 +312,8 @@ export class TaskService {
         return facts.hasQualitySignal;
       case "evidence-units":
         return facts.elementCount > 0;
+      case "assessment":
+        return facts.approvedFindingCount > 0;
       case "report-generation":
         return facts.reportStatus === "approved" || facts.reportStatus === "exported";
       case "review-export":
@@ -349,12 +353,17 @@ export class TaskService {
       contradictionStatus: typeof contradictionResult?.status === "string" ? contradictionResult.status : null,
       highSeverityContradictionCount: contradictions.filter((item) => (item.confidence ?? 0) >= 0.75).length,
       reportStatus: isReportStatus(report?.status) ? report.status : null,
+      approvedFindingCount: await this.countApprovedFindings(caseId),
     };
   }
 
   private async countJsonArray(file: string): Promise<number> {
     const value = await this.readJson<unknown>(file);
     return Array.isArray(value) ? value.length : 0;
+  }
+
+  private async countApprovedFindings(caseId: string): Promise<number> {
+    return (await readFindings(this.paths, caseId)).filter((finding) => finding.review_status === "approved").length;
   }
 
   private async readJson<T>(file: string): Promise<T | null> {

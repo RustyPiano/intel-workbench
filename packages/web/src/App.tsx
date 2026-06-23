@@ -16,6 +16,7 @@ import {
   CaseWorkbench,
   ContradictionsPanel,
   ElementsPanel,
+  FindingsPanel,
   InquiryPanel,
   MaterialsPanel,
   ReportPanel,
@@ -51,6 +52,7 @@ export function App() {
           <Route path="elements" element={<ElementsPanel />} />
           <Route path="contradictions" element={<ContradictionsPanel />} />
           <Route path="inquiry" element={<InquiryPanel />} />
+          <Route path="findings" element={<FindingsPanel />} />
           <Route path="report" element={<ReportPanel />} />
           <Route path="audit" element={<CaseAuditPanel />} />
         </Route>

@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { RuntimeAgent, RUNTIME_VERSION, type ModelStreamEvent, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
+import { RuntimeAgent, RUNTIME_VERSION, activateSkillTool, type ModelStreamEvent, type RuntimeRunResult, type ToolMiddleware } from "mini-agent";
 
 import { DEFAULT_PROMPT_BODIES, type ManagedPromptId, type PromptStore } from "../admin/prompt-store.js";
 import type { AuditService } from "../audit/audit-service.js";
@@ -19,6 +19,7 @@ import { resolveValidCitations } from "./citation.js";
 import { createCitationLedger, createIntelTools, type CitationLedger } from "./intel-harness.js";
 import { rewriteForRetrieval, type RewriteMode } from "./query-rewrite.js";
 import { rerankTopK, retrieveHybrid, selectContext } from "./retrieval.js";
+import { readSkillPolicy, resolveSkillDirs, skillPolicyRevision } from "./skill-policy.js";
 
 /** 稠密检索依赖（二期 P2.4）。embed 缺省 null → 检索退 BM25-only。 */
 export interface DenseDeps {
@@ -50,6 +51,7 @@ export interface InquiryAgentConfig {
   modelName?: string;
   providerName?: string;
   maxTurns?: number;
+  skillDirs?: string[];
   /** 测试缝：生产默认由 MINI_AGENT_CTX_BUDGET_TOKENS 粗略折算。 */
   readBudgetBytes?: number;
   /** 测试缝：单次 read_chunk 默认 8 KiB。 */
@@ -125,6 +127,7 @@ export class InquiryService {
   private inquiryAgentPromise?: Promise<RuntimeAgent>;
   /** 已写入缓存 agent 的 AGENTS.md 方法论体，用于侦测后台编辑后作废重建。 */
   private bakedMethodology?: string;
+  private bakedSkillRevision?: string;
 
   constructor(
     private readonly paths: DataPaths,
@@ -372,6 +375,10 @@ export class InquiryService {
     if (this.inquiryAgentPromise && this.bakedMethodology !== undefined) {
       const current = await this.promptBody("inquiry-methodology", AGENT_METHODOLOGY);
       if (current !== this.bakedMethodology) this.inquiryAgentPromise = undefined;
+    }
+    if (this.inquiryAgentPromise && this.bakedSkillRevision !== undefined) {
+      const current = await skillPolicyRevision(this.paths.configDir);
+      if (current !== this.bakedSkillRevision) this.inquiryAgentPromise = undefined;
     }
 
     // agent 创建（scratch/skill 装配）失败属基础设施错误，应直接上抛——与单发路
@@ -636,6 +643,11 @@ export class InquiryService {
     // inquiry agent 为缓存单例；方法论编辑由 runAgentInquiry 侦测变更作废缓存，下次创建写入新 AGENTS.md。
     const methodology = await this.promptBody("inquiry-methodology", AGENT_METHODOLOGY);
     this.bakedMethodology = methodology;
+    const skillDirs = this.agentConfig.skillDirs ?? resolveSkillDirs();
+    // 原子快照：disabledSkillNames 与 bakedSkillRevision 取自同一次读取，避免两读竞态。
+    const skillPolicy = await readSkillPolicy(this.paths.configDir);
+    const disabledSkillNames = skillPolicy.disabledSkillNames;
+    this.bakedSkillRevision = skillPolicy.revision;
     await writeFile(path.join(workspaceRoot, "AGENTS.md"), `${methodology}\n`, "utf8");
     return RuntimeAgent.create({
       workspaceRoot,
@@ -650,7 +662,9 @@ export class InquiryService {
           throw new AppError(500, "inquiry agent 必须经 per-ask guarded adapter 调用（zero-egress 兜底）");
         },
       },
-      baseTools: [],
+      baseTools: [activateSkillTool],
+      explicitSkillDirs: skillDirs,
+      disabledSkillNames,
       readOnly: true,
       maxTurns: this.agentConfig.maxTurns ?? 12,
       sessionDir: "sessions",

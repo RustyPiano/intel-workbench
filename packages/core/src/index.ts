@@ -22,6 +22,7 @@ export { RUNTIME_VERSION } from "./runtime/version.js";
 // Per-path serialization primitive; reused by the workbench server to make
 // per-case manifest mutations single-writer (二期 P2.3a 串行化阻塞项).
 export { FileMutationQueue } from "./tools/file-mutation-queue.js";
+export { activateSkillTool } from "./tools/activate-skill.js";
 
 export { createModelAdapter } from "./model/factory.js";
 export type { ModelFactoryOptions } from "./model/factory.js";

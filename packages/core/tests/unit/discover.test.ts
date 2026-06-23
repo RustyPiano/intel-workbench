@@ -70,4 +70,27 @@ describe("discoverSkills", () => {
 
     expect(result.catalog[0]?.description).toBe("from workspace");
   });
+
+  test("excludes disabled skills by name", async () => {
+    const workspaceRoot = await createTempDir("mini-agent-workspace-");
+    const explicitRoot = await createTempDir("mini-agent-skills-");
+
+    await writeSkill(explicitRoot, "foo", "disabled skill");
+    await writeSkill(explicitRoot, "bar", "enabled skill");
+
+    const enabled = await discoverSkills({
+      workspaceRoot,
+      explicitSkillDirs: [explicitRoot],
+      globalSkillDirs: [],
+    });
+    expect(enabled.catalog.map((skill) => skill.name)).toEqual(["bar", "foo"]);
+
+    const disabled = await discoverSkills({
+      workspaceRoot,
+      explicitSkillDirs: [explicitRoot],
+      globalSkillDirs: [],
+      disabledSkillNames: ["foo"],
+    });
+    expect(disabled.catalog.map((skill) => skill.name)).toEqual(["bar"]);
+  });
 });

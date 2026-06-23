@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -154,6 +154,7 @@ function createService(
     readBudgetBytes?: number;
     perReadCapBytes?: number;
     maxTurns?: number;
+    skillDirs?: string[];
   } = {},
 ): InquiryService {
   const guard = new OfflineGuard(options.allowlist ?? ["stub.local"], fixture.audit);
@@ -173,8 +174,18 @@ function createService(
       maxTurns: options.maxTurns ?? 12,
       readBudgetBytes: options.readBudgetBytes,
       perReadCapBytes: options.perReadCapBytes,
+      skillDirs: options.skillDirs,
     },
   );
+}
+
+/** 在 root/skills/<name>/SKILL.md 造一个仅含 frontmatter 的技能，返回 skills 目录。 */
+async function writeSkillDir(root: string, name: string, description: string): Promise<string> {
+  const skillsDir = path.join(root, "skills");
+  const skillRoot = path.join(skillsDir, name);
+  await mkdir(skillRoot, { recursive: true });
+  await writeFile(path.join(skillRoot, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`, "utf8");
+  return skillsDir;
 }
 
 async function createCaseWithDocs(fixture: Fixture, name: string, docs: { filename: string; content: string }[]): Promise<string> {
@@ -374,7 +385,7 @@ describe.sequential("InquiryService agent harness", () => {
     expect(b.claims[0]?.citations[0]?.material_name).toBe("bravo.txt");
   });
 
-  it("advertises exactly the four read-only intel tools to the model", async () => {
+  it("advertises exactly the read-only intel tools plus activate_skill to the model", async () => {
     const caseId = await createCaseWithDocs(fixture, "agent 工具集", [
       { filename: "intel.txt", content: "舰船线索：岸台记录到异常通信。" },
     ]);
@@ -382,12 +393,41 @@ describe.sequential("InquiryService agent harness", () => {
 
     await createService(fixture, adapter).ask(OPERATOR, caseId, "舰船线索");
 
+    // 四个只读 intel 工具 + activate_skill（渐进式加载技能，只读）；精确匹配守住"不泄漏 bash/write"红线。
     expect(adapter.inputs[0]!.tools.map((tool) => tool.name).sort()).toEqual([
+      "activate_skill",
       "cite",
       "finalize_answer",
       "read_chunk",
       "search_chunks",
     ]);
+  });
+
+  it("exposes explicit skills to the agent and honors skills.json disable on the next ask", async () => {
+    const skillDirs = [await writeSkillDir(fixture.root, "demo-skill", "演示用技能")];
+    const caseId = await createCaseWithDocs(fixture, "agent 技能接通", [
+      { filename: "intel.txt", content: "舰船线索：岸台记录到异常通信。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("valid");
+    const service = createService(fixture, adapter, { skillDirs });
+    // 仅看 agent 循环轮次（有工具）；支持性校验是无工具的旁路调用，systemPrompt 不含 catalog。
+    const agentPrompts = (): string[] => adapter.inputs.filter((input) => input.tools.length > 0).map((input) => input.systemPrompt);
+
+    // 启用态：技能进入 agent 的系统提示 catalog（渐进式披露，仅 frontmatter）。
+    await service.ask(OPERATOR, caseId, "舰船线索");
+    const enabledPrompts = agentPrompts();
+    expect(enabledPrompts[0]).toContain("demo-skill");
+
+    // 后台禁用（写入 admin 同一路径 configDir/skills.json）。
+    await mkdir(fixture.paths.configDir, { recursive: true });
+    await writeFile(path.join(fixture.paths.configDir, "skills.json"), `${JSON.stringify({ "demo-skill": false })}\n`, "utf8");
+
+    // 同一 service 的下一次 ask：revision none→hash 触发缓存重建，禁用技能不再出现在 catalog。
+    const before = enabledPrompts.length;
+    await service.ask(OPERATOR, caseId, "再查舰船线索");
+    const allPrompts = agentPrompts();
+    expect(allPrompts.length).toBeGreaterThan(before);
+    expect(allPrompts.slice(before).every((prompt) => !prompt.includes("demo-skill"))).toBe(true);
   });
 
   it("caps read_chunk by the run read budget and still allows finalize", async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { RuntimeAgent } from "../../src/runtime/agent.js";
 import { formatToolMessageContent } from "../../src/runtime/loop.js";
 import { ScriptedModelAdapter } from "../../src/model/mock.js";
+import { activateSkillTool } from "../../src/tools/activate-skill.js";
 import type { ToolExecutionResult } from "../../src/tools/types.js";
 import type { RuntimeMessage, ToolResultEntry } from "../../src/runtime/types.js";
 
@@ -20,6 +21,21 @@ async function createWorkspace(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "mini-agent-agent-unit-"));
   tempRoots.push(root);
   return root;
+}
+
+async function writeSkill(root: string, name: string): Promise<void> {
+  const skillRoot = path.join(root, name);
+  await mkdir(skillRoot, { recursive: true });
+  await writeFile(
+    path.join(skillRoot, "SKILL.md"),
+    `---
+name: ${name}
+description: ${name} description
+---
+
+# ${name}
+`,
+  );
 }
 
 function quietModel(responses = 8): ScriptedModelAdapter {
@@ -115,6 +131,45 @@ describe("RuntimeAgent.create (static factory)", () => {
     expect(resumed.sessionId).toBe("my-named-session");
     const afterResume = await agent.sessionStore.listSessions();
     expect(afterResume.filter((session) => session.sessionId === "my-named-session")).toHaveLength(1);
+  });
+
+  test("discovers explicit skills and omits disabled names from activation", async () => {
+    const workspaceRoot = await createWorkspace();
+    const skillRoot = await createWorkspace();
+    await writeSkill(skillRoot, "foo");
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+      baseTools: [activateSkillTool],
+      explicitSkillDirs: [skillRoot],
+    });
+    expect(agent.skillRegistry.getCatalog().map((skill) => skill.name)).toEqual(["foo"]);
+
+    const disabledAgent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+      baseTools: [activateSkillTool],
+      explicitSkillDirs: [skillRoot],
+      disabledSkillNames: ["foo"],
+    });
+    expect(disabledAgent.skillRegistry.getCatalog().map((skill) => skill.name)).toEqual([]);
+    const result = await activateSkillTool.execute({ name: "foo" }, {
+      workspaceRoot,
+      sessionId: "sess_test",
+      runId: "run_test",
+      toolCallId: "call_test",
+      signal: new AbortController().signal,
+      logger: disabledAgent.logger,
+      skillRegistry: disabledAgent.skillRegistry,
+      policy: disabledAgent.policy,
+      config: disabledAgent.toolConfig,
+    });
+    expect(result.ok).toBe(false);
   });
 });
 

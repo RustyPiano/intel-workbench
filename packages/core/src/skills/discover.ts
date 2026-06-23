@@ -10,6 +10,7 @@ export interface DiscoverSkillsOptions {
   workspaceRoot: string;
   explicitSkillDirs: string[];
   globalSkillDirs: string[];
+  disabledSkillNames?: string[];
 }
 
 interface Candidate {
@@ -129,6 +130,7 @@ export async function discoverSkills(options: DiscoverSkillsOptions): Promise<Di
 
   const warnings: string[] = [];
   const selected = new Map<string, Candidate>();
+  const disabledSkillNames = new Set(options.disabledSkillNames ?? []);
 
   for (const sourceDir of sourceDirs) {
     const roots = await listSkillRoots(sourceDir.dir);
@@ -137,6 +139,9 @@ export async function discoverSkills(options: DiscoverSkillsOptions): Promise<Di
       const skillFile = path.join(rootDir, "SKILL.md");
       const frontmatter = await readSkillFrontmatter(skillFile);
       const meta = parseSkillMetadata(frontmatter, rootDir, skillFile);
+      if (disabledSkillNames.has(meta.name)) {
+        continue;
+      }
 
       const priority: [number, number] = [commonPrefixScore(workspaceRoot, rootDir), sourceDir.sourceIndex];
       const existing = selected.get(meta.name);

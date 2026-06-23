@@ -25,6 +25,7 @@ export interface RuntimeAgentOptions {
   baseTools?: RuntimeTool[];
   explicitSkillDirs?: string[];
   globalSkillDirs?: string[];
+  disabledSkillNames?: string[];
   maxTurns?: number;
   readOnly?: boolean;
   allowReadOutsideWorkspace?: boolean;
@@ -201,6 +202,7 @@ export class RuntimeAgent {
       workspaceRoot,
       explicitSkillDirs: options.explicitSkillDirs ?? [],
       globalSkillDirs: options.globalSkillDirs ?? [],
+      disabledSkillNames: options.disabledSkillNames ?? [],
     });
     const policy = createPolicyEngine({
       workspaceRoot,

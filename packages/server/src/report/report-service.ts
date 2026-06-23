@@ -21,7 +21,7 @@ import {
   type ReportRecord,
 } from "../domain/types.js";
 import { readContradictionAcknowledgements, readFindings } from "../finding/finding-store.js";
-import { sha256 } from "../util/hash.js";
+import { validateCitationIntegrity, type CitationIntegrity } from "../inquiry/citation.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -61,18 +61,21 @@ export interface ExportResult {
 }
 
 export function citationId(citation: Citation): string {
-  return `${citation.material_id}:${citation.content_hash}:${citation.quote_hash ?? ""}`;
+  // locator 始终入键：content_hash=sha256(text)，故同素材内文本完全相同但 locator 不同的
+  // chunk（同一句出现在不同时间码/段落/页）必须区分，否则两条不同来源的引用会撞同一 ID。
+  return [
+    citation.material_id,
+    citation.content_hash,
+    citation.quote_hash ?? "",
+    citation.quote_char_start ?? "",
+    citation.quote_char_end ?? "",
+    JSON.stringify(citation.locator),
+  ].join(":");
 }
 
 interface CitationPoolEntry {
   citation: Citation;
-  finding: Finding;
-}
-
-interface CitationValidation {
-  validChunk: boolean;
-  validSpan: boolean;
-  missingSpan: boolean;
+  findingIds: Set<string>;
 }
 
 class ExportGateError extends AppError {
@@ -284,7 +287,10 @@ export class ReportService {
     const citationById = new Map<string, CitationPoolEntry>();
     for (const finding of approvedFindings) {
       for (const citation of finding.supporting_citations) {
-        citationById.set(citationId(citation), { citation, finding });
+        const id = citationId(citation);
+        const entry = citationById.get(id);
+        if (entry) entry.findingIds.add(finding.id);
+        else citationById.set(id, { citation, findingIds: new Set([finding.id]) });
       }
     }
     const chunks = await this.loadCaseChunks(caseId);
@@ -311,7 +317,7 @@ export class ReportService {
       let hasValidSpan = false;
       for (const id of citationIds) {
         const entry = citationById.get(id);
-        if (!entry || (findingIds.length > 0 && !findingIds.includes(entry.finding.id))) {
+        if (!entry || (findingIds.length > 0 && !findingIds.some((findingId) => entry.findingIds.has(findingId)))) {
           reasons.add("citation:invalid");
           continue;
         }
@@ -351,21 +357,8 @@ export class ReportService {
     return [...reasons];
   }
 
-  private validateCitation(citation: Citation, chunks: Chunk[]): CitationValidation {
-    const candidates = chunks.filter(
-      (chunk) => chunk.material_id === citation.material_id
-        && chunk.content_hash === citation.content_hash
-        && sha256(chunk.text) === chunk.content_hash,
-    );
-    if (candidates.length === 0) return { validChunk: false, validSpan: false, missingSpan: false };
-    if (!citation.quote || !citation.quote_hash) {
-      return { validChunk: true, validSpan: false, missingSpan: true };
-    }
-    if (sha256(citation.quote) !== citation.quote_hash) {
-      return { validChunk: true, validSpan: false, missingSpan: false };
-    }
-    const validSpan = candidates.some((chunk) => chunk.text.includes(citation.quote!));
-    return { validChunk: true, validSpan, missingSpan: false };
+  private validateCitation(citation: Citation, chunks: Chunk[]): CitationIntegrity {
+    return validateCitationIntegrity(citation, chunks);
   }
 
   private validateFindingCitations(finding: Finding, chunks: Chunk[], reasons: Set<string>): { hasValidSpan: boolean } {

@@ -8,8 +8,9 @@ import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import type { CaseManifest, Chunk, Citation, Finding, FindingReviewStatus, Identity, InquiryClaim } from "../domain/types.js";
+import { validateCitationIntegrity } from "../inquiry/citation.js";
 import { findingsFilePath, readFindings, replaceFindings } from "./finding-store.js";
-import { sha256, shortId } from "../util/hash.js";
+import { shortId } from "../util/hash.js";
 
 export interface CreateFindingInput {
   claim?: InquiryClaim;
@@ -144,18 +145,10 @@ export class FindingService {
   }
 
   private citationStillValid(citation: Citation, chunks: Chunk[]): boolean {
-    if (!citation.quote || !citation.quote_hash || sha256(citation.quote) !== citation.quote_hash) return false;
-    const candidates = chunks.filter(
-      (chunk) => chunk.material_id === citation.material_id
-        && chunk.content_hash === citation.content_hash
-        && sha256(chunk.text) === chunk.content_hash,
-    );
-    return candidates.some((chunk) => {
-      if (typeof citation.quote_char_start === "number" && typeof citation.quote_char_end === "number") {
-        return chunk.text.slice(citation.quote_char_start, citation.quote_char_end) === citation.quote;
-      }
-      return chunk.text.includes(citation.quote!);
-    });
+    // Finding 侧契约比报告侧更严：每条引用必须有逐字 span（quote+hash+偏移命中），
+    // 不接受 missingSpan（无 quote 的引用）。统一校验器只给三态结果，各调用方按自己契约取舍。
+    const validation = validateCitationIntegrity(citation, chunks);
+    return validation.validChunk && validation.validSpan;
   }
 
   private async loadCaseChunks(manifest: CaseManifest): Promise<Chunk[]> {

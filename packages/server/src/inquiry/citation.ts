@@ -44,3 +44,32 @@ export function resolveValidCitations(
   }
   return citations;
 }
+
+export interface CitationIntegrity {
+  validChunk: boolean;
+  validSpan: boolean;
+  missingSpan: boolean;
+}
+
+export function validateCitationIntegrity(citation: Citation, chunks: Chunk[]): CitationIntegrity {
+  const candidates = chunks.filter(
+    (chunk) => chunk.material_id === citation.material_id
+      && chunk.content_hash === citation.content_hash
+      && sha256(chunk.text) === chunk.content_hash,
+  );
+  if (candidates.length === 0) return { validChunk: false, validSpan: false, missingSpan: false };
+  if (!citation.quote || !citation.quote_hash) {
+    return { validChunk: true, validSpan: false, missingSpan: true };
+  }
+  if (sha256(citation.quote) !== citation.quote_hash) {
+    return { validChunk: true, validSpan: false, missingSpan: false };
+  }
+  const hasDeclaredSpan = typeof citation.quote_char_start === "number" && typeof citation.quote_char_end === "number";
+  const validSpan = candidates.some((chunk) => {
+    if (hasDeclaredSpan) {
+      return chunk.text.slice(citation.quote_char_start, citation.quote_char_end) === citation.quote;
+    }
+    return chunk.text.includes(citation.quote!);
+  });
+  return { validChunk: true, validSpan, missingSpan: false };
+}

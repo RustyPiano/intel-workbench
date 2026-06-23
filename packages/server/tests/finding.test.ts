@@ -151,6 +151,7 @@ describe("FindingService", () => {
     const cite = await validCitation();
     const { quote: _quote, quote_hash: _quoteHash, ...quoteLess } = cite;
 
+    // 无 quote 的引用缺逐字 span，Finding 侧严格契约拒绝（证据红线，不得放宽）。
     await expect(findings.create(OPERATOR, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [quoteLess],

@@ -104,6 +104,7 @@ export interface ManagedPromptInfo {
   edited: boolean;
   version: number;
   healthy: boolean;
+  warning?: string;
   updatedAt?: string;
 }
 
@@ -121,6 +122,7 @@ export interface ManagedPromptDetail {
   isDefault: boolean;
   version: number;
   healthy: boolean;
+  warning?: string;
   updatedAt?: string;
   versions: PromptVersionInfo[];
 }
@@ -130,6 +132,19 @@ type RegisteredPrompt = (typeof REGISTERED_PROMPTS)[number];
 const PROMPT_BY_ID = new Map<ManagedPromptId, RegisteredPrompt>(
   REGISTERED_PROMPTS.map((prompt) => [prompt.id, prompt]),
 );
+
+export interface PromptHealth {
+  healthy: boolean;
+  warning?: string;
+}
+
+const INQUIRY_CITE_ID_WARNING = "Stored inquiry-methodology prompt predates cite_id contract — grounding may be degraded. Review and update the stored prompt.";
+
+export function healthCheck(key: string, content: string): PromptHealth {
+  if (key !== "inquiry-methodology") return { healthy: true };
+  if (content.toLowerCase().includes("cite_id")) return { healthy: true };
+  return { healthy: false, warning: INQUIRY_CITE_ID_WARNING };
+}
 
 export class PromptStore {
   constructor(
@@ -145,6 +160,7 @@ export class PromptStore {
       const edited = currentStat !== null;
       const body = edited ? await readFile(current, "utf8") : prompt.defaultBody;
       const versions = await this.listVersions(prompt.id);
+      const health = healthCheck(prompt.id, body);
       prompts.push({
         id: prompt.id,
         name: prompt.name,
@@ -152,7 +168,8 @@ export class PromptStore {
         description: prompt.description,
         edited,
         version: versions.length + (edited ? 1 : 0),
-        healthy: body.trim().length > 0,
+        healthy: body.trim().length > 0 && health.healthy,
+        ...(health.warning ? { warning: health.warning } : {}),
         updatedAt: currentStat?.mtime.toISOString(),
       });
     }
@@ -175,6 +192,7 @@ export class PromptStore {
     const currentStat = await this.tryStat(current);
     const body = currentStat ? await readFile(current, "utf8") : prompt.defaultBody;
     const versions = await this.listVersions(prompt.id);
+    const health = healthCheck(prompt.id, body);
     return {
       id: prompt.id,
       name: prompt.name,
@@ -183,7 +201,8 @@ export class PromptStore {
       body,
       isDefault: currentStat === null,
       version: versions.length + (currentStat ? 1 : 0),
-      healthy: body.trim().length > 0,
+      healthy: body.trim().length > 0 && health.healthy,
+      ...(health.warning ? { warning: health.warning } : {}),
       updatedAt: currentStat?.mtime.toISOString(),
       versions,
     };

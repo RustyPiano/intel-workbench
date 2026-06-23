@@ -1,8 +1,8 @@
 # 开发交接文档（intel-workbench / 离线情报分析工作台）
 
 > 给接手开发的 Agent / 工程师。读完这份 + `CLAUDE.md`（行为准则）+ `docs/specs/` 就能上手。
-> 最后更新：2026-06-22（追加 **大专题分析改造 M1–M5**：思考参数机制 + 全语料分批引擎 + 后台任务 + 前端进度/问答深度 + benchmark；详见决策日志 D20–D24）。M1–M5 本地完成 + 双评审 + 门禁绿，**尚未提交**。
-> 评测/报告：`docs/report/benchmark-summary.md`（benchmark 汇总）、`docs/report/rag-quality-decision-log.md`（D8–D24 决策日志）、`docs/report/practice-report.md`（实践报告）。
+> 最后更新：2026-06-23（追加 **Batch F**：benchmark 叙事改为 parity + auditability、新增确定性指标 harness、记录导出闸 scope boundary、PromptStore inquiry-methodology 健康告警；详见决策日志 D26）。LLM-dependent metrics 仍为 pending run（需配置模型端点）。
+> 评测/报告：`docs/report/benchmark-summary.md`（benchmark 汇总）、`docs/report/rag-quality-decision-log.md`（D8–D26 决策日志）、`docs/report/practice-report.md`（实践报告）。
 
 ---
 
@@ -44,7 +44,12 @@
 - **M4 前端**：`useExtractionJob` hook（2s 轮询/进度条/取消/刷新恢复）驱动要素/矛盾面板；问答「深度分析」开关（thinking-on 非流式结构化）；`<Outlet key={id}>` 按专题重挂载防串台。
 - **M5 benchmark**：矛盾 NLI **thinking on/off 对照**（`MINI_AGENT_CONTRADICTION_JUDGE_THINKING`，`npm run eval:contradiction`）——**诚实负结果**：开思考 F1=0.909 反低于关思考 0.957 → 数据驱动默认关思考；anchored 经 M1 修复 0.737→0.957 追平直出。
 
-**门禁**：`npm run check` 本地 **654 passed / 2 skipped** 绿，typecheck 干净（含 web）。
+**Batch F（2026-06-23，本轮文档/指标收尾）：**
+- benchmark 叙事已统一为 **anchored = direct-LLM F1 parity（0.957）**；anchored 增加的是 zero-fabrication per-claim citations、full-corpus coverage、determinism、auditability，不宣称精度或 F1 优于直出。
+- 新增 `packages/server/src/benchmark/metrics-harness.ts` 与 `packages/server/tests/benchmark-metrics.test.ts`；确定性夹具结果为引用定位 **3/6=0.500**、报告覆盖 **3/5=0.600**、失败可见 **4/4=1.000**、determinism **consistent=true**。LLM-dependent metrics（claim support / unsupported claim rate / contradiction recall）已有 fixture + callback harness，但需模型端点后 live run。
+- `PromptStore.healthCheck` 会对缺少 `cite_id` 的旧 `inquiry-methodology` 存储提示词返回 warning，不会自动改写用户提示词。
+
+**门禁**：Batch F 在 Codex 沙箱内 `npm run check` 已通过 typecheck，但 `packages/server/tests/api.test.ts` 命中已知 TCP/null-port 假阴性；排除该文件后 `npx vitest run --exclude packages/server/tests/api.test.ts` 为 **701 passed / 3 skipped**。
 
 ---
 

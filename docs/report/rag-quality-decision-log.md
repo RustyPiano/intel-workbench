@@ -346,3 +346,10 @@
 - **MAJOR**：`element.extract` 无错误路径审计——包 try/catch，出错（含出站拒绝）落 `element.extract` result:error 并抛出（与 detect 对齐，补审计红线的 error 路径覆盖）。
 
 门禁 `npm run check` 绿 **655/2**。提交 ae7c358。**至此 M1–M5 全部经足额独立审核（M2/M3/M4b 实现时双评审 + 本轮 M1/M4a/M5 补审），三红线复核守住。** **待用户**：浏览器验收 + 是否 push。
+
+## D26 — Review-driven refactor（Batches A-F，2026-06-22）
+
+- **What**：Batches A-E addressed P0/P1/P2 review findings: TypeScript strict（A）、artifact_hash multimodal（B）、span citations + support_status in inquiry（C）、test harness + adversarial（D）、export coverage gate（E）。
+- **Why**：Honest provenance is the thesis. Fabricated citations and silent failures violate it.
+- **Honest results**：contradiction benchmark = **PARITY**（F1 0.957, Precision 1.0, Recall 0.917）with direct-LLM；anchored approach adds auditability, not accuracy. Thinking=on reduces recall（0.909）→ default off. New deterministic metrics added from synthetic fixtures：citation localization **3/6 = 0.500**、report coverage **3/5 = 0.600**、failure visibility **4/4 = 1.000**、determinism check **consistent=true**. LLM-dependent metrics（claim support, hallucination rate, contradiction recall）harness built, pending live run（需配置模型端点）。
+- **Batch F specifically**：narrative reframe, new metrics harness, prompt health warning, export gate scope documented.

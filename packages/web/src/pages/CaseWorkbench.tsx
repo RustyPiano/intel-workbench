@@ -242,13 +242,23 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
     ? `${overview.materials.done}/${overview.materials.total} 完成${overview.materials.processing > 0 ? `，${overview.materials.processing} 加工中` : ""}`
     : "加载中";
   const reportText = overview?.reportStatus ? REPORT_STATUS_LABELS[overview.reportStatus] : "未生成";
+  const currentText = snapshot
+    ? snapshot.run.status === "active"
+      ? currentStage?.name ?? "进行中"
+      : snapshot.run.status === "done"
+        ? "流程完成"
+        : "流程失败"
+    : "尚未开始";
 
   return (
     <section className="task-overview">
       <div className="task-overview__head">
         <div>
           <div className="task-overview__eyebrow">{snapshot?.template.name ?? "多源事件核验"}</div>
-          <div className="task-overview__current">{currentStage ? currentStage.name : snapshot ? "流程完成" : "尚未开始"}</div>
+          <div className="task-overview__current">{currentText}</div>
+          {snapshot?.run.status === "failed" && snapshot.run.failureReason ? (
+            <div style={{ color: "var(--danger-light)", fontSize: "12px", marginTop: "4px" }}>失败阶段：{snapshot.run.failureReason}</div>
+          ) : null}
         </div>
         <div className="task-overview__summary">
           <span>{progressText}</span>

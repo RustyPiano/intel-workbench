@@ -98,8 +98,16 @@ export class TaskService {
     const file = this.runsFile(caseId);
     const { run, created } = await this.queue.runExclusive(file, async () => {
       const runs = await this.readRuns(caseId);
-      const active = runs.find((item) => item.caseId === caseId && item.templateId === templateId && item.status === "active");
-      if (active) return { run: active, created: false };
+      const candidate = runs.find((item) => item.caseId === caseId && item.templateId === templateId && item.status === "active");
+      if (candidate) {
+        // 落盘 active 也要按事实重算：若尚未被 snapshot 读过、实际已终态，则就地回写终态后继续新建，
+        // 避免把已完成/失败的运行当成"进行中"复用（P0-10 在 createRun 入口的同源修复）。
+        const facts = await this.readFacts(caseId);
+        const stages = this.computeStages(candidate, facts);
+        const realStatus = this.computeRunStatus(stages);
+        if (realStatus === "active") return { run: candidate, created: false };
+        this.markRunTerminal(candidate, realStatus, stages);
+      }
       const now = new Date().toISOString();
       const run: TaskRun = {
         id: shortId("task-"),
@@ -133,8 +141,12 @@ export class TaskService {
 
   async getCurrentRun(actor: Identity, caseId: string): Promise<TaskRunSnapshot | null> {
     await this.cases.get(actor, caseId);
-    const run = (await this.readRuns(caseId)).find((item) => item.caseId === caseId && item.status === "active");
-    return run ? this.snapshot(caseId, run) : null;
+    const runs = (await this.readRuns(caseId)).filter((item) => item.caseId === caseId);
+    if (runs.length === 0) return null;
+    // 优先返回进行中的运行；否则返回最近一次（终态运行也要展示其 done/失败，而非"尚未开始"）。
+    const active = runs.find((item) => item.status === "active");
+    const target = active ?? runs.reduce((latest, item) => (item.createdAt >= latest.createdAt ? item : latest));
+    return this.snapshot(caseId, target);
   }
 
   async getRun(actor: Identity, caseId: string, runId: string): Promise<TaskRunSnapshot> {
@@ -247,17 +259,52 @@ export class TaskService {
     if (stored.caseId !== caseId) throw new AppError(404, "任务不存在");
     const facts = await this.readFacts(caseId);
     const stages = this.computeStages(stored, facts);
-    const status = stages.some((stage) => stage.status === "failed")
-      ? "failed"
-      : stages.every((stage) => stage.status === "done" || stage.status === "skipped")
-        ? "done"
-        : "active";
-    const run: TaskRun = { ...stored, status, stages };
+    const status = this.computeRunStatus(stages);
+    const failureReason = stages.find((stage) => stage.status === "failed")?.name;
+    if (stored.status === "active" && (status === "done" || status === "failed")) {
+      await this.reconcileAndPersistRun(caseId, stored.id, status, failureReason);
+    }
+    const run: TaskRun = { ...stored, status, stages, ...(status === "failed" && failureReason ? { failureReason } : {}) };
     return {
       template: MULTI_SOURCE_VERIFICATION_TEMPLATE,
       run,
       overview: this.overview(stages, facts),
     };
+  }
+
+  private computeRunStatus(stages: TaskStageState[]): TaskRun["status"] {
+    if (stages.some((stage) => stage.status === "failed")) return "failed";
+    if (stages.every((stage) => stage.status === "done" || stage.status === "skipped")) return "done";
+    return "active";
+  }
+
+  /** 就地把一个 run 标记为终态（供 createRun 在锁内回写 stale-active 运行；与 reconcile 等价）。 */
+  private markRunTerminal(run: TaskRun, status: "done" | "failed", stages: TaskStageState[]): void {
+    const now = new Date().toISOString();
+    run.status = status;
+    run.updatedAt = now;
+    if (status === "done") {
+      run.completedAt = now;
+    } else {
+      run.failedAt = now;
+      run.failureReason = stages.find((stage) => stage.status === "failed")?.name;
+    }
+  }
+
+  private async reconcileAndPersistRun(caseId: string, runId: string, status: TaskRun["status"], failureReason?: string): Promise<void> {
+    if (status !== "done" && status !== "failed") return;
+    await this.mutateRun(caseId, runId, (run) => {
+      if (run.status !== "active") return;
+      const now = new Date().toISOString();
+      run.status = status;
+      run.updatedAt = now;
+      if (status === "done") {
+        run.completedAt = now;
+      } else {
+        run.failedAt = now;
+        run.failureReason = failureReason;
+      }
+    });
   }
 
   private computeStages(run: TaskRun, facts: CaseFacts): TaskStageState[] {

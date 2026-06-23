@@ -270,6 +270,10 @@ export interface TaskRun {
   status: TaskRunStatus;
   stages: TaskStageState[];
   createdAt: string;
+  completedAt?: string;
+  failedAt?: string;
+  updatedAt?: string;
+  failureReason?: string;
 }
 
 /** `cases/<id>/manifest.json`（工程方案 §4.2）。 */

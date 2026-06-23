@@ -306,6 +306,10 @@ export interface ApiTaskRun {
   status: TaskRunStatus;
   stages: ApiTaskStageState[];
   createdAt: string;
+  completedAt?: string;
+  failedAt?: string;
+  updatedAt?: string;
+  failureReason?: string;
 }
 
 export interface ApiTaskRunOverview {

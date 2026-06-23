@@ -1,0 +1,52 @@
+{
+  "samples": [
+    {
+      "id": "l1-supported",
+      "claim": "Station R-19 stayed offline during the night shift.",
+      "context": "Station R-19 stayed offline during the night shift.",
+      "label": "supported"
+    },
+    {
+      "id": "l2-supported",
+      "claim": "Convoy Kappa arrived at Gate Seven after 09:00.",
+      "context": "Convoy Kappa arrived at Gate Seven after 09:00.",
+      "label": "supported"
+    },
+    {
+      "id": "l3-supported",
+      "claim": "Harbor camera showed no patrol boat at berth C.",
+      "context": "Harbor camera showed no patrol boat at berth C.",
+      "label": "supported"
+    },
+    {
+      "id": "l4-unsupported",
+      "claim": "A patrol boat was confirmed at berth C.",
+      "context": "Harbor camera showed no patrol boat at berth C.",
+      "label": "unsupported"
+    },
+    {
+      "id": "l5-unsupported",
+      "claim": "Convoy Kappa carried four trucks.",
+      "context": "Convoy Kappa arrived at Gate Seven after 09:00. The load was not recorded.",
+      "label": "unsupported"
+    },
+    {
+      "id": "l6-contradiction",
+      "claim": "Station R-19 stayed offline.",
+      "context": "Maintenance log says Station R-19 was active from 23:00.",
+      "label": "contradiction"
+    },
+    {
+      "id": "l7-contradiction",
+      "claim": "Gate Seven stayed open after 09:00.",
+      "context": "Security memo says Gate Seven was closed after 09:00.",
+      "label": "contradiction"
+    },
+    {
+      "id": "l8-neutral",
+      "claim": "The warehouse lights were on after midnight.",
+      "context": "Convoy Kappa arrived at Gate Seven after 09:00.",
+      "label": "neutral"
+    }
+  ]
+}

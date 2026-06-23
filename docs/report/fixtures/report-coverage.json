@@ -1,0 +1,85 @@
+{
+  "chunks": [
+    {
+      "chunk_id": "r1",
+      "text": "Station R-19 stayed offline during the night shift.",
+      "content_hash": "4066ed7ee7a43f9e3ed4b79e8ad1c31b7e9ab21d4982273186f7467eef81ce72"
+    },
+    {
+      "chunk_id": "r2",
+      "text": "Convoy Kappa arrived at Gate Seven after 09:00.",
+      "content_hash": "bace7e0d8cf3b8fd114a9157a44baf26421656aa14c79186a401cab12a0ae02d"
+    },
+    {
+      "chunk_id": "r3",
+      "text": "Harbor camera showed no patrol boat at berth C.",
+      "content_hash": "0cbeb4d86490b695601e9efa5d7c7cc528fc7491d7cfea9d62ce2c7eaf7bc81d"
+    }
+  ],
+  "key_conclusions": [
+    {
+      "id": "k1-covered",
+      "citations": [
+        {
+          "chunk_id": "r1",
+          "content_hash": "4066ed7ee7a43f9e3ed4b79e8ad1c31b7e9ab21d4982273186f7467eef81ce72",
+          "quote": "R-19 stayed offline",
+          "quote_char_start": 8,
+          "quote_char_end": 27,
+          "quote_hash": "4e5995f39d01c74cc76124cd988cd5c10b02a91b823853e0e3c269abc5ed9437"
+        }
+      ]
+    },
+    {
+      "id": "k2-covered",
+      "citations": [
+        {
+          "chunk_id": "r2",
+          "content_hash": "bace7e0d8cf3b8fd114a9157a44baf26421656aa14c79186a401cab12a0ae02d",
+          "quote": "arrived at Gate Seven",
+          "quote_char_start": 13,
+          "quote_char_end": 34,
+          "quote_hash": "bafc9ec12d31ee192fba03669e42a017e9ca2f0efe7a2772fa70b8e2c50e1c44"
+        }
+      ]
+    },
+    {
+      "id": "k3-uncovered-empty",
+      "citations": []
+    },
+    {
+      "id": "k4-uncovered-bad-span",
+      "citations": [
+        {
+          "chunk_id": "r3",
+          "content_hash": "0cbeb4d86490b695601e9efa5d7c7cc528fc7491d7cfea9d62ce2c7eaf7bc81d",
+          "quote": "patrol boat at berth C",
+          "quote_char_start": 21,
+          "quote_char_end": 46,
+          "quote_hash": "7e1480f9a69c31da7fbd5cff026b74461d61699b9e7efbda8d36772699ef4c0f"
+        }
+      ]
+    },
+    {
+      "id": "k5-covered-with-one-valid-citation",
+      "citations": [
+        {
+          "chunk_id": "missing",
+          "content_hash": "missing",
+          "quote": "missing",
+          "quote_char_start": 0,
+          "quote_char_end": 7,
+          "quote_hash": "missing"
+        },
+        {
+          "chunk_id": "r3",
+          "content_hash": "0cbeb4d86490b695601e9efa5d7c7cc528fc7491d7cfea9d62ce2c7eaf7bc81d",
+          "quote": "no patrol boat at berth C",
+          "quote_char_start": 21,
+          "quote_char_end": 46,
+          "quote_hash": "52c2cb0ccf737bef58e63a5faf0035797a98c3dc91dae09624120422b9724a6d"
+        }
+      ]
+    }
+  ]
+}

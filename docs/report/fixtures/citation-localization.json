@@ -1,0 +1,76 @@
+{
+  "samples": [
+    {
+      "id": "c1-correct",
+      "chunk": {
+        "text": "Alpha convoy reached north pier at 09:30."
+      },
+      "citation": {
+        "quote": "north pier",
+        "quote_char_start": 21,
+        "quote_char_end": 31,
+        "quote_hash": "186c3ce144e4fdd703b422bc28969686501c34a0f3a787d96120986572bf514a"
+      }
+    },
+    {
+      "id": "c2-correct",
+      "chunk": {
+        "text": "Bravo sensor logged three launches before dawn."
+      },
+      "citation": {
+        "quote": "three launches",
+        "quote_char_start": 20,
+        "quote_char_end": 34,
+        "quote_hash": "5a98f5aa8d267aadaad3e9eadff1e3eb2d724d23dfb22ea71782a714b1261a15"
+      }
+    },
+    {
+      "id": "c3-correct",
+      "chunk": {
+        "text": "Delta team reported the bridge remained closed."
+      },
+      "citation": {
+        "quote": "bridge remained closed",
+        "quote_char_start": 24,
+        "quote_char_end": 46,
+        "quote_hash": "24c3402feb8760f7b4a80d63da9f6587653d03adf7ae98b1ec53cb16b0115ee9"
+      }
+    },
+    {
+      "id": "c4-offset-wrong",
+      "chunk": {
+        "text": "Echo patrol found two trucks near gate seven."
+      },
+      "citation": {
+        "quote": "two trucks",
+        "quote_char_start": 19,
+        "quote_char_end": 29,
+        "quote_hash": "d26d90209c1e76ef87a1a1df9effdeba7d8ec355814c05fb4dc56b2cbb9ef8db"
+      }
+    },
+    {
+      "id": "c5-offset-wrong",
+      "chunk": {
+        "text": "Foxtrot memo says radar R-19 stayed offline."
+      },
+      "citation": {
+        "quote": "radar R-19",
+        "quote_char_start": 19,
+        "quote_char_end": 29,
+        "quote_hash": "f92d8cb39b2ecede0dca6871d31a3aa7454153fe3f1cb19a03721af2550b5da7"
+      }
+    },
+    {
+      "id": "c6-hash-wrong",
+      "chunk": {
+        "text": "Golf watch confirmed warehouse lights after midnight."
+      },
+      "citation": {
+        "quote": "warehouse lights",
+        "quote_char_start": 21,
+        "quote_char_end": 37,
+        "quote_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  ]
+}

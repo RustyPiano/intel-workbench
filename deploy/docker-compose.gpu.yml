@@ -1,0 +1,6 @@
+# Intentionally comment-only; do not pass this file as a Compose overlay.
+# No GPU overlay is defined for this bundle.
+# The app container runs only the Node server and static web build. FunASR,
+# PaddleOCR, VLM, embedding, rerank, and local LLM services are external Python
+# or model-serving processes referenced by URL, so GPU device reservations
+# belong in those services' own deployment files, not in this app overlay.

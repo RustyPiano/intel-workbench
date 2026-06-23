@@ -1,8 +1,7 @@
 /**
  * 情报分析工作台 — 本地 HTTP 服务入口（M1）。
  *
- * 红线：本服务**只绑定 127.0.0.1**，绝不监听 0.0.0.0 或外部网卡；
- * 本进程不发起任何对外网络调用（暂不接任何模型/云端能力）。
+ * HTTP listener is loopback-bound; model egress is OfflineGuard-authorized to allowlisted local endpoints.
  */
 
 import { RuntimeAgent, RUNTIME_VERSION } from "mini-agent";

@@ -7,7 +7,8 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Citation, Contradiction, Identity } from "../domain/types.js";
+import type { Chunk, Citation, Contradiction, ContradictionAcknowledgement, ContradictionAcknowledgementStatus, Identity } from "../domain/types.js";
+import { readContradictionAcknowledgements, saveContradictionAcknowledgement } from "../finding/finding-store.js";
 import { chunkToCitation, resolveValidCitations } from "../inquiry/citation.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
@@ -61,6 +62,7 @@ export interface ContradictionDetectionResult {
   truncated: boolean;
   warnings: string[];
   error?: string;
+  acknowledgements?: ContradictionAcknowledgement[];
 }
 
 export class ContradictionDetectionError extends AppError {
@@ -73,6 +75,11 @@ export class ContradictionDetectionError extends AppError {
 interface DetectOptions {
   signal?: AbortSignal;
   onProgress?: (p: { done: number; total: number }) => void;
+}
+
+export interface AcknowledgeContradictionInput {
+  status?: ContradictionAcknowledgementStatus;
+  note?: string;
 }
 
 interface ClaimBatchResult {
@@ -276,20 +283,59 @@ export class ContradictionService {
 
   async getResult(actor: Identity, caseId: string): Promise<ContradictionDetectionResult> {
     await this.cases.get(actor, caseId);
+    let result: ContradictionDetectionResult;
     try {
-      return JSON.parse(await readFile(this.contradictionsResultFile(caseId), "utf8")) as ContradictionDetectionResult;
+      result = JSON.parse(await readFile(this.contradictionsResultFile(caseId), "utf8")) as ContradictionDetectionResult;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      const contradictions = await this.get(actor, caseId);
+      result = this.makeResult(contradictions, {
+        clusters: 0,
+        pairsJudged: 0,
+        batches: 0,
+        chunksCovered: 0,
+        chunksTotal: 0,
+        failedBatches: 0,
+      });
     }
-    const contradictions = await this.get(actor, caseId);
-    return this.makeResult(contradictions, {
-      clusters: 0,
-      pairsJudged: 0,
-      batches: 0,
-      chunksCovered: 0,
-      chunksTotal: 0,
-      failedBatches: 0,
+    return { ...result, acknowledgements: await readContradictionAcknowledgements(this.paths, caseId) };
+  }
+
+  async acknowledge(actor: Identity, caseId: string, contradictionId: string, input: AcknowledgeContradictionInput): Promise<ContradictionAcknowledgement> {
+    await this.cases.get(actor, caseId);
+    if (actor.role !== "security" && actor.role !== "admin") {
+      await this.auditContradictionAckDeny(actor, caseId, contradictionId, "role");
+      throw new AppError(403, "仅保密员或管理员可处理矛盾状态");
+    }
+    const status = input.status;
+    if (!isAcknowledgementStatus(status)) {
+      await this.auditContradictionAckDeny(actor, caseId, contradictionId, "invalid-status");
+      throw new AppError(400, "非法矛盾处理状态");
+    }
+    const result = await this.getResult(actor, caseId);
+    if (!result.contradictions.some((contradiction) => contradiction.id === contradictionId)) {
+      await this.auditContradictionAckDeny(actor, caseId, contradictionId, "not-found");
+      throw new AppError(404, "矛盾记录不存在");
+    }
+    const existing = result.acknowledgements?.find((ack) => ack.contradiction_id === contradictionId);
+    const acknowledgement: ContradictionAcknowledgement = {
+      id: existing?.id ?? shortId("ca-"),
+      case_id: caseId,
+      contradiction_id: contradictionId,
+      status,
+      note: (input.note ?? "").trim(),
+      by: actor.id,
+      at: new Date().toISOString(),
+    };
+    await saveContradictionAcknowledgement(this.paths, acknowledgement);
+    await this.audit.append({
+      user: actor.id,
+      action: "contradiction.acknowledge",
+      object: `contradiction:${contradictionId}`,
+      caseId,
+      detail: { caseId, contradictionId, status, note: acknowledgement.note },
     });
+    return acknowledgement;
   }
 
   private async extractClaims(chunks: Chunk[], signal?: AbortSignal): Promise<RawClaim[]> {
@@ -441,4 +487,19 @@ export class ContradictionService {
     await writeFile(file, `${JSON.stringify(result.contradictions, null, 2)}\n`, "utf8");
     await writeFile(this.contradictionsResultFile(caseId), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   }
+
+  private async auditContradictionAckDeny(actor: Identity, caseId: string, contradictionId: string, reason: string): Promise<void> {
+    await this.audit.append({
+      user: actor.id,
+      action: "contradiction.acknowledge",
+      object: `contradiction:${contradictionId}`,
+      result: "deny",
+      caseId,
+      detail: { caseId, contradictionId, reason },
+    });
+  }
+}
+
+function isAcknowledgementStatus(value: unknown): value is ContradictionAcknowledgementStatus {
+  return value === "open" || value === "resolved" || value === "dismissed";
 }

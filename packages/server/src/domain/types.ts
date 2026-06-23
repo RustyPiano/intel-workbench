@@ -125,6 +125,21 @@ export interface InquiryClaim {
   citations: Citation[];
 }
 
+export type FindingReviewStatus = "draft" | "approved" | "rejected";
+
+export interface Finding {
+  id: string;
+  caseId: string;
+  conclusion: string;
+  supporting_citations: Citation[];
+  opposing_citations: Citation[];
+  confidence: number;
+  review_status: FindingReviewStatus;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  open_questions: string[];
+}
+
 /** 问答记录（落 `cases/<id>/inquiries.jsonl`，§7.3 step 5）。 */
 export interface Inquiry {
   id: string;
@@ -169,12 +184,29 @@ export interface Contradiction {
   confidence: number;
 }
 
+export type ContradictionAcknowledgementStatus = "open" | "resolved" | "dismissed";
+
+export interface ContradictionAcknowledgement {
+  id: string;
+  case_id: string;
+  contradiction_id: string;
+  status: ContradictionAcknowledgementStatus;
+  note: string;
+  by: string;
+  at: string;
+}
+
 /** 报告复核状态机（工程方案 §7.4）：草稿 → 待复核 → 已复核 → 已导出。 */
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
+export type ReportCoverageStatus = "covered" | "uncovered";
 
 export interface BulletinSection {
   heading: string;
   body: string;
+  finding_ids: string[];
+  citation_ids: string[];
+  coverage_status: ReportCoverageStatus;
+  key_conclusion?: boolean;
 }
 
 /** 通报 spec（喂 intel-bulletin render_report.py，§3）。 */

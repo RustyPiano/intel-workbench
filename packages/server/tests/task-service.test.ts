@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuditService } from "../src/audit/audit-service.js";
 import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
-import type { Contradiction, Element, Identity, Material, ReportRecord } from "../src/domain/types.js";
+import type { Contradiction, Element, Finding, Identity, Material, ReportRecord } from "../src/domain/types.js";
 import { createTaskRouter } from "../src/routes/tasks.js";
 import { MULTI_SOURCE_VERIFICATION_TEMPLATE, TaskService } from "../src/task/task-service.js";
 
@@ -62,6 +62,30 @@ function contradiction(confidence = 0.9): Contradiction {
     relation: "contradiction",
     rationale: "冲突",
     confidence,
+  };
+}
+
+function finding(caseId: string): Finding {
+  const citation = {
+    material_id: "m-1",
+    material_name: "intel.txt",
+    modality: "doc" as const,
+    locator: { paragraph: 1 },
+    snippet: "目标甲在码头出现。",
+    confidence: 1,
+    content_hash: "h",
+  };
+  return {
+    id: "f-1",
+    caseId,
+    conclusion: "目标甲在码头出现。",
+    supporting_citations: [citation],
+    opposing_citations: [],
+    confidence: 0.9,
+    review_status: "approved",
+    reviewed_by: "sec",
+    reviewed_at: new Date().toISOString(),
+    open_questions: [],
   };
 }
 
@@ -282,7 +306,16 @@ describe("TaskService（Batch D 任务编排层）", () => {
     });
     const report: ReportRecord = {
       status: "exported",
-      spec: { title: "通报", sections: [{ heading: "正文", body: "内容" }] },
+      spec: {
+        title: "通报",
+        sections: [{
+          heading: "正文",
+          body: "内容",
+          finding_ids: [],
+          citation_ids: [],
+          coverage_status: "uncovered",
+        }],
+      },
       drafted_by: "op",
       drafted_at: new Date().toISOString(),
       rendered: true,
@@ -301,5 +334,28 @@ describe("TaskService（Batch D 任务编排层）", () => {
     expect(stageStatus(run, "report-generation")).toBe("done");
     expect(stageStatus(run, "review-export")).toBe("done");
     expect(overview.reportStatus).toBe("exported");
+  });
+
+  it("至少一个已审核 Finding 会派生研判结论阶段完成", async () => {
+    await cases.attachMaterial(caseId, material(caseId, { status: "done", chunk_count: 1, processed_at: new Date().toISOString() }));
+    await writeCaseJson("elements.json", [element()]);
+    await writeCaseJson("contradictions.result.json", {
+      status: "succeeded",
+      contradictions: [contradiction(0.5)],
+      processedChunks: 1,
+      totalChunks: 1,
+      truncated: false,
+      warnings: [],
+    });
+    await writeCaseJson("findings.json", [finding(caseId)]);
+
+    const created = await tasks.createRun(OPERATOR, caseId);
+    await tasks.confirmStage(OPERATOR, caseId, created.run.id, "entity-merge");
+    await tasks.advanceStage(OPERATOR, caseId, created.run.id, "proposition-extraction", {});
+    await tasks.confirmStage(OPERATOR, caseId, created.run.id, "contradiction-detection");
+    const { run } = await tasks.getRun(OPERATOR, caseId, created.run.id);
+
+    expect(stageStatus(run, "assessment")).toBe("done");
+    expect(stageStatus(run, "report-generation")).toBe("active");
   });
 });

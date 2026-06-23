@@ -209,6 +209,17 @@ export interface Contradiction {
   confidence: number;
 }
 
+export type ContradictionAcknowledgementStatus = "open" | "resolved" | "dismissed";
+export interface ContradictionAcknowledgement {
+  id: string;
+  case_id: string;
+  contradiction_id: string;
+  status: ContradictionAcknowledgementStatus;
+  note: string;
+  by: string;
+  at: string;
+}
+
 export type ContradictionStatus = "succeeded" | "degraded" | "failed";
 export interface ContradictionDetectionResult {
   status: ContradictionStatus;
@@ -218,6 +229,21 @@ export interface ContradictionDetectionResult {
   truncated: boolean;
   warnings: string[];
   error?: string;
+  acknowledgements?: ContradictionAcknowledgement[];
+}
+
+export type FindingReviewStatus = "draft" | "approved" | "rejected";
+export interface ApiFinding {
+  id: string;
+  caseId: string;
+  conclusion: string;
+  supporting_citations: ApiCitation[];
+  opposing_citations: ApiCitation[];
+  confidence: number;
+  review_status: FindingReviewStatus;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  open_questions: string[];
 }
 
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
@@ -228,7 +254,14 @@ export interface ApiReport {
     title: string;
     classification?: string;
     summary?: string;
-    sections: { heading: string; body: string }[];
+    sections: {
+      heading: string;
+      body: string;
+      finding_ids?: string[];
+      citation_ids?: string[];
+      coverage_status?: "covered" | "uncovered";
+      key_conclusion?: boolean;
+    }[];
     conclusion?: string;
     issuer?: string;
     date?: string;
@@ -296,6 +329,15 @@ export interface DraftReportInput {
   body?: string;
   summary?: string;
   conclusion?: string;
+  finding_ids?: string[];
+  sections?: {
+    heading?: string;
+    body?: string;
+    finding_ids?: string[];
+    citation_ids?: string[];
+    coverage_status?: "covered" | "uncovered";
+    key_conclusion?: boolean;
+  }[];
 }
 
 export interface ApiSkill {
@@ -655,6 +697,38 @@ export function detectContradictions(caseId: string): Promise<ContradictionDetec
   );
 }
 
+export function acknowledgeContradiction(caseId: string, contradictionId: string, input: { status: ContradictionAcknowledgementStatus; note: string }): Promise<ContradictionAcknowledgement> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/contradictions/${encodeURIComponent(contradictionId)}/acknowledge`, {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify(input),
+  }).then((r) => unwrap<ContradictionAcknowledgement>(r, "acknowledgement"));
+}
+
+// ---- Findings（Batch E） ----
+
+export function listFindings(caseId: string): Promise<ApiFinding[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/findings`, { headers: headers() }).then((r) =>
+    unwrap<ApiFinding[]>(r, "findings"),
+  );
+}
+
+export function createFinding(caseId: string, input: { claim?: ApiClaim; conclusion?: string; supporting_citations?: ApiCitation[]; opposing_citations?: ApiCitation[]; confidence?: number }): Promise<ApiFinding> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/findings`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(input),
+  }).then((r) => unwrap<ApiFinding>(r, "finding"));
+}
+
+export function reviewFinding(caseId: string, findingId: string, review_status: Extract<FindingReviewStatus, "approved" | "rejected">): Promise<ApiFinding> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/findings/${encodeURIComponent(findingId)}/review`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ review_status }),
+  }).then((r) => unwrap<ApiFinding>(r, "finding"));
+}
+
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 
 export type JobKind = "elements" | "contradictions";
@@ -717,9 +791,16 @@ export const submitReport = (caseId: string) => reportAction(caseId, "submit");
 export const approveReport = (caseId: string) => reportAction(caseId, "approve");
 
 export function exportReport(caseId: string): Promise<{ filename: string; content: string; status: ReportStatus }> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers() }).then((r) =>
-    unwrap<{ filename: string; content: string; status: ReportStatus }>(r, "export"),
-  );
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/export`, { method: "POST", headers: headers() }).then(async (r) => {
+    const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string; result?: unknown; export?: { filename: string; content: string; status: ReportStatus } };
+    if (!r.ok || body.ok === false) {
+      noteStatus(r);
+      const error = new Error(body.message ?? `请求失败（HTTP ${r.status}）`) as Error & { result?: unknown };
+      error.result = body.result;
+      throw error;
+    }
+    return body.export!;
+  });
 }
 
 // ---- 任务编排（Batch D） ----

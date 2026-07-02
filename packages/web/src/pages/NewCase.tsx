@@ -84,15 +84,15 @@ export function NewCasePage() {
 
   return (
     <div className="page">
-      <div className="page__head" style={{ marginBottom: "16px" }}>
+      <div className="page__head new-case__head">
         <h1 className="page__title">创建新分析专题</h1>
         <button type="button" className="btn" onClick={() => navigate("/")}>
           返回列表
         </button>
       </div>
 
-      <div style={{ background: "var(--bg-panel)", padding: "14px 18px", borderRadius: "var(--radius)", border: "1px solid var(--border)", marginBottom: "28px" }}>
-        <p style={{ fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
+      <div className="new-case__tips">
+        <p>
           <strong>提示：</strong>点击「创建专题」将真实创建专题并落盘（写入 manifest 与审计链）。密级不得高于当前账户权限；开发模式下禁止创建涉密专题（密级须为“内部”）。所选素材将在专题创建后上传。
         </p>
       </div>
@@ -100,7 +100,7 @@ export function NewCasePage() {
       <div className="creation-container">
         <form onSubmit={handleCreate}>
           <div className="form-group">
-            <label className="form-label" htmlFor="case-name">专题名称 <span style={{ color: "var(--danger-light)" }}>*</span></label>
+            <label className="form-label" htmlFor="case-name">专题名称 <span className="form-label__required">*</span></label>
             <input
               id="case-name"
               type="text"
@@ -113,7 +113,7 @@ export function NewCasePage() {
               }}
             />
             {error && (
-              <span style={{ color: "var(--danger-light)", fontSize: "12px", marginTop: "4px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span className="form-group__error">
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
                   <line x1="12" y1="9" x2="12" y2="13"/>
@@ -125,19 +125,14 @@ export function NewCasePage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label" id="clearance-label">安全密级分级 <span style={{ color: "var(--text-muted)", textTransform: "none", fontSize: "11px" }}>（密级选择不得高于当前会话您的最高权限）</span></label>
+            <label className="form-label" id="clearance-label">安全密级分级 <span className="form-label__sub">（密级选择不得高于当前会话您的最高权限）</span></label>
             <div className="clearance-grid" role="radiogroup" aria-labelledby="clearance-label">
               {(Object.keys(CLEARANCE_RANK) as Clearance[]).map((level) => {
                 const isDisabled = CLEARANCE_RANK[level] > maxRank;
                 return (
                   <label
                     key={level}
-                    className={`clearance-option ${clearance === level ? `active ${level}` : ""}`}
-                    style={{
-                      opacity: isDisabled ? 0.35 : 1,
-                      cursor: isDisabled ? "not-allowed" : "pointer",
-                      borderStyle: isDisabled ? "dashed" : "solid",
-                    }}
+                    className={`clearance-option ${clearance === level ? `active ${level}` : ""} ${isDisabled ? "clearance-option--disabled" : "clearance-option--enabled"}`}
                   >
                     <input
                       type="radio"
@@ -149,20 +144,20 @@ export function NewCasePage() {
                       className="clearance-option__radio"
                     />
                     <span className="clearance-option__title">{CLEARANCE_LABELS[level]}</span>
-                    <span style={{ fontSize: "10px", color: "var(--text-dim)", display: "block", marginTop: "4px" }}>
+                    <span className="clearance-option__status">
                       {isDisabled ? "权限不足" : "可选择"}
                     </span>
                   </label>
                 );
               })}
             </div>
-            <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "4px", fontStyle: "italic" }}>
+            <p className="clearance-grid__desc">
               选定密级说明：{CLEARANCE_DESCS[clearance]}
             </p>
           </div>
 
           <div className="form-group">
-            <label className="form-label" htmlFor="case-desc">专题说明 <span style={{ color: "var(--text-muted)", textTransform: "none", fontSize: "11px" }}>（选填）</span></label>
+            <label className="form-label" htmlFor="case-desc">专题说明 <span className="form-label__sub">（选填）</span></label>
             <textarea
               id="case-desc"
               rows={3}
@@ -179,7 +174,7 @@ export function NewCasePage() {
               type="file"
               multiple
               ref={fileInputRef}
-              style={{ display: "none" }}
+              className="hidden-input"
               onChange={(e) => {
                 const selected = Array.from(e.target.files ?? []);
                 if (selected.length > 0) {
@@ -189,8 +184,8 @@ export function NewCasePage() {
               }}
             />
             <div className="dropzone" onClick={() => fileInputRef.current?.click()}>
-              <div className="dropzone__icon" style={{ display: "flex", justifyContent: "center" }}>
-                <svg className="icon-svg" style={{ width: "32px", height: "32px", opacity: 0.6 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <div className="dropzone__icon dropzone__icon-container">
+                <svg className="icon-svg dropzone__icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
               </div>
@@ -199,22 +194,21 @@ export function NewCasePage() {
             </div>
 
             {files.length > 0 ? (
-              <div style={{ marginTop: "12px", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "12px", background: "rgba(0,0,0,0.15)" }}>
-                <span className="form-label" style={{ fontSize: "11px", display: "block", marginBottom: "8px" }}>待上传文件 ({files.length})</span>
-                <ul style={{ listStyle: "none", fontSize: "13px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div className="new-case__files-container">
+                <span className="form-label new-case__files-label">待上传文件（{files.length}）</span>
+                <ul className="new-case__files-list">
                   {files.map((file, idx) => (
-                    <li key={idx} style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--accent-light)" }}>
+                    <li key={idx} className="new-case__file-item">
                       <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                         <polyline points="14 2 14 8 20 8"/>
                       </svg>
-                      <span style={{ textDecoration: "underline" }}>{file.name}</span>
-                      <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>({formatSize(file.size)})</span>
+                      <span className="new-case__file-name">{file.name}</span>
+                      <span className="new-case__file-size">({formatSize(file.size)})</span>
                       <button
                         type="button"
-                        className="btn btn--ghost"
+                        className="btn btn--ghost new-case__file-remove-btn"
                         onClick={() => setFiles((prev) => prev.filter((_, fileIndex) => fileIndex !== idx))}
-                        style={{ padding: "2px 8px", fontSize: "12px", marginLeft: "auto" }}
                       >
                         x
                       </button>

@@ -207,11 +207,11 @@ export function AuditCenterPage() {
                 const tone = RESULT_TONE[result.color] ?? RESULT_TONE["var(--danger-light)"];
                 return (
                   <tr key={e.id} style={{ background: alert ? tone.glow : "transparent" }}>
-                    <td style={{ fontFamily: "monospace" }}>{e.ts.replace("T", " ").slice(0, 19)}</td>
-                    <td style={{ fontWeight: "600", color: alert ? result.color : "inherit" }}>{e.user}</td>
-                    <td style={{ fontWeight: alert ? "700" : "inherit" }}>{auditActionLabel(e)}</td>
-                    <td style={{ fontFamily: "monospace", fontSize: "12px" }}>{caseIdOf(e)}</td>
-                    <td>
+                    <td data-label="操作时间" style={{ fontFamily: "monospace" }}>{e.ts.replace("T", " ").slice(0, 19)}</td>
+                    <td data-label="责任账户" style={{ fontWeight: "600", color: alert ? result.color : "inherit" }}>{e.user}</td>
+                    <td data-label="动作" style={{ fontWeight: alert ? "700" : "inherit" }}>{auditActionLabel(e)}</td>
+                    <td data-label="关联专题" style={{ fontFamily: "monospace", fontSize: "12px" }}>{caseIdOf(e)}</td>
+                    <td data-label="结果">
                       <span
                         className="badge"
                         style={{
@@ -225,7 +225,7 @@ export function AuditCenterPage() {
                         {result.text}
                       </span>
                     </td>
-                    <td className="audit-hash" style={{ color: alert ? result.color : "inherit" }}>{shortHash(e.event_hash)}</td>
+                    <td data-label="防篡改指纹" className="audit-hash" style={{ color: alert ? result.color : "inherit" }}>{shortHash(e.event_hash)}</td>
                   </tr>
                 );
               })

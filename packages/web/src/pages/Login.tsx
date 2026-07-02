@@ -54,7 +54,7 @@ export function LoginPage() {
           <div className="form-label">用户名</div>
           <input
             type="text"
-            className="input-text"
+            className="input-text login__input"
             autoComplete="username"
             value={username}
             onChange={(e) => {
@@ -62,51 +62,47 @@ export function LoginPage() {
               setMustChange(false);
             }}
             placeholder="用户名"
-            style={{ padding: "10px 12px", fontSize: "14px" }}
             disabled={mustChange}
           />
-          <div className="form-label" style={{ marginTop: "12px" }}>口令</div>
+          <div className="form-label login__label">口令</div>
           <input
             type="password"
-            className="input-text"
+            className="input-text login__input"
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="口令"
-            style={{ padding: "10px 12px", fontSize: "14px" }}
             disabled={mustChange}
           />
           {mustChange ? (
             <>
-              <div className="form-label" style={{ marginTop: "12px" }}>新口令</div>
+              <div className="form-label login__label">新口令</div>
               <input
                 type="password"
-                className="input-text"
+                className="input-text login__input"
                 autoComplete="new-password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="至少 12 位"
-                style={{ padding: "10px 12px", fontSize: "14px" }}
               />
-              <div className="form-label" style={{ marginTop: "12px" }}>确认新口令</div>
+              <div className="form-label login__label">确认新口令</div>
               <input
                 type="password"
-                className="input-text"
+                className="input-text login__input"
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="再次输入新口令"
-                style={{ padding: "10px 12px", fontSize: "14px" }}
               />
             </>
           ) : null}
 
           {error ? (
-            <div style={{ color: "var(--danger-light)", fontSize: "12px", marginTop: "10px" }}>{error}</div>
+            <div className="login__error">{error}</div>
           ) : null}
 
-          <button type="submit" className="btn btn--primary login__enter" disabled={busy} style={{ marginTop: "16px" }}>
-            {busy ? "处 理 中…" : mustChange ? "确认修改口令" : "确 认 登 录"}
+          <button type="submit" className="btn btn--primary login__enter" disabled={busy}>
+            {busy ? "处理中……" : mustChange ? "确认修改口令" : "确认登录"}
           </button>
         </form>
       </div>

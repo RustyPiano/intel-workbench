@@ -73,6 +73,12 @@ const TABS: { to: string; label: string }[] = [
   { to: "audit", label: "审计" },
 ];
 
+function scrollWorkbenchBodyIntoView() {
+  window.setTimeout(() => {
+    document.querySelector<HTMLElement>(".workbench__body")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 0);
+}
+
 const SUPPORT_STATUS_LABELS: Record<NonNullable<ApiCitation["support_status"]>, string> = {
   supported: "已支撑",
   "support-unverified": "待复核支撑",
@@ -128,12 +134,12 @@ export function CaseWorkbench() {
 
       <nav className="tabs">
         {TABS.map((t) => (
-          <NavLink key={t.to} to={t.to} className="tabs__tab">
+          <NavLink key={t.to} to={t.to} className="tabs__tab" onClick={scrollWorkbenchBodyIntoView}>
             {t.label}
           </NavLink>
         ))}
         <span className="tabs__spacer" />
-        <NavLink to="materials" className="btn btn--primary" style={{ padding: "6px 14px", fontSize: "12px" }}>
+        <NavLink to="materials" className="btn btn--primary" style={{ padding: "6px 14px", fontSize: "12px" }} onClick={scrollWorkbenchBodyIntoView}>
           + 汇入线索
         </NavLink>
       </nav>
@@ -435,7 +441,7 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
         </div>
         <div className="task-next__actions">
           {currentStagePath ? (
-            <NavLink to={currentStagePath} className="btn" style={{ padding: "6px 12px", fontSize: "12px" }}>
+            <NavLink to={currentStagePath} className="btn" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={scrollWorkbenchBodyIntoView}>
               去对应板块
             </NavLink>
           ) : null}

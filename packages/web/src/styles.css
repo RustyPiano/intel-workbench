@@ -204,11 +204,67 @@ a {
   flex-shrink: 0;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
-  padding: 24px 12px;
+  padding: 18px 12px 24px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
+  transition: width 160ms ease, padding 160ms ease;
+}
+.side-nav__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 2px 8px 12px;
+}
+.side-nav__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.side-nav__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.side-nav__toggle .icon-svg {
+  width: 22px;
+  height: 22px;
+}
+.side-nav__toggle span {
+  display: none;
+}
+.side-nav--collapsed {
+  width: 64px;
+  align-items: center;
+  padding: 18px 10px 20px;
+}
+.side-nav--collapsed .side-nav__head {
+  justify-content: center;
+  padding: 0 0 8px;
+}
+.side-nav--collapsed .side-nav__toggle span,
+.side-nav--collapsed .side-nav__head .side-nav__group,
+.side-nav--collapsed > .side-nav__group {
+  display: none;
+}
+.side-nav--collapsed .side-nav__link {
+  justify-content: center;
+  gap: 0;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  font-size: 0;
 }
 .side-nav__group {
   font-size: 11px;
@@ -217,6 +273,9 @@ a {
   padding: 16px 12px 6px;
   text-transform: uppercase;
   letter-spacing: 1px;
+}
+.side-nav__head .side-nav__group {
+  padding: 0;
 }
 .side-nav__link {
   display: flex;
@@ -270,6 +329,7 @@ a {
   font-weight: 700;
   letter-spacing: -0.2px;
   color: #fff;
+  white-space: nowrap;
 }
 .topbar__sep {
   color: var(--text-muted);
@@ -278,6 +338,7 @@ a {
   color: var(--text-dim);
   font-size: 14px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 /* SVG Icon Global Class */
@@ -296,6 +357,37 @@ a {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    height: auto;
+    min-height: 60px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 12px;
+  }
+  .topbar__left {
+    min-width: 0;
+    flex: 1 1 170px;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .topbar__right {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .badge,
+  .topbar__user-btn,
+  .topbar__admin-entry {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+    font-size: 12px;
+  }
 }
 
 /* Badges */
@@ -446,6 +538,23 @@ a {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+@media (max-width: 1100px) {
+  .page__head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .case-list-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .case-list-actions > div {
+    flex: 1 1 260px;
+  }
+  .case-list-actions .search {
+    width: 100%;
+  }
 }
 .admin-prompts-layout {
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -1481,6 +1590,11 @@ a {
 .table-scroll > .elements-table {
   min-width: 720px;
 }
+.table-scroll:not(.elements-main) > .elements-table th,
+.table-scroll:not(.elements-main) > .elements-table td {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
 .elements-table th {
   padding: 12px 18px;
   font-size: 12px;
@@ -2224,6 +2338,23 @@ a {
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
   }
+  .side-nav__head {
+    display: none;
+  }
+  .side-nav__toggle {
+    display: none;
+  }
+  .side-nav--collapsed {
+    width: 100%;
+    align-items: stretch;
+    padding: 8px 12px;
+  }
+  .side-nav--collapsed .side-nav__link {
+    width: auto;
+    height: auto;
+    gap: 10px;
+    font-size: 14px;
+  }
 
   .side-nav__group {
     display: none;
@@ -2249,6 +2380,7 @@ a {
   .page__head {
     align-items: flex-start;
     flex-direction: column;
+    justify-content: flex-start;
     gap: 14px;
     margin-bottom: 18px;
   }
@@ -2268,6 +2400,12 @@ a {
   .page__actions > *,
   .search {
     width: 100%;
+  }
+  .case-list-actions {
+    justify-content: flex-start;
+  }
+  .case-list-actions > div {
+    flex: 0 0 auto;
   }
 
   .page__actions .btn {

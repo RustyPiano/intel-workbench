@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { TopBar } from "../components/TopBar";
@@ -17,23 +18,33 @@ function breadcrumbFor(pathname: string): string {
 export function AdminLayout() {
   const { pathname } = useLocation();
   const { user } = useSession();
+  const [collapsed, setCollapsed] = useState(false);
   const isAdmin = user?.role === "admin";
 
   return (
     <div className="app-shell app-shell--admin">
       <TopBar breadcrumb={breadcrumbFor(pathname)} />
       <div className="app-body">
-        <nav className="side-nav side-nav--admin">
+        <nav className={`side-nav side-nav--admin ${collapsed ? "side-nav--collapsed" : ""}`}>
+          <div className="side-nav__head">
+            <div className="side-nav__group">{isAdmin ? "系统管理" : "保密安全"}</div>
+            <button type="button" className="side-nav__toggle" aria-label={collapsed ? "展开侧边栏" : "折叠侧边栏"} title={collapsed ? "展开侧边栏" : "折叠侧边栏"} onClick={() => setCollapsed((v) => !v)}>
+              <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3.5" y="4.5" width="17" height="15" rx="3"/>
+                <line x1="9.5" y1="5" x2="9.5" y2="19"/>
+              </svg>
+              <span>折叠侧边栏</span>
+            </button>
+          </div>
           {isAdmin ? (
             <>
-              <div className="side-nav__group">系统管理</div>
-              <NavLink to="/admin/prompts" className="side-nav__link">
+              <NavLink to="/admin/prompts" className="side-nav__link" title="提示词模板" aria-label="提示词模板">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                 </svg>
                 提示词模板
               </NavLink>
-              <NavLink to="/admin/skills" className="side-nav__link">
+              <NavLink to="/admin/skills" className="side-nav__link" title="能力管理" aria-label="能力管理">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="12 2 2 7 12 12 22 7 12 2"/>
                   <polyline points="2 17 12 22 22 17"/>
@@ -41,7 +52,7 @@ export function AdminLayout() {
                 </svg>
                 能力管理
               </NavLink>
-              <NavLink to="/admin/models" className="side-nav__link">
+              <NavLink to="/admin/models" className="side-nav__link" title="模型配置" aria-label="模型配置">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
                   <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
@@ -50,7 +61,7 @@ export function AdminLayout() {
                 </svg>
                 模型配置
               </NavLink>
-              <NavLink to="/admin/users" className="side-nav__link">
+              <NavLink to="/admin/users" className="side-nav__link" title="用户与权限" aria-label="用户与权限">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
                   <circle cx="9" cy="7" r="4"/>
@@ -61,8 +72,8 @@ export function AdminLayout() {
               </NavLink>
             </>
           ) : null}
-          <div className="side-nav__group">保密安全</div>
-          <NavLink to="/audit" className="side-nav__link">
+          {isAdmin ? <div className="side-nav__group">保密安全</div> : null}
+          <NavLink to="/audit" className="side-nav__link" title="审计中心" aria-label="审计中心">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>

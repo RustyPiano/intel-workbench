@@ -1740,6 +1740,7 @@ function ElementGraphView({ caseId }: { caseId: string }) {
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const [edgeLimit, setEdgeLimit] = useState(GRAPH_MIN_EDGES);
+  const edgeDetailRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1756,6 +1757,13 @@ function ElementGraphView({ caseId }: { caseId: string }) {
       alive = false;
     };
   }, [caseId]);
+
+  useEffect(() => {
+    if (!selectedEdgeKey) return;
+    window.setTimeout(() => {
+      edgeDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+  }, [selectedEdgeKey]);
 
   if (error) return <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div>;
   if (!graph) return <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载中…</div>;
@@ -1837,17 +1845,35 @@ function ElementGraphView({ caseId }: { caseId: string }) {
       ) : (
         <>
         <div className="graph-toolbar">
-          <span>当前显示 {focusEdges.length}/{focusEdgesAll.length} 条关系</span>
-          <button type="button" onClick={() => setEdgeLimit((value) => value + GRAPH_EDGE_STEP)} disabled={!canShowMoreEdges}>
-            显示更多关系
-          </button>
-          <button type="button" onClick={() => setEdgeLimit(GRAPH_MIN_EDGES)} disabled={edgeLimit <= GRAPH_MIN_EDGES}>
-            收起重点
-          </button>
-          <button type="button" onClick={() => setSelectedEdgeKey(null)} disabled={!selectedEdgeKey}>
-            清除高亮
-          </button>
+          <span>当前中心：{focusNode?.name ?? "—"} · 显示 {focusEdges.length}/{focusEdgesAll.length} 条关系</span>
+          <div className="graph-toolbar__actions">
+            {canShowMoreEdges ? (
+              <button type="button" onClick={() => setEdgeLimit((value) => value + GRAPH_EDGE_STEP)}>
+                展开更多（+{Math.min(GRAPH_EDGE_STEP, focusEdgesAll.length - focusEdges.length)}）
+              </button>
+            ) : null}
+            {edgeLimit > GRAPH_MIN_EDGES ? (
+              <button type="button" onClick={() => setEdgeLimit(GRAPH_MIN_EDGES)}>
+                只看重点关系
+              </button>
+            ) : null}
+            {selectedEdgeKey ? (
+              <button type="button" onClick={() => setSelectedEdgeKey(null)}>
+                取消选中
+              </button>
+            ) : null}
+          </div>
         </div>
+        {selectedClaim ? (
+          <div className="graph-selection graph-edge-detail" ref={edgeDetailRef}>
+            <div className="graph-selection__head">
+              <strong>{selectedClaim.text}</strong>
+              <span>共现证据</span>
+            </div>
+            <CitationChips claim={selectedClaim} onFrame={setFrameCite} />
+            <small>这些引用说明两个要素在同一片段中一起出现；是否构成有效判断，需要打开素材原文核对。</small>
+          </div>
+        ) : null}
         <div className="graph-focus-layout">
           <aside className="graph-node-list" aria-label="中心要素">
             <div className="graph-node-list__title">选择中心要素</div>
@@ -1972,17 +1998,6 @@ function ElementGraphView({ caseId }: { caseId: string }) {
             }) : <span>暂无共现关系。</span>}
           </div>
           <small>点击上面的关系可查看引用出处；关系网络只提示线索密度，结论仍需回到素材核验。</small>
-        </div>
-      ) : null}
-
-      {selectedClaim ? (
-        <div className="graph-selection">
-          <div className="graph-selection__head">
-            <strong>{selectedClaim.text}</strong>
-            <span>共现证据</span>
-          </div>
-          <CitationChips claim={selectedClaim} onFrame={setFrameCite} />
-          <small>这些引用说明两个要素在同一片段中一起出现；是否构成有效判断，需要打开素材原文核对。</small>
         </div>
       ) : null}
 
@@ -2301,7 +2316,7 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
   const { id: caseId } = useParams<{ id: string }>();
   if (claim.citations.length === 0) return null;
   return (
-    <span style={{ marginLeft: "6px" }}>
+    <span className="citation-list">
       {claim.citations.map((c, i) => {
         // 音频引用带时间码 → 点击回听片段；视频/图像带 bbox/时间码 → 点击取帧框选（硬验收，§4.3/§6）。
         const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
@@ -2325,7 +2340,7 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
               : undefined;
         const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : docFocus ? "\n（点击回到原文片段）" : "";
         return (
-          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", maxWidth: "360px", verticalAlign: "middle" }}>
+          <span key={i} className="citation-item">
             <span
               className="citation"
               style={onClick ? { cursor: "pointer" } : undefined}
@@ -2343,8 +2358,8 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
               ) : null}
               引用 {i + 1}
             </span>
-            {supportLabel ? <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{supportLabel}</span> : null}
-            {c.quote ? <span title={c.quote} style={{ fontSize: "11px", color: "var(--text-dim)", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>“{c.quote}”</span> : null}
+            {supportLabel ? <span className="citation-support">{supportLabel}</span> : null}
+            {c.quote ? <span className="citation-quote" title={c.quote}>“{c.quote}”</span> : null}
           </span>
         );
       })}

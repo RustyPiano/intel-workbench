@@ -1728,6 +1728,11 @@ a {
   font-size: 12px;
   margin-right: auto;
 }
+.graph-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .graph-toolbar button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1863,6 +1868,10 @@ a {
 .graph-selection small {
   color: var(--text-muted);
   font-size: 12px;
+}
+.graph-edge-detail {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(15, 23, 42, 0.72);
 }
 
 /* 3. Contradictions Panel */
@@ -2047,23 +2056,58 @@ a {
 .tool-trace__item--running {
   color: var(--text-dim);
 }
+.citation-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.graph-edge-detail .citation-list {
+  display: flex;
+  margin-left: 0;
+}
+.citation-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(100%, 360px);
+}
 .citation {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  gap: 4px;
+  min-width: 48px;
+  height: 22px;
+  padding: 0 8px;
   font-size: 10px;
   font-weight: 700;
-  border-radius: 50%;
+  line-height: 1;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
-  margin: 0 4px;
   cursor: pointer;
+  white-space: nowrap;
   transition: var(--transition);
 }
 .citation:hover {
   background: var(--accent-light);
+}
+.citation-support {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.citation-quote {
+  color: var(--text-dim);
+  font-size: 11px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-suggestions {
   display: flex;

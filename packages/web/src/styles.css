@@ -2170,10 +2170,16 @@ a {
 }
 .chat-suggestions {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 0 24px;
   margin-bottom: 12px;
   overflow-x: auto;
+}
+.chat-suggestions__label {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .chat-suggestion-btn {
   padding: 6px 12px;
@@ -2190,6 +2196,10 @@ a {
   border-color: var(--accent-light);
   color: #fff;
   background: rgba(59, 130, 246, 0.05);
+}
+.chat-suggestion-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .chat-input-area {
   padding: 16px 24px;

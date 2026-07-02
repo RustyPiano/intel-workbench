@@ -264,7 +264,7 @@ const TASK_STAGE_HINTS: Record<string, string> = {
   "quality-check": "确认素材已完成解析，失败或待配置的素材先处理掉。",
   "evidence-units": "系统会把素材切成可引用片段，后续结论都从这里溯源。",
   "entity-merge": "检查人物、组织、地点、装备等要素是否归并合理。",
-  "proposition-extraction": "从素材中抽取可核验命题，人工确认后再继续。",
+  "proposition-extraction": "命题是带出处的事实陈述。去溯源问答点示例问题，生成并复核后标记完成。",
   "contradiction-detection": "检查跨素材说法是否冲突，必要时标记处理结果。",
   assessment: "把可支撑的事实整理为研判结论。",
   "report-generation": "用已核准结论生成报告草稿。",
@@ -296,6 +296,7 @@ function nextTaskAction(snapshot: ApiTaskRunSnapshot | null, creating: boolean, 
   if (snapshot.run.status === "done") return "流程已完成，可以进入报告复核与导出。";
   if (snapshot.run.status === "failed") return "流程已失败，请查看失败阶段并处理后重新启动。";
   if (current?.checkpoint && current.status === "active") return confirming ? "正在确认检查点…" : "当前阶段需要人工确认。检查无误后点击「确认检查点」。";
+  if (current?.key === "proposition-extraction" && current.status === "active") return "在溯源问答选择示例问题并发送，让 AI 输出可引用的事实陈述。";
   if (current?.status === "active" && MANUAL_STAGE_KEYS.has(current.key)) return "当前阶段需要人工判断。完成后用阶段卡片里的「标记完成」继续。";
   return "当前阶段由系统处理。完成后会自动进入下一步。";
 }
@@ -2452,6 +2453,12 @@ interface ToolTraceEntry {
   status: "running" | "ok" | "failed";
 }
 
+const INQUIRY_SUGGESTIONS = [
+  "请从全部素材中抽取可核验命题，每条用一句事实陈述并给出引用。",
+  "按时间、地点、对象、动作列出本专题最关键的事实陈述。",
+  "找出涉及同一人、组织、地点或装备的关联命题，并说明出处。",
+];
+
 export function InquiryPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
@@ -2753,6 +2760,15 @@ export function InquiryPanel() {
             <FrameCiteView cite={frameCite} onClose={() => setFrameCite(null)} />
           </div>
         ) : null}
+      </div>
+
+      <div className="chat-suggestions" aria-label="常用问题">
+        <span className="chat-suggestions__label">可直接问</span>
+        {INQUIRY_SUGGESTIONS.map((question) => (
+          <button key={question} type="button" className="chat-suggestion-btn" onClick={() => handleEditQuestion(question)} disabled={busy}>
+            {question}
+          </button>
+        ))}
       </div>
 
       <form onSubmit={handleSend} className="chat-input-area">

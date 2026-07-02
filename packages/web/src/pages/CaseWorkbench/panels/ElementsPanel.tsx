@@ -252,11 +252,11 @@ function ElementGraphView({ caseId }: { caseId: string }) {
   }, [caseId]);
 
   useEffect(() => {
-    if (selectedEdgeKey) {
-      window.setTimeout(() => {
-        edgeDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }, 0);
-    }
+    if (!selectedEdgeKey) return;
+    const timer = window.setTimeout(() => {
+      edgeDetailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [selectedEdgeKey]);
 
   if (error) return <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div>;

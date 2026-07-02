@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, useParams } from "react-router-dom";
 import {
   createFinding,
@@ -45,6 +45,14 @@ export function FindingsPanel() {
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   const load = useCallback(async () => {
     if (!user || !caseId) return;
     try {
@@ -53,14 +61,18 @@ export function FindingsPanel() {
         listFindings(caseId),
         listInquiries(caseId),
       ]);
+      if (!isMounted.current) return;
       setCaseInfo(nextCase);
       setFindings(nextFindings);
       setInquiries(nextInquiries);
       setError(null);
     } catch (e) {
+      if (!isMounted.current) return;
       setError((e as Error).message);
     } finally {
-      setLoaded(true);
+      if (isMounted.current) {
+        setLoaded(true);
+      }
     }
   }, [user, caseId]);
 

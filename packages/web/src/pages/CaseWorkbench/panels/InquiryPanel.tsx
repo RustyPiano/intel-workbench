@@ -248,10 +248,24 @@ export function InquiryPanel() {
     await runQuestion(input.trim());
   };
 
+  const editTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (editTimerRef.current) {
+        window.clearTimeout(editTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleEditQuestion = (question: string) => {
     if (busy) return;
     setInput(question);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
+    if (editTimerRef.current) {
+      window.clearTimeout(editTimerRef.current);
+    }
+    editTimerRef.current = window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
   };
 
   const handleClearHistory = async () => {

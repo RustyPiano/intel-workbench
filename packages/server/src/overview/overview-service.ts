@@ -4,7 +4,24 @@ import path from "node:path";
 
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
-import { CLEARANCES, type CaseStatus, type Clearance, type Identity, type Modality } from "../domain/types.js";
+import { CLEARANCES, type CaseStatus, type Clearance, type Identity, type MaterialStatus, type Modality, type ReportStatus } from "../domain/types.js";
+import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-config.js";
+
+function hasConfigCue(note?: string): boolean {
+  return Boolean(note && (note.includes("请先配置") || note.includes("未配置") || note.includes("授权") || note.includes("白名单") || note.includes("拦截")));
+}
+
+function mediaConfigured(modality: Modality, configs: SlotConfigs, mock: boolean): boolean {
+  if (mock) return modality === "audio" || modality === "video" || modality === "image";
+  if (modality === "audio") return configs.asr.configured;
+  if (modality === "image") return configs.vlm.configured || configs.ocr.configured;
+  if (modality === "video") return configs.asr.configured || configs.vlm.configured || configs.ocr.configured;
+  return false;
+}
+
+function needsConfig(material: { modality: Modality; note?: string }, configs: SlotConfigs, mock: boolean): boolean {
+  return hasConfigCue(material.note) && !mediaConfigured(material.modality, configs, mock);
+}
 
 async function countJsonArray(filePath: string): Promise<number> {
   try {
@@ -15,14 +32,27 @@ async function countJsonArray(filePath: string): Promise<number> {
   }
 }
 
+async function readReportStatus(filePath: string): Promise<ReportStatus | null> {
+  try {
+    const value = JSON.parse(await readFile(filePath, "utf8")) as { status?: unknown };
+    return value.status === "draft" || value.status === "in_review" || value.status === "approved" || value.status === "exported"
+      ? value.status
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface OverviewCaseRow {
   id: string;
   name: string;
   clearance: Clearance;
   status: CaseStatus;
   materialCount: number;
+  materials: Record<MaterialStatus, number> & { needsConfig: number };
   elementCount: number;
   contradictionCount: number;
+  reportStatus: ReportStatus | null;
   updated_at: string;
 }
 
@@ -58,12 +88,15 @@ export class OverviewService {
       }
     }
 
+    const slotConfigs = readSlotConfigs();
+    const mockMedia = useMockMedia();
     const rows = await Promise.all(
       manifests.map(async (manifest): Promise<OverviewCaseRow> => {
         const caseDir = this.paths.caseDir(manifest.id);
-        const [elementCount, contradictionCount] = await Promise.all([
+        const [elementCount, contradictionCount, reportStatus] = await Promise.all([
           countJsonArray(path.join(caseDir, "elements.json")),
           countJsonArray(path.join(caseDir, "contradictions.json")),
+          readReportStatus(path.join(caseDir, "report", "report.json")),
         ]);
         return {
           id: manifest.id,
@@ -71,8 +104,16 @@ export class OverviewService {
           clearance: manifest.clearance,
           status: manifest.status,
           materialCount: manifest.materials.length,
+          materials: {
+            pending: manifest.materials.filter((material) => material.status === "pending").length,
+            processing: manifest.materials.filter((material) => material.status === "processing").length,
+            done: manifest.materials.filter((material) => material.status === "done").length,
+            failed: manifest.materials.filter((material) => material.status === "failed").length,
+            needsConfig: manifest.materials.filter((material) => material.status === "pending" && needsConfig(material, slotConfigs, mockMedia)).length,
+          },
           elementCount,
           contradictionCount,
+          reportStatus,
           updated_at: manifest.updated_at,
         };
       }),

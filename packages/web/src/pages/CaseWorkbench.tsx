@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NavLink, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   acknowledgeContradiction,
@@ -59,17 +59,18 @@ import {
   type TimelinePoint,
   type VideoMedia,
 } from "../api";
+import { auditActionLabel, auditResultLabel } from "../audit-labels";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS } from "../types";
 
 const TABS: { to: string; label: string }[] = [
-  { to: "materials", label: "线索素材" },
-  { to: "elements", label: "要素提取" },
-  { to: "contradictions", label: "矛盾检测" },
-  { to: "inquiry", label: "智能问答" },
+  { to: "materials", label: "素材" },
+  { to: "elements", label: "要素 / 时间线" },
+  { to: "contradictions", label: "矛盾核验" },
+  { to: "inquiry", label: "溯源问答" },
   { to: "findings", label: "研判结论" },
-  { to: "report", label: "通报起草" },
-  { to: "audit", label: "专题审计" },
+  { to: "report", label: "报告复核" },
+  { to: "audit", label: "审计" },
 ];
 
 /**
@@ -104,9 +105,14 @@ export function CaseWorkbench() {
             </span>
           ) : null}
         </div>
-        <span className="workbench__hint">覆盖素材解析、要素抽取、溯源问答与报告复核全流程，所有研判结论均可回溯至素材原文出处。</span>
+        <span className="workbench__hint">
+          {caseInfo?.description?.trim()
+            ? caseInfo.description
+            : "覆盖素材解析、要素抽取、溯源问答与报告复核全流程，所有研判结论均可回溯至素材原文出处。"}
+        </span>
       </div>
 
+      <VerificationSummary caseInfo={caseInfo} caseId={id} enabled={Boolean(user && id)} />
       <TaskOverview caseId={id} enabled={Boolean(user && id)} />
 
       <nav className="tabs">
@@ -127,6 +133,91 @@ export function CaseWorkbench() {
         <Outlet key={id} />
       </div>
     </div>
+  );
+}
+
+interface VerificationSummaryState {
+  materials: ApiMaterial[];
+  contradictions: ContradictionDetectionResult | null;
+  report: ApiReport | null;
+  audit: AuditEvent[];
+}
+
+function VerificationSummary({ caseInfo, caseId, enabled }: { caseInfo: ApiCase | null; caseId?: string; enabled: boolean }) {
+  const [state, setState] = useState<VerificationSummaryState | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !caseId) return;
+    let alive = true;
+    const load = () => {
+      Promise.all([
+        listMaterials(caseId).catch(() => [] as ApiMaterial[]),
+        listContradictions(caseId).catch(() => null),
+        getReport(caseId).catch(() => null),
+        listCaseAudit(caseId).catch(() => [] as AuditEvent[]),
+      ]).then(([materials, contradictions, report, audit]) => {
+        if (alive) setState({ materials, contradictions, report, audit });
+      });
+    };
+    load();
+    const timer = window.setInterval(load, 5000);
+    const onFocus = () => load();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [caseId, enabled]);
+
+  if (!enabled) return null;
+  const materialTotal = state?.materials.length ?? caseInfo?.materials.length ?? 0;
+  const done = state?.materials.filter((item) => item.status === "done").length ?? 0;
+  const processing = state?.materials.filter((item) => item.status === "processing").length ?? 0;
+  const pending = state?.materials.filter((item) => item.status === "pending").length ?? 0;
+  const needsConfig = state?.materials.filter((item) => item.status === "pending" && needsMaterialConfig(item.note)).length ?? 0;
+  const pendingOther = Math.max(0, pending - needsConfig);
+  const failed = state?.materials.filter((item) => item.status === "failed").length ?? 0;
+  const materialHint = [
+    processing > 0 ? `${processing} 个加工中` : "",
+    needsConfig > 0 ? `${needsConfig} 个需配置` : "",
+    pendingOther > 0 ? `${pendingOther} 个待处理` : "",
+    failed > 0 ? `${failed} 个失败` : "",
+  ].filter(Boolean).join("，") || "已加工 / 总数";
+  const contradictions = state?.contradictions?.contradictions ?? [];
+  const ackById = new Map((state?.contradictions?.acknowledgements ?? []).map((ack) => [ack.contradiction_id, ack.status]));
+  const openHigh = contradictions.filter((item) => item.confidence >= 0.75 && (ackById.get(item.id) ?? "open") === "open").length;
+  const reportStatus = state?.report?.status;
+  const auditIssues = state?.audit.filter((event) => event.result !== "ok").length ?? 0;
+
+  return (
+    <section className="verification-summary">
+      <div className="verification-summary__item">
+        <span>管素材</span>
+        <strong>{done}/{materialTotal}</strong>
+        <small>{materialHint}</small>
+      </div>
+      <div className="verification-summary__item">
+        <span>查矛盾</span>
+        <strong>{contradictions.length}</strong>
+        <small>{openHigh > 0 ? `${openHigh} 个高置信待处理` : "无高置信未处理"}</small>
+      </div>
+      <div className="verification-summary__item">
+        <span>看证据</span>
+        <strong>{caseInfo?.clearance ? CLEARANCE_LABELS[caseInfo.clearance] : "—"}</strong>
+        <small>引用片段带 hash / 定位</small>
+      </div>
+      <div className="verification-summary__item">
+        <span>出报告</span>
+        <strong>{reportStatus ? REPORT_STATUS_LABELS[reportStatus] : "未生成"}</strong>
+        <small>{reportStatus === "approved" || reportStatus === "exported" ? "导出前仍过闸门" : "需提交并复核"}</small>
+      </div>
+      <div className="verification-summary__item">
+        <span>审计</span>
+        <strong>{state?.audit.length ?? "—"}</strong>
+        <small>{auditIssues > 0 ? `${auditIssues} 条拒绝/失败/异常` : "专题链路留痕"}</small>
+      </div>
+    </section>
   );
 }
 
@@ -153,6 +244,7 @@ const MANUAL_STAGE_KEYS = new Set(["proposition-extraction", "assessment"]);
 
 function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }) {
   const [snapshot, setSnapshot] = useState<ApiTaskRunSnapshot | null>(null);
+  const [visibleMaterials, setVisibleMaterials] = useState<ApiMaterial[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -165,11 +257,12 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
 
     const load = async () => {
       try {
-        const next = await getCurrentTaskRun(caseId);
+        const [next, materialList] = await Promise.all([getCurrentTaskRun(caseId), listMaterials(caseId)]);
         if (next) localStorage.setItem(storageKey, next.run.id);
         else localStorage.removeItem(storageKey);
         if (!alive) return;
         setSnapshot(next);
+        setVisibleMaterials(materialList);
         setError(null);
       } catch (e) {
         if (alive) setError((e as Error).message);
@@ -238,8 +331,18 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
   const currentStage = overview?.currentStage;
   const stages = snapshot?.run.stages ?? [];
   const progressText = overview ? `${overview.completedStageCount}/${overview.totalStageCount}` : "—";
+  const pendingNeedsConfig = visibleMaterials
+    ? visibleMaterials.filter((m) => m.status === "pending" && needsMaterialConfig(m.note)).length
+    : overview?.materials.needsConfig ?? 0;
+  const pendingOtherMaterials = overview ? Math.max(0, overview.materials.pending - pendingNeedsConfig) : 0;
   const materialText = overview
-    ? `${overview.materials.done}/${overview.materials.total} 完成${overview.materials.processing > 0 ? `，${overview.materials.processing} 加工中` : ""}`
+    ? [
+      `${overview.materials.done}/${overview.materials.total} 完成`,
+      overview.materials.processing > 0 ? `${overview.materials.processing} 加工中` : "",
+      pendingNeedsConfig > 0 ? `${pendingNeedsConfig} 需配置` : "",
+      pendingOtherMaterials > 0 ? `${pendingOtherMaterials} 待处理` : "",
+      overview.materials.failed > 0 ? `${overview.materials.failed} 失败` : "",
+    ].filter(Boolean).join("，")
     : "加载中";
   const reportText = overview?.reportStatus ? REPORT_STATUS_LABELS[overview.reportStatus] : "未生成";
   const currentText = snapshot
@@ -325,6 +428,23 @@ const STATUS_LABELS: Record<ApiMaterial["status"], { text: string; color: string
   failed: { text: "失败", color: "var(--danger-light)" },
 };
 
+function materialListStatus(m: ApiMaterial): { text: string; color: string } {
+  if (m.status === "pending") {
+    return {
+      text: isMediaModality(m.modality) ? (needsMaterialConfig(m.note) ? "需配置后加工" : "待开始加工") : "未生成文本",
+      color: STATUS_LABELS.pending.color,
+    };
+  }
+  if (m.status === "failed") {
+    const note = m.note ?? "";
+    return {
+      text: note.includes("配置") || note.includes("授权") ? "需配置后重试" : "加工失败",
+      color: STATUS_LABELS.failed.color,
+    };
+  }
+  return STATUS_LABELS[m.status];
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -335,17 +455,40 @@ function isMediaModality(m: ApiMaterial["modality"]): boolean {
   return m === "audio" || m === "video" || m === "image";
 }
 
+function mediaPendingText(m: ApiMaterial["modality"]): string {
+  if (m === "audio") return "音频已上传，点击「开始加工」进行转写，生成带时间码的可引用片段。";
+  if (m === "video") return "视频已上传，点击「开始加工」进行分镜、转写与画面识别；大文件可能需要较长时间。";
+  return "图片已上传，点击「开始加工」进行配文/OCR，生成可引用区域。";
+}
+
+function legacyMediaPlaceholder(note?: string): boolean {
+  return Boolean(note && (note.includes("降级占位") || note.includes("待接入本地")));
+}
+
+function needsMaterialConfig(note?: string): boolean {
+  return Boolean(note && (note.includes("请先配置") || note.includes("未配置") || note.includes("授权") || note.includes("白名单") || note.includes("拦截")));
+}
+
 /** 媒体素材加工状态行文案（含部分失败 note，二期 P2.3a/b）。 */
 function mediaStatusText(content: MaterialContent): string {
   const mt = content.material;
-  if (mt.status === "processing") return "加工中…";
-  if (mt.status !== "done") return mt.note ?? "尚未加工。点击「加工」生成可引用片段（带时间码/坐标）。";
+  if (mt.status === "processing") return mt.note ?? "加工中：后台正在处理，完成后自动刷新";
+  if (mt.status === "pending") return legacyMediaPlaceholder(mt.note) ? mediaPendingText(mt.modality) : (mt.note ?? mediaPendingText(mt.modality));
+  if (mt.status === "failed") return mt.note ?? "加工失败。请检查模型/本地服务配置后点击「重试加工」。";
   const eng = `引擎 ${mt.engine ?? "—"}`;
   const dur = mt.duration ? ` · ${mt.duration}s` : "";
   const warn = mt.note ? ` · 警告：${mt.note}` : "";
   if (mt.modality === "audio") return `转写完成 · ${content.segments?.length ?? 0} 段 · ${eng}${dur}${warn}`;
   if (mt.modality === "video" && content.media?.kind === "video") return `解析完成 · ${content.media.shots.length} 镜头 · ${eng}${dur}${warn}`;
   return `解析完成 · ${eng}${warn}`;
+}
+
+function elapsedLabel(startedAt: number | undefined, now: number): string {
+  if (!startedAt) return "进行中";
+  const sec = Math.max(0, Math.round((now - startedAt) / 1000));
+  const min = Math.floor(sec / 60);
+  const rest = sec % 60;
+  return min > 0 ? `${min}m ${String(rest).padStart(2, "0")}s` : `${sec}s`;
 }
 
 /** 解析时间码 "start-end"（秒）→ [start, end]（二期 P2.3a）。 */
@@ -688,33 +831,65 @@ function ImageMediaView({ materialId, media }: { materialId: string; media: Imag
 
 export function MaterialsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { user } = useSession();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [materials, setMaterials] = useState<ApiMaterial[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const appliedFocusKeyRef = useRef<string | null>(null);
   const [content, setContent] = useState<MaterialContent | null>(null);
   const [busy, setBusy] = useState(false);
-  const [processing, setProcessing] = useState(false);
+  const [processingIds, setProcessingIds] = useState<Set<string>>(() => new Set());
+  const [processStartedAt, setProcessStartedAt] = useState<Record<string, number>>({});
   const [reindexing, setReindexing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [rawUrl, setRawUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ name: string; index: number; total: number; fraction: number } | null>(null);
   const [uploadIssues, setUploadIssues] = useState<{ name: string; message: string }[]>([]);
+  const focusMaterialId = searchParams.get("material");
+  const focusStart = Number(searchParams.get("start"));
+  const focusEnd = Number(searchParams.get("end"));
+  const focusQuote = searchParams.get("quote") ?? "";
+  const focusKey = `${focusMaterialId ?? ""}:${focusStart}:${focusEnd}:${focusQuote}`;
+  const focusSpan = useMemo(() => {
+    if (activeId !== focusMaterialId || content?.text === undefined) return null;
+    return resolveFocusSpan(content.text, focusStart, focusEnd, focusQuote);
+  }, [activeId, content, focusEnd, focusMaterialId, focusQuote, focusStart]);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     if (!user || !caseId) return;
     listMaterials(caseId)
       .then((list) => {
         setMaterials(list);
-        setActiveId((prev) => prev ?? list[0]?.id ?? null);
+        setActiveId((prev) => {
+          if (focusMaterialId && appliedFocusKeyRef.current !== focusKey && list.some((item) => item.id === focusMaterialId)) {
+            appliedFocusKeyRef.current = focusKey;
+            return focusMaterialId;
+          }
+          if (prev && list.some((item) => item.id === prev)) return prev;
+          return list[0]?.id ?? null;
+        });
       })
       .catch((e: Error) => setError(e.message));
-  };
+  }, [caseId, focusKey, focusMaterialId, user]);
 
-  useEffect(refresh, [user, caseId]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  const patchLocalMaterial = useCallback((mid: string, patch: Partial<ApiMaterial>) => {
+    setMaterials((prev) => prev?.map((m) => (m.id === mid ? { ...m, ...patch } : m)) ?? prev);
+    setContent((prev) => (prev?.material.id === mid ? { ...prev, material: { ...prev.material, ...patch } } : prev));
+  }, []);
 
   useEffect(() => {
     if (!user || !activeId) {
@@ -729,6 +904,32 @@ export function MaterialsPanel() {
       alive = false;
     };
   }, [user, activeId]);
+
+  const serverProcessingIds = useMemo(() => materials?.filter((m) => m.status === "processing").map((m) => m.id).sort().join("|") ?? "", [materials]);
+
+  useEffect(() => {
+    if (!user || !caseId || (!serverProcessingIds && processingIds.size === 0)) return;
+    const timer = window.setInterval(() => {
+      refresh();
+      const mid = activeIdRef.current;
+      if (mid) {
+        void getMaterialContent(mid)
+          .then((next) => {
+            if (activeIdRef.current === mid) setContent(next);
+          })
+          .catch((e: Error) => {
+            if (activeIdRef.current === mid) setError(e.message);
+          });
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [caseId, processingIds.size, refresh, serverProcessingIds, user]);
+
+  useEffect(() => {
+    if (!serverProcessingIds && processingIds.size === 0) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [processingIds.size, serverProcessingIds]);
 
   const handleFiles = async (fileList: FileList | null) => {
     if (!user || !caseId || !fileList || fileList.length === 0) return;
@@ -770,7 +971,10 @@ export function MaterialsPanel() {
     try {
       await reindexMaterial(caseId, mid);
       refresh();
-      setContent(await getMaterialContent(mid));
+      if (activeIdRef.current === mid) {
+        const next = await getMaterialContent(mid);
+        if (activeIdRef.current === mid) setContent(next);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -786,7 +990,7 @@ export function MaterialsPanel() {
     setError(null);
     try {
       await deleteMaterial(caseId, mid);
-      if (activeId === mid) {
+      if (activeIdRef.current === mid) {
         setActiveId(null);
         setContent(null);
       }
@@ -800,17 +1004,40 @@ export function MaterialsPanel() {
 
   // 显式加工媒体素材（二期 P2.3a）；完成后刷新列表与阅读区。
   const handleProcess = async (mid: string) => {
-    if (!user || !caseId || processing) return;
-    setProcessing(true);
+    if (!user || !caseId || processingIds.has(mid)) return;
+    setProcessingIds((prev) => new Set(prev).add(mid));
+    setProcessStartedAt((prev) => ({ ...prev, [mid]: Date.now() }));
+    patchLocalMaterial(mid, { status: "processing", note: "加工中：请求已发送，等待后端接手" });
     setError(null);
     try {
-      await processMaterial(caseId, mid);
+      const material = await processMaterial(caseId, mid);
+      patchLocalMaterial(mid, material);
       refresh();
-      setContent(await getMaterialContent(mid));
+      if (activeIdRef.current === mid) {
+        const next = await getMaterialContent(mid);
+        if (activeIdRef.current === mid) setContent(next);
+      }
     } catch (e) {
       setError((e as Error).message);
+      refresh();
+      if (activeIdRef.current === mid) {
+        void getMaterialContent(mid)
+          .then((next) => {
+            if (activeIdRef.current === mid) setContent(next);
+          })
+          .catch(() => undefined);
+      }
     } finally {
-      setProcessing(false);
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(mid);
+        return next;
+      });
+      setProcessStartedAt((prev) => {
+        const next = { ...prev };
+        delete next[mid];
+        return next;
+      });
     }
   };
 
@@ -846,6 +1073,9 @@ export function MaterialsPanel() {
     }
   };
 
+  const activeProcessing = content ? content.material.status === "processing" || processingIds.has(content.material.id) : false;
+  const activeElapsed = content ? elapsedLabel(processStartedAt[content.material.id], now) : "进行中";
+
   return (
     <div className="materials-layout">
       <input
@@ -873,7 +1103,7 @@ export function MaterialsPanel() {
           <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ fontSize: "11px", color: "var(--text-dim)", marginBottom: "5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {uploadProgress.fraction >= 1
-                ? `正在解析并建立检索索引… ${uploadProgress.index}/${uploadProgress.total} — ${uploadProgress.name}`
+                ? `上传完成，正在登记素材… ${uploadProgress.index}/${uploadProgress.total} — ${uploadProgress.name}`
                 : `上传中 ${uploadProgress.index}/${uploadProgress.total} · ${Math.round(uploadProgress.fraction * 100)}% — ${uploadProgress.name}`}
             </div>
             <div style={{ height: "4px", background: "rgba(255,255,255,0.1)", borderRadius: "2px", overflow: "hidden" }}>
@@ -904,22 +1134,36 @@ export function MaterialsPanel() {
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
         ) : materials.length === 0 ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-            暂无素材。点击「+ 汇入」上传线索：支持文档（TXT / Markdown / CSV / JSON / 日志，以及 PDF / Word / PPT / Excel，自动解析），音频、视频与图片可在汇入后进行转写与识别，统一形成可检索、可引用的素材。
+            暂无素材。点击「+ 汇入」上传线索：文档会尝试自动解析并建立检索片段；音频、视频与图片汇入后可点击「开始加工」进行转写与识别，需对应模型或本地服务已配置。
           </div>
         ) : (
           materials.map((m) => {
-            const s = STATUS_LABELS[m.status];
+            const displayMaterial = processingIds.has(m.id) ? { ...m, status: "processing" as const, note: m.note ?? "加工中：请求已发送，等待后端接手" } : m;
+            const s = materialListStatus(displayMaterial);
             return (
-              <div key={m.id} className={`materials-item ${activeId === m.id ? "active" : ""}`} onClick={() => setActiveId(m.id)}>
-                <div className="materials-item__title">{m.filename}</div>
+              <button
+                type="button"
+                key={m.id}
+                className={`materials-item materials-item--${m.modality} materials-item--${displayMaterial.status} ${activeId === m.id ? "active" : ""}`}
+                onClick={() => setActiveId(m.id)}
+              >
+                <div className="materials-item__main">
+                  <span className={`materials-chip materials-chip--${m.modality}`}>{MODALITY_LABELS[m.modality]}</span>
+                  <div className="materials-item__title">{m.filename}</div>
+                </div>
                 <div className="materials-item__meta">
-                  <span>{MODALITY_LABELS[m.modality]} · {formatSize(m.size)}</span>
+                  <span>{m.format.toUpperCase()} · {formatSize(m.size)}</span>
                   <span style={{ color: s.color }}>
                     {s.text}
-                    {m.status === "done" && m.chunk_count !== undefined ? ` · ${m.chunk_count} 个片段` : ""}
+                    {displayMaterial.status === "done" && m.chunk_count !== undefined ? ` · ${m.chunk_count} 个片段` : ""}
                   </span>
                 </div>
-              </div>
+                {displayMaterial.status === "processing" ? (
+                  <div className="material-progress material-progress--thin" role="progressbar" aria-valuetext="加工中" aria-label="加工进度">
+                    <div />
+                  </div>
+                ) : null}
+              </button>
             );
           })
         )}
@@ -934,21 +1178,24 @@ export function MaterialsPanel() {
         ) : (
           <>
             <div className="materials-viewer__header">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
-                <div className="materials-viewer__title" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <div className="materials-viewer__top">
+                <div className="materials-viewer__identity">
+                  <span className={`materials-chip materials-chip--${content.material.modality}`}>{MODALITY_LABELS[content.material.modality]}</span>
+                  <div className="materials-viewer__title">
                   <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                     <polyline points="14 2 14 8 20 8"/>
                   </svg>
-                  {content.material.filename}
+                    <span>{content.material.filename}</span>
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                <div className="materials-viewer__actions">
                   {content.material.status === "done" ? (
                     <button
                       type="button"
                       className="btn"
                       style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                      disabled={reindexing || deleting}
+                      disabled={reindexing || deleting || activeProcessing}
                       onClick={() => void handleReindex(content.material.id)}
                       title="重新生成该素材的语义检索索引"
                     >
@@ -962,7 +1209,7 @@ export function MaterialsPanel() {
                     type="button"
                     className="btn btn--danger"
                     style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                    disabled={deleting || reindexing}
+                    disabled={deleting || reindexing || activeProcessing}
                     onClick={() => void handleDelete(content.material.id)}
                   >
                     <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -972,10 +1219,12 @@ export function MaterialsPanel() {
                   </button>
                 </div>
               </div>
-              <div style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "4px" }}>
-                模态: <strong style={{ color: "#fff" }}>{MODALITY_LABELS[content.material.modality]}</strong> | 格式: {content.material.format} | 大小:{" "}
-                {formatSize(content.material.size)} | 汇入: {content.material.ingested_at.replace("T", " ").slice(0, 19)}
-                {content.chunkCount !== undefined ? ` | 片段: ${content.chunkCount}` : ""}
+              <div className="materials-viewer__meta">
+                <span>格式 <strong>{content.material.format.toUpperCase()}</strong></span>
+                <span>大小 <strong>{formatSize(content.material.size)}</strong></span>
+                <span>汇入 <strong>{content.material.ingested_at.replace("T", " ").slice(0, 19)}</strong></span>
+                {content.chunkCount !== undefined ? <span>片段 <strong>{content.chunkCount}</strong></span> : null}
+                <span style={{ color: materialListStatus(content.material).color }}>{materialListStatus(content.material).text}</span>
               </div>
             </div>
 
@@ -988,9 +1237,9 @@ export function MaterialsPanel() {
                       className="btn btn--primary"
                       style={{ padding: "6px 14px", fontSize: "12px" }}
                       onClick={() => void handleProcess(content.material.id)}
-                      disabled={processing || content.material.status === "processing"}
+                      disabled={activeProcessing || deleting || reindexing}
                     >
-                      {processing || content.material.status === "processing" ? (
+                      {activeProcessing ? (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                           <svg className="icon-svg" style={{ width: "12px", height: "12px", animation: "spin 1s linear infinite" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
@@ -1011,6 +1260,13 @@ export function MaterialsPanel() {
                           </svg>
                           重试加工
                         </span>
+                      ) : needsMaterialConfig(content.material.note) ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                          <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                          </svg>
+                          配置后开始
+                        </span>
                       ) : (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                           <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1022,6 +1278,17 @@ export function MaterialsPanel() {
                     </button>
                     <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>{mediaStatusText(content)}</span>
                   </div>
+                  {activeProcessing ? (
+                    <div className="material-process" role="status" aria-live="polite" aria-busy="true">
+                      <div className="material-process__head">
+                        <strong>{mediaStatusText(content)}</strong>
+                        <span>{activeElapsed}</span>
+                      </div>
+                      <div className="material-progress" role="progressbar" aria-valuetext={mediaStatusText(content)} aria-label="加工进度">
+                        <div />
+                      </div>
+                    </div>
+                  ) : null}
 
                   {content.material.modality === "audio" && content.segments ? (
                     <>
@@ -1072,7 +1339,7 @@ export function MaterialsPanel() {
                     </div>
                   ) : null}
                   <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", fontSize: "13px", lineHeight: "1.7", color: "var(--text)", margin: 0 }}>
-                    {content.text}
+                    {focusSpan ? <HighlightedText text={content.text} start={focusSpan.start} end={focusSpan.end} /> : content.text}
                   </pre>
                 </>
               ) : (
@@ -1082,7 +1349,9 @@ export function MaterialsPanel() {
                     <strong>{content.note ?? "该素材尚未加工完成。"}</strong>
                   </div>
                   <div style={{ marginTop: "8px", color: "var(--text-dim)" }}>
-                    点击上方「开始加工」，对音视频与图像进行转写与识别，生成可引用片段。
+                    {isMediaModality(content.material.modality)
+                      ? "点击上方「开始加工」，对音视频与图像进行转写与识别，生成可引用片段。"
+                      : "该文档尚未生成可检索文本。请检查 liteparse/OCR 配置后重新上传，或上传文本版材料。"}
                   </div>
                 </div>
               )}
@@ -1092,6 +1361,34 @@ export function MaterialsPanel() {
       </div>
     </div>
   );
+}
+
+function HighlightedText({ text, start, end }: { text: string; start: number; end: number }) {
+  const safeStart = Math.max(0, Math.min(start, text.length));
+  const safeEnd = Math.max(safeStart, Math.min(end, text.length));
+  return (
+    <>
+      {text.slice(0, safeStart)}
+      <mark className="source-highlight">{text.slice(safeStart, safeEnd)}</mark>
+      {text.slice(safeEnd)}
+    </>
+  );
+}
+
+function resolveFocusSpan(text: string, start: number, end: number, quote: string): { start: number; end: number } | null {
+  const hasOffset = Number.isFinite(start) && Number.isFinite(end) && end > start;
+  const safeStart = hasOffset ? Math.max(0, Math.min(start, text.length)) : 0;
+  const safeEnd = hasOffset ? Math.max(safeStart, Math.min(end, text.length)) : 0;
+  const trimmedQuote = quote.trim();
+  if (trimmedQuote) {
+    const offsetText = hasOffset ? text.slice(safeStart, safeEnd) : "";
+    if (offsetText && (offsetText.includes(trimmedQuote) || trimmedQuote.includes(offsetText))) {
+      return { start: safeStart, end: safeEnd };
+    }
+    const found = text.indexOf(trimmedQuote);
+    if (found >= 0) return { start: found, end: found + trimmedQuote.length };
+  }
+  return hasOffset ? { start: safeStart, end: safeEnd } : null;
 }
 
 // ==================== 2. Elements Sub-panel ====================
@@ -1268,7 +1565,7 @@ export function ElementsPanel() {
           <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>已取消</div>
         ) : null}
 
-        <div className="elements-main">
+        <div className="elements-main table-scroll">
           <table className="elements-table">
             <thead>
               <tr>
@@ -1302,7 +1599,7 @@ export function ElementsPanel() {
                     {elements === null
                       ? "加载中…"
                       : all.length === 0
-                        ? "尚未抽取要素。点击「提取要素」从已加工文档中抽取人物/组织/地点/事件等（需文本模型已配置）。每个要素都会绑定到素材出处。"
+                        ? "尚未抽取要素。点击「提取要素」从已加工素材中抽取人物/组织/地点/事件等（需文本模型已配置）。每个要素都会绑定到素材出处。"
                         : "无匹配的要素。"}
                   </td>
                 </tr>
@@ -1602,7 +1899,8 @@ export function ContradictionsPanel() {
   const total = job?.progress.total ?? 0;
   const done = job?.progress.done ?? 0;
   const progressWidth = running && total > 0 ? `${Math.min(100, Math.round((done / total) * 100))}%` : "38%";
-  const statusLabel = latestResult?.status === "failed" ? "失败" : latestResult?.status === "degraded" ? "降级完成" : latestResult ? "完成" : "未检测";
+  const noProcessedChunks = latestResult !== null && latestResult.totalChunks === 0;
+  const statusLabel = noProcessedChunks ? "未执行" : latestResult?.status === "failed" ? "失败" : latestResult?.status === "degraded" ? "部分覆盖完成" : latestResult ? "完成" : "未检测";
 
   return (
     <div className="contradictions-layout">
@@ -1651,6 +1949,10 @@ export function ContradictionsPanel() {
         ) : latestResult.status === "failed" ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
             矛盾检测失败，未产出可复核结果。
+          </div>
+        ) : noProcessedChunks ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
+            暂无已加工素材，未执行矛盾检测。请先完成文档解析或媒体加工。
           </div>
         ) : all.length === 0 ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
@@ -1742,6 +2044,8 @@ export function ContradictionsPanel() {
 // ==================== 4. Inquiry Sub-panel ====================
 
 function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCitation) => void }) {
+  const navigate = useNavigate();
+  const { id: caseId } = useParams<{ id: string }>();
   if (claim.citations.length === 0) return null;
   return (
     <span style={{ marginLeft: "6px" }}>
@@ -1749,6 +2053,7 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
         // 音频引用带时间码 → 点击回听片段；视频/图像带 bbox/时间码 → 点击取帧框选（硬验收，§4.3/§6）。
         const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
         const framed = (c.modality === "video" || c.modality === "image") && Boolean(c.locator.bbox || c.locator.timecode);
+        const docFocus = c.modality === "doc" && caseId ? docCitationFocus(c) : null;
         const quote = c.quote ?? c.snippet;
         const supportStatus = c.support_status ?? c.support_label;
         const support = supportStatus ? ` · 支持性：${supportStatus}` : "";
@@ -1757,8 +2062,14 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
           : c.locator.paragraph
             ? ` · 第${c.locator.paragraph}段`
             : "";
-        const onClick = audioTc ? () => void playCitedSegment(c.material_id, audioTc) : framed ? () => onFrame(c) : undefined;
-        const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : "";
+        const onClick = audioTc
+          ? () => void playCitedSegment(c.material_id, audioTc)
+          : framed
+            ? () => onFrame(c)
+            : docFocus
+              ? () => navigate(`/cases/${encodeURIComponent(caseId!)}/materials?${docFocus}`)
+              : undefined;
+        const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : docFocus ? "\n（点击回到原文片段）" : "";
         return (
           <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: "4px", maxWidth: "360px", verticalAlign: "middle" }}>
             <span
@@ -1785,6 +2096,25 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
       })}
     </span>
   );
+}
+
+function docCitationFocus(citation: ApiCitation): string | null {
+  const params = new URLSearchParams({ material: citation.material_id });
+  const quote = (citation.quote ?? citation.snippet).trim();
+  if (quote) params.set("quote", quote.slice(0, 500));
+  const chunkStart = citation.locator.char_start;
+  if (typeof chunkStart !== "number") return params.toString();
+  const quoteStart = typeof citation.quote_char_start === "number" ? citation.quote_char_start : 0;
+  const quoteEnd = typeof citation.quote_char_end === "number"
+    ? citation.quote_char_end
+    : typeof citation.locator.char_end === "number"
+      ? citation.locator.char_end - chunkStart
+      : quoteStart + citation.snippet.length;
+  const start = chunkStart + quoteStart;
+  const end = chunkStart + quoteEnd;
+  params.set("start", String(start));
+  params.set("end", String(end));
+  return params.toString();
 }
 
 function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void; reviewedRefs: Set<string>; onReview: (ref: string) => void }) {
@@ -2533,14 +2863,14 @@ export function ReportPanel() {
                 type="button"
                 className={status === "approved" || status === "exported" ? "btn btn--primary" : "btn btn--danger"}
                 style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
-                disabled={busy || (status !== "approved" && status !== "exported")}
-                title={status === "approved" || status === "exported" ? "导出公文 .md" : "必须完成保密复核后方可导出（闸门）"}
+                disabled={busy || !report}
+                title={status === "approved" || status === "exported" ? "导出公文 .md" : "点击测试服务端导出闸门：未复核会拒绝并写审计"}
                 onClick={handleExport}
               >
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                {status === "approved" || status === "exported" ? "导出报告 (.md)" : "导出报告 (未授权)"}
+                {status === "approved" || status === "exported" ? "导出报告 (.md)" : "测试导出闸门"}
               </button>
             </>
           )}
@@ -2551,38 +2881,6 @@ export function ReportPanel() {
 }
 
 // ==================== 6. CaseAuditPanel Sub-panel ====================
-
-/** 审计动作码 → 中文研判动作（未知码原样显示）。 */
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  "case.create": "创建专题",
-  "case.update": "更新专题",
-  "material.ingest": "汇入素材",
-  "material.process": "加工媒体素材",
-  "material.index": "建立检索索引",
-  "material.reindex": "重建检索索引",
-  "material.delete": "删除素材",
-  "inquiry.create": "智能问答",
-  "inquiry.retrieve": "检索取材",
-  "element.extract": "提取要素",
-  "task.run.create": "创建任务",
-  "task.stage.advance": "推进任务阶段",
-  "task.stage.confirm": "确认任务检查点",
-  "report.draft": "起草通报",
-  "report.submit": "提交复核",
-  "report.approve": "复核核准",
-  "report.export": "导出通报",
-  "audit.export": "导出审计",
-};
-
-const AUDIT_RESULT: Record<AuditEvent["result"], { text: string; color: string }> = {
-  ok: { text: "成功", color: "var(--ok-light)" },
-  deny: { text: "拒绝", color: "var(--warn-light)" },
-  error: { text: "失败", color: "var(--danger-light)" },
-};
-
-function auditActionLabel(e: AuditEvent): string {
-  return AUDIT_ACTION_LABELS[e.action] ?? e.action;
-}
 
 export function CaseAuditPanel() {
   const { id: caseId } = useParams<{ id: string }>();
@@ -2615,13 +2913,13 @@ export function CaseAuditPanel() {
           本地审计链完整性校验（Integrity Chain）
         </h4>
         <p style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-          本专题所有变更经 append-only 哈希连环锁记录（镜像自全局审计链）。共 <strong style={{ color: "#fff" }}>{events?.length ?? "…"}</strong> 条事件
+          本专题所有变更会镜像自全局 append-only 审计链。共 <strong style={{ color: "#fff" }}>{events?.length ?? "…"}</strong> 条事件
           {last ? (
             <>
               ；末位指纹 <code style={{ color: "var(--warn-light)", fontFamily: "monospace" }}>{last.event_hash.slice(0, 12)}…{last.event_hash.slice(-6)}</code>
             </>
           ) : null}
-          。局部修改、删除或插入会被 verify 检出（审计中心可一键校验）；非密码学防篡改（无外部签名/锚定）。
+          。全局审计链可在审计中心一键 verify；专题页展示的是该全局链的本专题镜像。
         </p>
       </div>
 
@@ -2641,7 +2939,7 @@ export function CaseAuditPanel() {
           </thead>
           <tbody>
             {rows.map((e) => {
-              const r = AUDIT_RESULT[e.result];
+              const r = auditResultLabel(e);
               return (
                 <tr key={e.id}>
                   <td style={{ fontFamily: "monospace" }}>{e.ts.replace("T", " ").slice(0, 19)}</td>

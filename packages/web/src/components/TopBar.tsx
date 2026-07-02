@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useSession } from "../state/session";
@@ -20,6 +20,24 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
   const { user, signOut } = useSession();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // 打开时：点击菜单外部或按 Esc 关闭（常见下拉交互预期）。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!userMenuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   const clearance = user?.clearance ?? "internal";
 
@@ -58,11 +76,12 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
           </Link>
         ) : null}
 
-        <div className="topbar__user">
+        <div className="topbar__user" ref={userMenuRef}>
           <button
             type="button"
             className="topbar__user-btn"
             onClick={() => setMenuOpen((v) => !v)}
+            aria-haspopup="menu"
             aria-expanded={menuOpen}
             style={{ display: "flex", alignItems: "center", gap: "6px" }}
           >

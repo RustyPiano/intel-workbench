@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getOverview, type Modality, type OverviewSummary } from "../api";
+import { getOverview, type Modality, type OverviewCaseRow, type OverviewSummary } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS, type Clearance } from "../types";
 
@@ -12,6 +12,12 @@ const MODALITY_LABELS: Record<Modality, string> = {
   video: "视频",
   image: "图像",
 };
+const REPORT_LABELS = {
+  draft: "草稿",
+  in_review: "待复核",
+  approved: "已复核",
+  exported: "已导出",
+} as const;
 // 顺序须与服务端 CLEARANCES 一致（packages/server/src/domain/types.ts，由低到高）。
 const CLEARANCES: Clearance[] = ["internal", "secret", "confidential", "topsecret"];
 
@@ -21,6 +27,17 @@ function statusLabel(status: "active" | "archived"): { cls: string; text: string
 
 function formatTime(value: string): string {
   return value.replace("T", " ").slice(0, 19);
+}
+
+function materialProgressText(materials: OverviewCaseRow["materials"], total: number): string {
+  const pendingOther = Math.max(0, materials.pending - materials.needsConfig);
+  return [
+    `完成 ${materials.done}/${total}`,
+    materials.processing > 0 ? `加工中 ${materials.processing}` : "",
+    materials.needsConfig > 0 ? `需配置 ${materials.needsConfig}` : "",
+    pendingOther > 0 ? `待处理 ${pendingOther}` : "",
+    materials.failed > 0 ? `失败 ${materials.failed}` : "",
+  ].filter(Boolean).join("，");
 }
 
 export function OverviewPage() {
@@ -113,7 +130,7 @@ export function OverviewPage() {
                 </section>
               </div>
 
-              <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
+              <div className="table-scroll" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflowX: "auto", background: "rgba(0,0,0,0.15)" }}>
                 <table className="elements-table">
                   <thead>
                     <tr>
@@ -121,8 +138,10 @@ export function OverviewPage() {
                       <th>密级</th>
                       <th>状态</th>
                       <th>素材</th>
+                      <th>加工状态</th>
                       <th>要素</th>
                       <th>矛盾</th>
+                      <th>报告</th>
                       <th>更新时间</th>
                     </tr>
                   </thead>
@@ -145,8 +164,10 @@ export function OverviewPage() {
                             <span className={`case-card__status ${status.cls}`}>{status.text}</span>
                           </td>
                           <td>{row.materialCount}</td>
+                          <td>{materialProgressText(row.materials, row.materialCount)}</td>
                           <td>{row.elementCount}</td>
                           <td>{row.contradictionCount}</td>
+                          <td>{row.reportStatus ? REPORT_LABELS[row.reportStatus] : "未生成"}</td>
                           <td style={{ fontFamily: "monospace" }}>{formatTime(row.updated_at)}</td>
                         </tr>
                       );

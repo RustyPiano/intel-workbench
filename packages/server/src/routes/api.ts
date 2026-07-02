@@ -119,7 +119,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createReportsRouter(services.reports));
   router.use("/cases", createReviewRouter(services.review));
   router.use("/materials", createMaterialsRouter(services.materials));
-  router.use("/admin", createAdminRouter(services.admin));
+  router.use("/admin", createAdminRouter(services.admin, services.audit));
   router.use("/audit", createAuditRouter(services.audit));
 
   return router;

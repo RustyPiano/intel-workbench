@@ -8,8 +8,8 @@
 
 | 组件 | 端口 | 说明 |
 |---|---|---|
-| 工作台后端 | `:4319` | Express，`npm run dev:server` |
-| 工作台前端 | Vite（默认 `:5173`） | React，`npm run dev:web`，代理 `/api`→`:4319` |
+| 工作台后端 | `:4319` | Express，`pnpm dev:server` |
+| 工作台前端 | Vite（默认 `:5173`） | React，`pnpm dev:web`，代理 `/api`→`:4319` |
 | 文本 LLM（问答） | 云 | DeepSeek（`api.deepseek.com`，OpenAI 兼容）→ 部署换本地 |
 | Embed / Rerank / VLM | 云 | 硅基流动（`api.siliconflow.cn/v1`）→ 部署换本地 |
 | OCR | 本地 `:8000` | PaddleOCR 服务（`../paddleocr`，独立 uv 项目） |
@@ -24,7 +24,7 @@
 ### 1. 工作台依赖（monorepo）
 ```bash
 cd <本仓库>            # .../mini-agent
-npm install            # 安装 core/server/web 全部工作区依赖
+pnpm install           # 安装 core/server/web 全部工作区依赖
 ```
 
 ### 2. 本地模型服务（两个 sibling 项目，各自 uv）
@@ -54,10 +54,10 @@ cd ../paddleocr && uv run python server.py        # → 127.0.0.1:8000
 cd ../funasr && uv run python server.py           # → 127.0.0.1:8001（等日志出现 "Uvicorn running"）
 
 # 终端 C — 工作台后端（先 source 环境变量！）
-cd <本仓库> && source dev.env.sh && npm run dev:server     # → :4319
+cd <本仓库> && source dev.env.sh && pnpm dev:server     # → :4319
 
 # 终端 D — 工作台前端
-cd <本仓库> && npm run dev:web                     # 打开它提示的 URL（通常 http://localhost:5173）
+cd <本仓库> && pnpm dev:web                     # 打开它提示的 URL（通常 http://localhost:5173）
 ```
 
 > **关键**：跑后端的终端必须先 `source dev.env.sh`，否则模型端点/key 读不到，问答与检索会降级/报错。
@@ -67,7 +67,7 @@ cd <本仓库> && npm run dev:web                     # 打开它提示的 URL�
 
 ## 三、在浏览器里验收
 
-1. 打开前端 URL → **登录**（dev 默认账号，见下）。
+1. 打开前端 URL → **登录**（演示账号须用 `MINI_AGENT_DEMO=1` 启动后端，见下）。
 2. **新建专题** → 进入工作台。
 3. **汇入材料**（MaterialsPanel "汇入"）：传文档(PDF/Word/txt)、图片、音频(wav/mp3) → 看解析/OCR/转写结果。
 4. **问答**（InquiryPanel）：提问 → 流式回答 + **逐条溯源**（点引用跳回原文/音频时间码）。
@@ -75,15 +75,17 @@ cd <本仓库> && npm run dev:web                     # 打开它提示的 URL�
 6. **报告**：起草 → 复核 → 批准 → 导出。
 7. **审计**：查看哈希链审计日志、verify。
 
-**dev 默认账号**（首次启动自动种入 `config/users.json`，scrypt 加盐哈希）：
+**演示账号**（仅 `MINI_AGENT_DEMO=1` 时种入 `config/users.json`，scrypt 加盐哈希）：
 
 | 账号 | 口令 | 角色 / 密级 |
 |---|---|---|
-| `admin` | `admin123` | 管理员 / 绝密 |
-| `operator` | `operator123` | 作业员 / 机密 |
-| `security` | `security123` | 保密员 / 绝密 |
+| `admin` | `admin12345678` | 管理员 / 绝密 |
+| `operator` | `operator123456` | 作业员 / 机密 |
+| `security` | `security123456` | 保密员 / 绝密 |
 
-> ⚠️ 这是 dev 种子口令，**真实部署务必改掉**（后台用户管理改密；或删 `config/users.json` 重新种）。
+同时会预置 `港口异常活动线索核验（模拟数据）`：6 份模拟材料、要素、3 条矛盾、1 条带引用问答、已核准 Finding、报告草稿、绝密留存样例和越权拒绝审计。普通启动不创建这些账号或数据。
+
+> 这是演示种子口令，真实部署务必改掉；普通模式首次启动会生成随机 admin 初始口令并强制改密。
 
 ---
 
@@ -91,7 +93,7 @@ cd <本仓库> && npm run dev:web                     # 打开它提示的 URL�
 
 ```bash
 source dev.env.sh   # 可选；测试是 hermetic 的
-npm run check       # typecheck + 全量 vitest（不连任何真模型）
+pnpm check          # typecheck + 全量 vitest（不连任何真模型）
 ```
 - 结果应为 **N passed / 2 skipped**。那 2 个 skip 是环境性假失败（`api.test.ts` 需 TCP、`bash.test.ts` 偶发），正常。
 

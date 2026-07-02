@@ -457,7 +457,7 @@ export class ContradictionService {
   private makeResult(contradictions: Contradiction[], stats: DetectionStats): ContradictionDetectionResult {
     const truncated = stats.chunksCovered < stats.chunksTotal;
     const warnings: string[] = [];
-    if (stats.failedBatches > 0) warnings.push(`${stats.failedBatches} 个批次处理失败，结果为降级覆盖`);
+    if (stats.failedBatches > 0) warnings.push(`${stats.failedBatches} 个批次处理失败，结果为部分覆盖`);
     if (truncated && stats.failedBatches === 0) warnings.push(`仅覆盖 ${stats.chunksCovered}/${stats.chunksTotal} 个素材块`);
     return {
       status: warnings.length > 0 ? "degraded" : "succeeded",

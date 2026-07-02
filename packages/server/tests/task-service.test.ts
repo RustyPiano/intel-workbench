@@ -173,6 +173,30 @@ describe("TaskService（Batch D 任务编排层）", () => {
     expect(overview.highSeverityContradictionCount).toBe(1);
   });
 
+  it("任务概览按当前媒体槽配置计算 needsConfig", async () => {
+    const savedBase = process.env.MINI_AGENT_ASR_BASE_URL;
+    const savedModel = process.env.MINI_AGENT_ASR_MODEL;
+    try {
+      process.env.MINI_AGENT_ASR_BASE_URL = "http://asr.local/v1";
+      process.env.MINI_AGENT_ASR_MODEL = "paraformer-zh";
+      await cases.attachMaterial(caseId, material(caseId, {
+        modality: "audio",
+        filename: "call.wav",
+        format: "wav",
+        status: "pending",
+        note: "音频已上传；请先配置 ASR（FunASR 或 MINI_AGENT_ASR_*）后点击「开始加工」。",
+      }));
+
+      const created = await tasks.createRun(OPERATOR, caseId);
+      expect(created.overview.materials.needsConfig).toBe(0);
+    } finally {
+      if (savedBase === undefined) delete process.env.MINI_AGENT_ASR_BASE_URL;
+      else process.env.MINI_AGENT_ASR_BASE_URL = savedBase;
+      if (savedModel === undefined) delete process.env.MINI_AGENT_ASR_MODEL;
+      else process.env.MINI_AGENT_ASR_MODEL = savedModel;
+    }
+  });
+
   it("failed 矛盾检测结果会显式派生失败阶段", async () => {
     await cases.attachMaterial(caseId, material(caseId, { status: "done", chunk_count: 1, processed_at: new Date().toISOString() }));
     await writeCaseJson("elements.json", [element()]);
@@ -254,6 +278,17 @@ describe("TaskService（Batch D 任务编排层）", () => {
     const skipped = await tasks.advanceStage(OPERATOR, caseId, created.run.id, "quality-check", { status: "skipped" });
     expect(stageStatus(skipped.run, "quality-check")).toBe("skipped");
     expect(stageStatus(skipped.run, "evidence-units")).toBe("active");
+  });
+
+  it("人工标记阶段失败写入成功审计，失败状态保存在 detail", async () => {
+    const created = await tasks.createRun(OPERATOR, caseId);
+    const failed = await tasks.advanceStage(OPERATOR, caseId, created.run.id, "material-ingest", { status: "failed" });
+
+    expect(failed.run.status).toBe("failed");
+    const event = (await audit.readCaseEvents(caseId)).find(
+      (item) => item.action === "task.stage.advance" && item.detail?.status === "failed",
+    );
+    expect(event).toMatchObject({ result: "ok", detail: { stageKey: "material-ingest", status: "failed" } });
   });
 
   it("所有 run/stage/checkpoint 变更均写入专题审计", async () => {

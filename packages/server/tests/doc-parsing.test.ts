@@ -268,7 +268,7 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
       { filename: "scan.pdf", content: Buffer.from("%PDF fake").toString("base64"), encoding: "base64" },
     ]);
     expect(scanned.status).toBe("pending");
-    expect(scanned.note).toBe("未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）");
+    expect(scanned.note).toBe("未从该文档提取到文本（疑似扫描件）；请配置 OCR 后重新上传，或上传文本版。");
     expect(scanned.chunk_count).toBeUndefined();
   });
 

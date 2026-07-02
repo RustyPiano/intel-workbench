@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { listCases, type ApiCase } from "../api";
+import { getOverview, listCases, type ApiCase, type OverviewCaseRow } from "../api";
 import { useSession } from "../state/session";
-import { CLEARANCE_LABELS } from "../types";
+import { CLEARANCE_LABELS, ROLE_LABELS } from "../types";
 
 /**
  * 首页 / 专题列表（产品 spec §8.2）。
@@ -14,17 +14,40 @@ function statusLabel(status: ApiCase["status"]): { cls: string; text: string } {
   return status === "archived" ? { cls: "", text: "已归档" } : { cls: "ready", text: "进行中" };
 }
 
+const REPORT_LABELS: Record<NonNullable<OverviewCaseRow["reportStatus"]>, string> = {
+  draft: "草稿",
+  in_review: "待复核",
+  approved: "已复核",
+  exported: "已导出",
+};
+
+function materialProgressText(row: OverviewCaseRow): string {
+  const pendingOther = Math.max(0, row.materials.pending - row.materials.needsConfig);
+  return [
+    `完成 ${row.materials.done}/${row.materialCount}`,
+    row.materials.processing > 0 ? `加工中 ${row.materials.processing}` : "",
+    row.materials.needsConfig > 0 ? `需配置 ${row.materials.needsConfig}` : "",
+    pendingOther > 0 ? `待处理 ${pendingOther}` : "",
+    row.materials.failed > 0 ? `失败 ${row.materials.failed}` : "",
+  ].filter(Boolean).join("，");
+}
+
 export function CaseListPage() {
   const { user } = useSession();
   const [cases, setCases] = useState<ApiCase[] | null>(null);
+  const [overviewRows, setOverviewRows] = useState<Map<string, OverviewCaseRow>>(new Map());
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
     let alive = true;
-    listCases()
-      .then((list) => alive && setCases(list))
+    Promise.all([listCases(), getOverview()])
+      .then(([list, overview]) => {
+        if (!alive) return;
+        setCases(list);
+        setOverviewRows(new Map(overview.rows.map((row) => [row.id, row])));
+      })
       .catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
@@ -41,7 +64,14 @@ export function CaseListPage() {
   return (
     <div className="page">
       <div className="page__head">
-        <h1 className="page__title">分析专题控制台</h1>
+        <div>
+          <h1 className="page__title">多源线索核验工作台</h1>
+          {user ? (
+            <p style={{ color: "var(--text-dim)", fontSize: "13px", marginTop: "8px" }}>
+              当前身份：{ROLE_LABELS[user.role]} / {CLEARANCE_LABELS[user.clearance]}，仅展示服务端密级裁剪后可见专题。
+            </p>
+          ) : null}
+        </div>
         <div className="page__actions">
           <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <svg className="icon-svg" style={{ position: "absolute", left: "12px", color: "var(--text-muted)", pointerEvents: "none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -89,6 +119,7 @@ export function CaseListPage() {
             <div className="dashboard-grid">
               {filtered.map((c) => {
                 const s = statusLabel(c.status);
+                const row = overviewRows.get(c.id);
                 return (
                   <div key={c.id} className="case-card">
                     <div className="case-card__header">
@@ -102,6 +133,12 @@ export function CaseListPage() {
                     <p className="case-card__desc">
                       负责人：{c.owner} · 素材 {c.materials.length} 份
                     </p>
+
+                    <div className="case-card__stats">
+                      <span>{row ? materialProgressText(row) : "素材统计 —"}</span>
+                      <span>矛盾 {row?.contradictionCount ?? 0}</span>
+                      <span>报告 {row?.reportStatus ? REPORT_LABELS[row.reportStatus] : "未生成"}</span>
+                    </div>
 
                     <div className="case-card__meta">
                       <span>更新时间: {c.updated_at.slice(0, 10)}</span>

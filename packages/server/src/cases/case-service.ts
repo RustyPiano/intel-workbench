@@ -24,6 +24,8 @@ import { writeFileAtomic } from "../util/atomic.js";
 export interface CreateCaseInput {
   name: string;
   clearance: Clearance;
+  /** 专题说明（选填，产品 spec §8.3）。 */
+  description?: string;
 }
 
 export interface UpdateCaseInput {
@@ -67,10 +69,12 @@ export class CaseService {
 
     const id = await this.allocateId(name);
     const now = new Date().toISOString();
+    const description = input.description?.trim();
     const manifest: CaseManifest = {
       id,
       name,
       clearance: input.clearance,
+      ...(description ? { description } : {}),
       status: "active",
       owner: actor.id,
       created_at: now,
@@ -97,6 +101,17 @@ export class CaseService {
   async get(actor: Identity, id: string): Promise<CaseManifest> {
     const manifest = await this.readManifest(id);
     if (!manifest) throw new AppError(404, "专题不存在");
+    if (!this.canRead(actor, manifest)) {
+      await this.audit.append({
+        user: actor.id,
+        action: "case.access",
+        object: `case:${id}`,
+        result: "deny",
+        caseId: id,
+        detail: { caseId: id, reason: "clearance", actorClearance: actor.clearance, caseClearance: manifest.clearance },
+      });
+      throw new AppError(403, "密级不足，无法访问该专题");
+    }
     this.assertCanRead(actor, manifest);
     return manifest;
   }
@@ -111,6 +126,7 @@ export class CaseService {
   }
 
   async update(actor: Identity, id: string, patch: UpdateCaseInput): Promise<CaseManifest> {
+    await this.requireWriteAccess(actor, id, "case.update", { patch });
     const manifest = await this.mutateManifest(id, (m) => {
       this.assertCanWrite(actor, m);
       if (patch.name !== undefined) {
@@ -136,6 +152,22 @@ export class CaseService {
   /** 读取 manifest（供素材服务等组合使用）；不存在返回 null。 */
   loadManifest(id: string): Promise<CaseManifest | null> {
     return this.readManifest(id);
+  }
+
+  async requireWriteAccess(actor: Identity, id: string, action: string, detail?: Record<string, unknown>): Promise<CaseManifest> {
+    const manifest = await this.get(actor, id);
+    if (actor.role !== "admin" && actor.id !== manifest.owner) {
+      await this.audit.append({
+        user: actor.id,
+        action,
+        object: `case:${id}`,
+        result: "deny",
+        caseId: id,
+        detail: { caseId: id, reason: "owner-or-admin", owner: manifest.owner, ...detail },
+      });
+      throw new AppError(403, "仅创建者或管理员可修改该专题");
+    }
+    return manifest;
   }
 
   /** 把一件素材并入 manifest 并刷新 updated_at（素材服务调用；审计由调用方记）。 */
@@ -230,9 +262,13 @@ export class CaseService {
   }
 
   private assertCanRead(actor: Identity, manifest: CaseManifest): void {
-    if (clearanceRank(manifest.clearance) > clearanceRank(actor.clearance)) {
+    if (!this.canRead(actor, manifest)) {
       throw new AppError(403, "密级不足，无法访问该专题");
     }
+  }
+
+  private canRead(actor: Identity, manifest: CaseManifest): boolean {
+    return clearanceRank(manifest.clearance) <= clearanceRank(actor.clearance);
   }
 
   private assertCanWrite(actor: Identity, manifest: CaseManifest): void {

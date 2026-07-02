@@ -202,26 +202,47 @@ describe("MaterialService 汇入时媒体自动加工（B1）", () => {
     expect(chunks.some((c) => c.locator.bbox?.length === 4)).toBe(true);
   });
 
-  it("音频/图像汇入但相关槽未配置 → 保持 pending + 降级说明", async () => {
+  it("音频/图像汇入但相关槽未配置 → 保持 pending + 配置提示", async () => {
     const s = svc(EMPTY_SLOTS);
     const [audio, image] = await s.ingest(OPERATOR, caseId, [
       { filename: "call.mp3", content: AUDIO_B64, encoding: "base64" },
       { filename: "photo.jpg", content: IMAGE_B64, encoding: "base64" },
     ]);
     expect(audio.status).toBe("pending");
-    expect(audio.note).toContain("音频转写暂不可用");
+    expect(audio.note).toContain("请先配置 ASR");
     expect(image.status).toBe("pending");
-    expect(image.note).toContain("图像 OCR 暂不可用");
+    expect(image.note).toContain("请先配置 VLM 或 OCR");
   });
 
-  it("视频汇入即使模型槽已配置 → 仍保持 pending（B2 另做）", async () => {
+  it("读取 pending 媒体时按当前槽刷新旧配置提示", async () => {
+    const [audio] = await svc(EMPTY_SLOTS).ingest(OPERATOR, caseId, [
+      { filename: "call.mp3", content: AUDIO_B64, encoding: "base64" },
+    ]);
+    expect(audio.note).toContain("请先配置 ASR");
+
+    const visible = (await svc(ASR_SLOTS).list(OPERATOR, caseId))[0];
+    expect(visible.note).toContain("点击「开始加工」");
+    expect(visible.note).not.toContain("请先配置 ASR");
+
+    const content = await svc(ASR_SLOTS).getContent(OPERATOR, audio.id);
+    expect(content.material.note).toBe(visible.note);
+
+    await cases.updateMaterial(caseId, audio.id, (m) => {
+      m.status = "failed";
+      m.note = "外发被拦截：目标 asr.local 不在白名单";
+    });
+    const retriable = (await svc(ASR_SLOTS).list(OPERATOR, caseId))[0];
+    expect(retriable.note).toContain("当前已可用转写");
+  });
+
+  it("视频汇入即使模型槽已配置 → 仍保持 pending + 开始加工提示", async () => {
     const [m] = await svc(FULL_SLOTS).ingest(OPERATOR, caseId, [{ filename: "clip.mp4", content: VIDEO_B64, encoding: "base64" }]);
     expect(m.modality).toBe("video");
     expect(m.status).toBe("pending");
-    expect(m.note).toContain("视频转写/解析暂不可用");
+    expect(m.note).toContain("点击「开始加工」");
   });
 
-  it("汇入时音频加工失败 → 上传不崩溃并回落 pending + 降级说明", async () => {
+  it("汇入时音频加工失败 → 上传不崩溃并回落 pending + 重试提示", async () => {
     const boomAsr: AsrAdapter = {
       engine: "boom-asr",
       transcribe: async () => {
@@ -233,11 +254,15 @@ describe("MaterialService 汇入时媒体自动加工（B1）", () => {
     ]);
     expect(m.modality).toBe("audio");
     expect(m.status).toBe("pending");
-    expect(m.note).toContain("音频转写暂不可用");
+    expect(m.note).toContain("自动转写未完成");
+    expect(m.note).toContain("点击「开始加工」重试");
     expect(await svc(EMPTY_SLOTS).loadCaseChunks(caseId)).toHaveLength(0);
     // 降级转换须如实落审计（审计红线，勿静默改写状态）。
     const events = await audit.readAll();
     expect(events.some((e) => e.action === "material.process" && e.result === "error" && e.detail?.phase === "ingest-degrade")).toBe(true);
+
+    const listed = (await svc(ASR_SLOTS).list(OPERATOR, caseId))[0];
+    expect(listed.note).toContain("自动转写未完成");
   });
 });
 
@@ -298,6 +323,35 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
     const acts = (await audit.readAll()).filter((e) => e.action === "material.process").map((e) => e.detail?.phase);
     expect(acts).toContain("start");
     expect(acts).toContain("done");
+  });
+
+  it("加工中会写入阶段 note，供前端轮询展示", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const slowAsr: AsrAdapter = {
+      engine: "slow-asr",
+      transcribe: async () => {
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { duration: 1, segments: [{ start: 0, end: 1, text: "完成转写" }] };
+      },
+    };
+    const s = svc({ asr: slowAsr, vlm: null, ocr: null, embed: null, rerank: null });
+    const mid = await ingestAudio();
+    const insidePipeline = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const processing = s.process(OPERATOR, caseId, mid);
+    await insidePipeline;
+    const live = (await cases.loadManifest(caseId))?.materials.find((m) => m.id === mid);
+    expect(live?.status).toBe("processing");
+    expect(live?.note).toContain("音频转写中");
+
+    release();
+    await expect(processing).resolves.toMatchObject({ status: "done", note: undefined });
   });
 
   it("getContent done 音频 → 返回转写段", async () => {

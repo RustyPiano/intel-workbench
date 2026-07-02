@@ -60,9 +60,9 @@ export function verifyPassword(plain: string, stored: string): boolean {
 
 /** 演示账号仅在 MINI_AGENT_DEMO=1 时创建。 */
 const SEED_DEFAULTS: { user: PublicUser; password: string }[] = [
-  { user: { id: "admin", name: "管理员", role: "admin", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "admin123" },
-  { user: { id: "operator", name: "作业员", role: "operator", clearance: "confidential", enabled: true, mustChangePassword: false }, password: "operator123" },
-  { user: { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "security123" },
+  { user: { id: "admin", name: "管理员", role: "admin", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "admin12345678" },
+  { user: { id: "operator", name: "作业员", role: "operator", clearance: "confidential", enabled: true, mustChangePassword: false }, password: "operator123456" },
+  { user: { id: "security", name: "保密员", role: "security", clearance: "topsecret", enabled: true, mustChangePassword: false }, password: "security123456" },
 ];
 
 /** 去除口令哈希，得到可回前端的公开用户。 */
@@ -88,6 +88,32 @@ export class UserStore {
 
   async findById(id: string): Promise<StoredUser | undefined> {
     return (await this.read()).find((u) => u.id === id);
+  }
+
+  async ensureDemoUsers(): Promise<void> {
+    const users = await this.read();
+    for (const { user, password } of SEED_DEFAULTS) {
+      const existing = users.find((u) => u.id === user.id);
+      if (!existing) {
+        users.push({
+          id: user.id,
+          name: user.name,
+          role: user.role,
+          clearance: user.clearance,
+          enabled: true,
+          must_change_password: false,
+          pwd_hash: hashPassword(password),
+        });
+        continue;
+      }
+      existing.name = user.name;
+      existing.role = user.role;
+      existing.clearance = user.clearance;
+      existing.enabled = true;
+      existing.must_change_password = false;
+      if (!verifyPassword(password, existing.pwd_hash)) existing.pwd_hash = hashPassword(password);
+    }
+    await this.write(users);
   }
 
   async create(input: { id: string; name: string; role: Role; clearance: Clearance; password: string }): Promise<PublicUser> {

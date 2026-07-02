@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { exportAudit, listAudit, verifyAudit, type AuditEvent, type VerifyResult } from "../api";
+import { auditActionLabel, auditResultLabel } from "../audit-labels";
 import { useSession } from "../state/session";
 
 /**
@@ -9,11 +10,18 @@ import { useSession } from "../state/session";
  * 筛选与导出留存在 M5 完善。
  */
 
-type Filter = "all" | "alert";
+type Filter = "all" | "alert" | "deny";
 
 function isAlert(e: AuditEvent): boolean {
   return e.result !== "ok";
 }
+
+/** 结果色 → 徽标底色/描边（与 auditResultLabel 的 ok/warn/danger 三档口径一致）。 */
+const RESULT_TONE: Record<string, { glow: string; border: string }> = {
+  "var(--ok-light)": { glow: "var(--ok-glow)", border: "rgba(16,185,129,0.3)" },
+  "var(--warn-light)": { glow: "var(--warn-glow)", border: "rgba(245,158,11,0.3)" },
+  "var(--danger-light)": { glow: "var(--danger-glow)", border: "rgba(239,68,68,0.3)" },
+};
 
 function shortHash(h: string): string {
   return h.length > 16 ? `${h.slice(0, 7)}…${h.slice(-6)}` : h;
@@ -31,6 +39,8 @@ export function AuditCenterPage() {
   const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [actionQuery, setActionQuery] = useState("");
+  const [objectQuery, setObjectQuery] = useState("");
 
   useEffect(() => {
     if (!user) return;
@@ -59,7 +69,14 @@ export function AuditCenterPage() {
   }
 
   const alertCount = events?.filter(isAlert).length ?? 0;
-  const rows = (events ?? []).filter((e) => (filter === "alert" ? isAlert(e) : true)).slice().reverse();
+  const normalizedAction = actionQuery.trim().toLowerCase();
+  const normalizedObject = objectQuery.trim().toLowerCase();
+  const rows = (events ?? [])
+    .filter((e) => (filter === "deny" ? e.result === "deny" : filter === "alert" ? isAlert(e) : true))
+    .filter((e) => !normalizedAction || e.action.toLowerCase().includes(normalizedAction) || auditActionLabel(e).toLowerCase().includes(normalizedAction))
+    .filter((e) => !normalizedObject || e.object.toLowerCase().includes(normalizedObject) || caseIdOf(e).toLowerCase().includes(normalizedObject))
+    .slice()
+    .reverse();
   const lastHash = events && events.length > 0 ? events[events.length - 1].event_hash : null;
 
   const handleExport = async () => {
@@ -85,7 +102,7 @@ export function AuditCenterPage() {
       </div>
 
       {/* 完整性校验 + 告警概览 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", marginBottom: "20px" }}>
         <div style={{ background: verify?.ok ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", border: `1px solid ${verify?.ok ? "rgba(16, 185, 129, 0.25)" : "rgba(239, 68, 68, 0.25)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: verify?.ok ? "var(--ok-light)" : "var(--danger-light)", fontWeight: "700", fontSize: "14px" }}>
             <span>
@@ -127,25 +144,30 @@ export function AuditCenterPage() {
                 </svg>
               )}
             </span>
-            {alertCount > 0 ? `发现拒止/异常类事件 (${alertCount})` : "无拒止/异常类事件"}
+            {alertCount > 0 ? `发现拒绝/失败/异常事件 (${alertCount})` : "无拒绝/失败/异常事件"}
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.5" }}>
             {alertCount > 0
-              ? "结果为 deny/error 的事件（如越权创建、外发拦截）已在下表高亮。"
+              ? "拒绝、失败或异常类事件（如越权创建、外发拦截、加工失败）已在下表高亮。"
               : "当前所有审计事件结果均为 ok。"}
           </p>
         </div>
       </div>
 
       {/* 筛选 */}
-      <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
+      <div className="audit-filters">
         <button type="button" className={`btn ${filter === "all" ? "btn--primary" : ""}`} onClick={() => setFilter("all")} style={{ padding: "6px 14px", fontSize: "12px" }}>
           全部审计日志 ({events?.length ?? 0})
         </button>
         <button type="button" className={`btn ${filter === "alert" ? "btn--primary" : ""}`} onClick={() => setFilter("alert")} style={{ padding: "6px 14px", fontSize: "12px", borderColor: "rgba(239,68,68,0.3)", color: filter === "alert" ? "#fff" : "var(--danger-light)" }}>
-          仅看拒止/异常 ({alertCount})
+          仅看拒绝/失败/异常 ({alertCount})
         </button>
-        <div style={{ flex: 1 }} />
+        <button type="button" className={`btn ${filter === "deny" ? "btn--primary" : ""}`} onClick={() => setFilter("deny")} style={{ padding: "6px 14px", fontSize: "12px" }}>
+          全部拒绝 ({events?.filter((event) => event.result === "deny").length ?? 0})
+        </button>
+        <input className="search audit-filters__input audit-filters__input--action" value={actionQuery} onChange={(e) => setActionQuery(e.target.value)} placeholder="按动作过滤" />
+        <input className="search audit-filters__input audit-filters__input--object" value={objectQuery} onChange={(e) => setObjectQuery(e.target.value)} placeholder="按对象 / 专题过滤" />
+        <div className="audit-filters__spacer" />
         <button type="button" className="btn" onClick={() => void handleExport()} style={{ padding: "6px 14px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
           <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -155,7 +177,7 @@ export function AuditCenterPage() {
       </div>
 
       {/* 事件表 */}
-      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
+      <div className="table-scroll" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflowX: "auto", background: "rgba(0,0,0,0.15)" }}>
         <table className="elements-table">
           <thead>
             <tr>
@@ -179,11 +201,13 @@ export function AuditCenterPage() {
             ) : (
               rows.map((e) => {
                 const alert = isAlert(e);
+                const result = auditResultLabel(e);
+                const tone = RESULT_TONE[result.color] ?? RESULT_TONE["var(--danger-light)"];
                 return (
-                  <tr key={e.id} style={{ background: alert ? "rgba(239, 68, 68, 0.08)" : "transparent" }}>
+                  <tr key={e.id} style={{ background: alert ? tone.glow : "transparent" }}>
                     <td style={{ fontFamily: "monospace" }}>{e.ts.replace("T", " ").slice(0, 19)}</td>
-                    <td style={{ fontWeight: "600", color: alert ? "var(--danger-light)" : "inherit" }}>{e.user}</td>
-                    <td style={{ fontWeight: alert ? "700" : "inherit" }}>{e.action}</td>
+                    <td style={{ fontWeight: "600", color: alert ? result.color : "inherit" }}>{e.user}</td>
+                    <td style={{ fontWeight: alert ? "700" : "inherit" }}>{auditActionLabel(e)}</td>
                     <td style={{ fontFamily: "monospace", fontSize: "12px" }}>{caseIdOf(e)}</td>
                     <td>
                       <span
@@ -191,15 +215,15 @@ export function AuditCenterPage() {
                         style={{
                           padding: "2px 8px",
                           fontSize: "11px",
-                          background: alert ? "var(--danger-glow)" : "var(--ok-glow)",
-                          color: alert ? "var(--danger-light)" : "var(--ok-light)",
-                          borderColor: alert ? "rgba(239,68,68,0.3)" : "rgba(16,185,129,0.3)",
+                          background: alert ? tone.glow : "var(--ok-glow)",
+                          color: result.color,
+                          borderColor: tone.border,
                         }}
                       >
-                        {e.result}
+                        {result.text}
                       </span>
                     </td>
-                    <td className="audit-hash" style={{ color: alert ? "var(--danger-light)" : "inherit" }}>{shortHash(e.event_hash)}</td>
+                    <td className="audit-hash" style={{ color: alert ? result.color : "inherit" }}>{shortHash(e.event_hash)}</td>
                   </tr>
                 );
               })

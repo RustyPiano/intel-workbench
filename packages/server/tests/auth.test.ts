@@ -65,7 +65,7 @@ describe("AuthService 登录与会话（产品 spec §8.1）", () => {
     const auth = service();
     const listed = await users.list();
     expect(listed.map((u) => u.id).sort()).toEqual(["admin", "operator", "security"]);
-    expect((await auth.login("operator", "operator123")).identity).toMatchObject({ id: "operator", role: "operator" });
+    expect((await auth.login("operator", "operator123456")).identity).toMatchObject({ id: "operator", role: "operator" });
   });
 
   it("口令绝不明文落盘（scrypt 哈希）", async () => {

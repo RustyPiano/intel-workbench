@@ -92,7 +92,7 @@ describe("processVideo ffmpeg fallback", () => {
       });
 
       expect(result.chunks.length).toBeGreaterThan(0);
-      expect(result.notes.some((note) => note.includes("real shot detection unavailable"))).toBe(true);
+      expect(result.notes.some((note) => note.includes("已使用固定间隔分镜"))).toBe(true);
       expect(result.frames.every((frame) => frame.format === "svg")).toBe(true);
       expect(result.frames.map((frame) => frame.key)).toEqual(["0"]);
     } finally {

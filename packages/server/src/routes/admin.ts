@@ -1,17 +1,28 @@
 import { Router } from "express";
 
 import type { AdminService } from "../admin/admin-service.js";
+import type { AuditService } from "../audit/audit-service.js";
 import { AppError } from "../domain/identity.js";
 import type { Identity } from "../domain/types.js";
 
 /**
  * 管理后台路由（工程方案 §5，M5）。仅管理员可访问。
  */
-export function createAdminRouter(admin: AdminService): Router {
+export function createAdminRouter(admin: AdminService, audit: AuditService): Router {
   const router = Router();
 
-  router.use((req, _res, next) => {
-    assertAdmin(req.identity);
+  router.use(async (req, _res, next) => {
+    if (req.identity.role !== "admin") {
+      await audit.append({
+        user: req.identity.id,
+        action: "admin.access",
+        object: `admin:${req.path}`,
+        result: "deny",
+        detail: { path: req.path, reason: "role" },
+      });
+      next(new AppError(403, "仅管理员可访问管理后台"));
+      return;
+    }
     next();
   });
 
@@ -80,8 +91,4 @@ export function createAdminRouter(admin: AdminService): Router {
   });
 
   return router;
-}
-
-function assertAdmin(actor: Identity): void {
-  if (actor.role !== "admin") throw new AppError(403, "仅管理员可访问管理后台");
 }

@@ -7,13 +7,15 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "seed:demo": "MINI_AGENT_DEMO=1 tsx src/demo/seed-cli.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.eval.json"
   },
   "dependencies": {
     "express": "^5.1.0",
-    "mini-agent": "file:../core"
+    "mini-agent": "file:../core",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

@@ -480,7 +480,7 @@ export function AdminUsersPage() {
         <button type="submit" className="btn btn--primary" disabled={busy} style={{ padding: "8px 16px", fontSize: "13px" }}>+ 新增用户</button>
       </form>
 
-      <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
+      <div className="table-scroll" style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflowX: "auto", background: "rgba(0,0,0,0.15)" }}>
         <table className="elements-table">
           <thead>
             <tr>

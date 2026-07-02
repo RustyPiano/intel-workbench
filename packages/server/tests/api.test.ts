@@ -54,9 +54,9 @@ describe("API 接线（鉴权 + M1）", () => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    operatorToken = (await (await login("operator", "operator123")).json()).token;
-    securityToken = (await (await login("security", "security123")).json()).token;
-    adminToken = (await (await login("admin", "admin123")).json()).token;
+    operatorToken = (await (await login("operator", "operator123456")).json()).token;
+    securityToken = (await (await login("security", "security123456")).json()).token;
+    adminToken = (await (await login("admin", "admin12345678")).json()).token;
   });
 
   afterAll(async () => {
@@ -84,17 +84,32 @@ describe("API 接线（鉴权 + M1）", () => {
     const created = await fetch(`${base}/api/cases`, {
       method: "POST",
       headers: authHeaders(operatorToken, true),
-      body: JSON.stringify({ name: "接线测试专题", clearance: "internal" }),
+      body: JSON.stringify({ name: "接线测试专题", clearance: "internal", description: "港口异常活动核验背景说明" }),
     });
     expect(created.status).toBe(201);
     const { case: manifest } = await created.json();
     expect(manifest.owner).toBe("operator");
+    // 说明（选填，产品 spec §5.2 / §8.3）经 POST 落盘，并经 GET 回显。
+    expect(manifest.description).toBe("港口异常活动核验背景说明");
+    const fetched = await (await fetch(`${base}/api/cases/${manifest.id}`, { headers: authHeaders(operatorToken) })).json();
+    expect(fetched.case.description).toBe("港口异常活动核验背景说明");
 
     const list = await (await fetch(`${base}/api/cases`, { headers: authHeaders(operatorToken) })).json();
     expect(list.cases.map((c: { id: string }) => c.id)).toContain(manifest.id);
 
     const verify = await (await fetch(`${base}/api/audit/verify`, { headers: authHeaders(securityToken) })).json();
     expect(verify.result.ok).toBe(true);
+  });
+
+  it("创建专题拒绝非字符串说明，避免路由层 500", async () => {
+    const res = await fetch(`${base}/api/cases`, {
+      method: "POST",
+      headers: authHeaders(operatorToken, true),
+      body: JSON.stringify({ name: "非法说明专题", clearance: "internal", description: { text: "bad" } }),
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toBe("专题说明必须为字符串");
   });
 
   it("/auth/me 回显服务端身份", async () => {
@@ -216,7 +231,7 @@ describe("流式问答 SSE 路由（B-1 回归）", () => {
         await fetch(`${base}/api/auth/login`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ username: "operator", password: "operator123" }),
+          body: JSON.stringify({ username: "operator", password: "operator123456" }),
         })
       ).json()
     ).token;

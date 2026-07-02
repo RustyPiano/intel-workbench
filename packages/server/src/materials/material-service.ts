@@ -24,8 +24,8 @@ const EMPTY_SLOTS: ModelSlots = { asr: null, vlm: null, ocr: null, embed: null, 
 
 /**
  * 素材汇入与加工（M2）。文档模态做实：文本直接归一化 → 切块，PDF/Office
- * 先走本地 liteparse 提取页文本再切块；音频/视频/图像按"暂不可用"降级或进入
- * 后续显式加工流程，状态 pending 并附原因（产品 spec §10）。
+ * 先走本地 liteparse 提取页文本再切块；音频/图像可在槽已配置时尽力自动加工，
+ * 视频等耗时媒体默认保留 pending，等待用户显式点击"开始加工"。
  */
 
 const DOC_BINARY_EXTS = new Set(["pdf", "doc", "docx", "rtf", "odt", "ppt", "pptx", "xls", "xlsx"]);
@@ -73,13 +73,18 @@ function modalityOf(ext: string): Modality {
   return "doc";
 }
 
-const DEGRADE_NOTE: Record<Exclude<Modality, "doc"> | "doc-binary", string> = {
-  "doc-binary": "PDF / Office 文档解析暂不可用，待加工（M2 降级）",
-  audio: "音频转写暂不可用，待接入本地 ASR（降级占位）",
-  video: "视频转写/解析暂不可用，待接入本地多模态（降级占位）",
-  image: "图像 OCR 暂不可用，待接入本地 OCR（降级占位）",
+const DOC_BINARY_PARSE_NOTE = "PDF / Office 文档未能解析，已保留原文件；请检查 liteparse 后重新上传或上传文本版";
+const MEDIA_PENDING_NOTE: Record<Exclude<Modality, "doc">, string> = {
+  audio: "音频已上传，点击「开始加工」进行转写，生成带时间码的可引用片段。",
+  video: "视频已上传，点击「开始加工」进行分镜、转写与画面识别；大文件可能需要较长时间。",
+  image: "图片已上传，点击「开始加工」进行配文/OCR，生成可引用区域。",
 };
-const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑为扫描件，OCR 待后续里程碑）";
+const MEDIA_INGEST_DEGRADE_NOTE: Record<Exclude<Modality, "doc">, string> = {
+  audio: "音频上传成功，但自动转写未完成。请点击「开始加工」重试；若仍失败，检查 ASR 配置。",
+  video: MEDIA_PENDING_NOTE.video,
+  image: "图片上传成功，但自动配文/OCR 未完成。请点击「开始加工」重试；若仍失败，检查 VLM/OCR 配置。",
+};
+const SCANNED_DOC_NOTE = "未从该文档提取到文本（疑似扫描件）；请配置 OCR 后重新上传，或上传文本版。";
 /** 稠密索引尽力而为失败时挂到素材 note 上的提示（检索仍可用 BM25，可手动重建）。 */
 const INDEX_DEGRADED_NOTE = "稠密索引未建（检索回退 BM25，可在素材上「重建索引」）";
 
@@ -245,7 +250,7 @@ export class MaterialService {
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
   async ingest(actor: Identity, caseId: string, files: IngestFile[]): Promise<Material[]> {
     // 校验专题存在 + 当前账户可访问（密级）。
-    await this.cases.get(actor, caseId);
+    await this.cases.requireWriteAccess(actor, caseId, "material.ingest");
     if (!Array.isArray(files) || files.length === 0) throw new AppError(400, "未提供任何素材文件");
 
     const results: Material[] = [];
@@ -261,6 +266,63 @@ export class MaterialService {
     for (const endpoint of endpoints) {
       if (endpoint) await this.guard.authorize(endpoint, { user: actor.id, purpose });
     }
+  }
+
+  private mediaPendingNote(modality: Exclude<Modality, "doc">): string {
+    if (modality === "audio") {
+      return this.slots.asr
+        ? MEDIA_PENDING_NOTE.audio
+        : "音频已上传；请先配置 ASR（FunASR 或 MINI_AGENT_ASR_*）后点击「开始加工」。";
+    }
+    if (modality === "image") {
+      const enabled = [this.slots.vlm ? "配文" : "", this.slots.ocr ? "OCR" : ""].filter(Boolean);
+      return enabled.length > 0
+        ? `图片已上传，点击「开始加工」进行${enabled.join("、")}，生成可引用区域。`
+        : "图片已上传；请先配置 VLM 或 OCR 后点击「开始加工」。";
+    }
+    const enabled = [
+      this.slots.asr ? "音轨转写" : "",
+      this.slots.vlm ? "画面配文" : "",
+      this.slots.ocr ? "画面 OCR" : "",
+    ].filter(Boolean);
+    return enabled.length > 0
+      ? `视频已上传，点击「开始加工」进行${enabled.join("、")}；未配置的能力会跳过。`
+      : "视频已上传；请先配置 ASR、VLM 或 OCR 后点击「开始加工」。";
+  }
+
+  private enabledMediaCapabilities(modality: Exclude<Modality, "doc">): string[] {
+    if (modality === "audio") return this.slots.asr ? ["转写"] : [];
+    if (modality === "image") return [this.slots.vlm ? "配文" : "", this.slots.ocr ? "OCR" : ""].filter(Boolean);
+    return [
+      this.slots.asr ? "音轨转写" : "",
+      this.slots.vlm ? "画面配文" : "",
+      this.slots.ocr ? "画面 OCR" : "",
+    ].filter(Boolean);
+  }
+
+  private materialForRead(material: Material): Material {
+    if (!MEDIA_MODALITIES.has(material.modality)) return material;
+    const modality = material.modality as Exclude<Modality, "doc">;
+    if (material.status === "pending") {
+      const note = material.note ?? "";
+      const staleConfigNote = !note || note.includes("请先配置") || note.includes("未配置") || note.includes("授权") || note.includes("白名单") || note.includes("拦截");
+      return staleConfigNote ? { ...material, note: this.mediaPendingNote(modality) } : material;
+    }
+    if (
+      material.status === "failed" &&
+      material.note &&
+      (material.note.includes("未配置") || material.note.includes("请先配置") || material.note.includes("授权") || material.note.includes("白名单") || material.note.includes("拦截"))
+    ) {
+      const enabled = this.enabledMediaCapabilities(modality);
+      if (enabled.length > 0) return { ...material, note: `上次加工未产出；当前已可用${enabled.join("、")}，请点击「重试加工」。` };
+    }
+    return material;
+  }
+
+  private async markProcessStep(caseId: string, materialId: string, step: string): Promise<void> {
+    await this.cases.updateMaterial(caseId, materialId, (m) => {
+      if (m.status === "processing") m.note = `加工中：${step}`;
+    });
   }
 
   private async attachContext(actor: Identity, caseId: string, chunks: Chunk[], fullText: string): Promise<void> {
@@ -329,7 +391,7 @@ export class MaterialService {
       base.engine = processed.engine;
     } else {
       base.status = "pending";
-      base.note = DEGRADE_NOTE[modality];
+      base.note = this.mediaPendingNote(modality);
     }
 
     await this.cases.attachMaterial(caseId, base);
@@ -366,7 +428,7 @@ export class MaterialService {
     // 降级 failed/异常 → pending；该状态转换如实落审计（勿静默改写，审计红线）。
     const degraded = await this.cases.updateMaterial(caseId, material.id, (m) => {
       m.status = "pending";
-      m.note = DEGRADE_NOTE[modality];
+      m.note = MEDIA_INGEST_DEGRADE_NOTE[modality];
     });
     await this.audit
       .append({
@@ -494,7 +556,7 @@ export class MaterialService {
       return { status: "done", chunk_count: count, engine: "liteparse", note: indexNote };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      return { status: "pending", note: `${DEGRADE_NOTE["doc-binary"]}：${message}` };
+      return { status: "pending", note: `${DOC_BINARY_PARSE_NOTE}：${message}` };
     }
   }
 
@@ -541,7 +603,7 @@ export class MaterialService {
    * 文本文档同步切块 done；媒体 pending（待 process）。
    */
   async ingestStream(actor: Identity, caseId: string, rawFilename: string, stream: NodeJS.ReadableStream): Promise<Material> {
-    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    await this.cases.requireWriteAccess(actor, caseId, "material.ingest"); // 访问 + 密级 + 写权限校验
     const filename = path.basename(rawFilename ?? "").trim() || "未命名素材";
     const ext = extOf(filename);
     const modality = modalityOf(ext);
@@ -571,7 +633,7 @@ export class MaterialService {
       base.note = processed.note;
       base.engine = processed.engine;
     } else {
-      base.note = DEGRADE_NOTE[modality];
+      base.note = this.mediaPendingNote(modality);
     }
 
     await this.cases.attachMaterial(caseId, base);
@@ -588,7 +650,7 @@ export class MaterialService {
   /** 专题素材列表 + 加工状态（§5）。 */
   async list(actor: Identity, caseId: string): Promise<Material[]> {
     const manifest = await this.cases.get(actor, caseId);
-    return manifest.materials;
+    return manifest.materials.map((material) => this.materialForRead(material));
   }
 
   /** 素材内容（原文/降级提示，§5）。按 id 全局定位并校验密级。 */
@@ -598,7 +660,7 @@ export class MaterialService {
     // 经 cases.get 复用密级校验。
     await this.cases.get(actor, located.caseId);
 
-    const material = located.material;
+    const material = this.materialForRead(located.material);
     const processedDir = path.join(this.paths.caseDir(located.caseId), "processed");
     if (material.status === "done") {
       if (material.modality === "audio") {
@@ -664,7 +726,7 @@ export class MaterialService {
    * 不会读到）也不留"manifest 仍列、内容已删"的悬挂素材。
    */
   async remove(actor: Identity, caseId: string, materialId: string): Promise<void> {
-    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    await this.cases.requireWriteAccess(actor, caseId, "material.delete", { materialId }); // 访问 + 密级 + 写权限校验
     const manifest = await this.cases.loadManifest(caseId);
     const material = manifest?.materials.find((m) => m.id === materialId);
     if (!material) throw new AppError(404, "素材不存在");
@@ -694,7 +756,7 @@ export class MaterialService {
    * 成功即清除索引降级 note；失败回写降级原因。仅 done 素材可建（其切块已落盘）。
    */
   async reindex(actor: Identity, caseId: string, materialId: string): Promise<Material> {
-    await this.cases.get(actor, caseId); // 访问 + 密级校验
+    await this.cases.requireWriteAccess(actor, caseId, "material.reindex", { materialId }); // 访问 + 密级 + 写权限校验
     const manifest = await this.cases.loadManifest(caseId);
     const material = manifest?.materials.find((m) => m.id === materialId);
     if (!material) throw new AppError(404, "素材不存在");
@@ -740,7 +802,7 @@ export class MaterialService {
    * 杜绝并发问答读到"done 但零 chunk"。
    */
   async process(actor: Identity, caseId: string, materialId: string): Promise<Material> {
-    const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
+    const manifest = await this.cases.requireWriteAccess(actor, caseId, "material.process", { materialId }); // 访问 + 密级 + 写权限校验
     const material = manifest.materials.find((m) => m.id === materialId);
     if (!material) throw new AppError(404, "素材不存在");
     if (!MEDIA_MODALITIES.has(material.modality)) throw new AppError(400, "该素材模态不支持加工（仅音/视/图）");
@@ -749,6 +811,7 @@ export class MaterialService {
     await this.cases.updateMaterial(caseId, materialId, (m) => {
       if (m.status === "processing") throw new AppError(409, "素材正在加工中");
       m.status = "processing";
+      m.note = "加工中：准备读取原始素材";
     });
     await this.audit.append({
       user: actor.id,
@@ -761,14 +824,20 @@ export class MaterialService {
     try {
       const bytes = await readFile(path.join(this.paths.caseDir(caseId), "materials", `${materialId}-${material.filename}`));
       const version = (material.chunk_version ?? 0) + 1;
+      await this.markProcessStep(caseId, materialId, "检查配置与外发授权");
       await this.authorizeMedia(
         actor,
         material.modality === "audio"
           ? [this.mediaEndpoints.asr]
           : material.modality === "video"
             ? [this.mediaEndpoints.asr, this.mediaEndpoints.vlm, this.mediaEndpoints.ocr]
-            : [this.mediaEndpoints.vlm, this.mediaEndpoints.ocr],
+          : [this.mediaEndpoints.vlm, this.mediaEndpoints.ocr],
         "media-ingest",
+      );
+      await this.markProcessStep(
+        caseId,
+        materialId,
+        material.modality === "audio" ? "音频转写中" : material.modality === "video" ? "分镜、转写与画面识别中" : "图片配文与 OCR 中",
       );
       const out = await this.runPipeline(material.modality, materialId, version, bytes);
 
@@ -780,12 +849,14 @@ export class MaterialService {
       // 提交点顺序（§2.4）：先完整写盘（media.json + chunks.jsonl + 帧），再翻 done → 审计。
       const processedDir = path.join(this.paths.caseDir(caseId), "processed");
       await mkdir(processedDir, { recursive: true });
+      await this.markProcessStep(caseId, materialId, "写入解析结果与引用片段");
       await writeFileAtomic(path.join(processedDir, `${materialId}.media.json`), `${JSON.stringify(out.media, null, 2)}\n`);
       await writeFileAtomic(
         path.join(processedDir, `${materialId}.chunks.jsonl`),
         out.chunks.map((c) => JSON.stringify(c)).join("\n") + (out.chunks.length ? "\n" : ""),
       );
       if (out.frames) await this.writeFrames(processedDir, materialId, out.frames);
+      await this.markProcessStep(caseId, materialId, "建立检索索引");
       const idx = await this.writeIndex(actor, this.paths.caseDir(caseId), materialId, out.chunks); // 同提交写稠密索引（§5.3），尽力而为
 
       const updated = await this.cases.updateMaterial(caseId, materialId, (m) => {
@@ -857,7 +928,7 @@ export class MaterialService {
     return updated;
   }
 
-  /** 读取专题下所有已加工文档的切块（供问答检索，§7.3）。 */
+  /** 读取专题下所有已加工素材的切块（供问答检索，§7.3）。 */
   async loadCaseChunks(caseId: string): Promise<Chunk[]> {
     const manifest = await this.cases.loadManifest(caseId);
     if (!manifest) return [];

@@ -1,0 +1,17 @@
+公开来源与素材使用清单（演示材料）
+
+MarineCadastre AccessAIS：NOAA、BOEM 与美国海岸警卫队合作提供，可按地理范围和时间范围下载美国 AIS 历史点位与航迹。
+
+AccessAIS 入口：https://marinecadastre.gov/accessais/；NOAA 工具页：https://coast.noaa.gov/digitalcoast/tools/ais.html。
+
+MarineCadastre AIS FAQ：历史 AIS 通常可视作公有领域，但应保留数据来源和用途限制说明。
+
+AIS FAQ：https://coast.noaa.gov/data/marinecadastre/ais/faq.pdf。
+
+DVIDS 港口安保图片、港口安保训练视频：页面标注 PUBLIC DOMAIN，用于演示时仍需避免暗示机构背书。
+
+NOAA Fisheries 船舶噪声音频、NOAA Photo Library 港口图片：适合作为船舶声纹和港口背景多媒体素材。
+
+访问日期：2026-07-02。
+
+种子数据仅保存来源索引和派生摘要，不随仓库打包大型图片、视频、音频二进制。

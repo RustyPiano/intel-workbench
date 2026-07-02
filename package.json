@@ -8,28 +8,44 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=20.19.0 <21"
+    "node": ">=20.19.0 <27"
   },
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "clean": "npm run clean -w mini-agent",
-    "build": "npm run build -w mini-agent && npm run build -w @intel-workbench/server && npm run build -w @intel-workbench/web",
-    "dev": "npm run dev -w mini-agent",
+    "clean": "pnpm --filter mini-agent clean",
+    "build": "pnpm --filter mini-agent build && pnpm --filter @intel-workbench/server build && pnpm --filter @intel-workbench/web build",
+    "dev": "pnpm --filter mini-agent dev",
     "test": "vitest",
     "test:run": "vitest run",
-    "typecheck": "npm run build -w mini-agent && npm run typecheck -w @intel-workbench/server && npm run typecheck -w @intel-workbench/web",
-    "check": "npm run typecheck && npm run test:run",
+    "typecheck": "pnpm --filter mini-agent build && pnpm --filter @intel-workbench/server typecheck && pnpm --filter @intel-workbench/web typecheck",
+    "check": "pnpm typecheck && pnpm test:run",
     "eval": "tsx packages/server/eval/run-eval.ts",
     "eval:gen": "tsx packages/server/eval/gen-corpus.ts",
     "eval:contradiction": "tsx packages/server/eval/run-contradiction-eval.ts",
-    "dev:server": "npm run dev -w @intel-workbench/server",
-    "dev:web": "npm run dev -w @intel-workbench/web",
-    "build:server": "npm run build -w @intel-workbench/server",
-    "build:web": "npm run build -w @intel-workbench/web"
+    "dev:server": "pnpm --filter @intel-workbench/server dev",
+    "dev:web": "pnpm --filter @intel-workbench/web dev",
+    "build:server": "pnpm --filter @intel-workbench/server build",
+    "build:web": "pnpm --filter @intel-workbench/web build"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RustyPiano/intel-workbench.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/RustyPiano/intel-workbench/issues"
+  },
+  "homepage": "https://github.com/RustyPiano/intel-workbench#readme"
 }

@@ -123,7 +123,7 @@ export async function processVideo(
     frameFormat = "png";
     engines.push("ffmpeg");
   } catch {
-    notes.push("real shot detection unavailable (ffmpeg not found)");
+    notes.push("未检测到 ffmpeg 或分镜失败，已使用固定间隔分镜");
     duration = mockDuration(video);
     ranges = [];
     frameImages = [];

@@ -147,6 +147,14 @@ export class ReportService {
 
   async approve(actor: Identity, caseId: string): Promise<ReportRecord> {
     if (actor.role !== "security" && actor.role !== "admin") {
+      await this.audit.append({
+        user: actor.id,
+        action: "report.approve",
+        object: `report:${caseId}`,
+        result: "deny",
+        caseId,
+        detail: { caseId, reason: "role" },
+      });
       throw new AppError(403, "仅保密员或管理员可复核核准");
     }
     const record = await this.require(actor, caseId);

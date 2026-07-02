@@ -10,12 +10,14 @@ import { AppError } from "../domain/identity.js";
 import type {
   CaseManifest,
   Identity,
+  Modality,
   ReportStatus,
   TaskRun,
   TaskStageState,
   TaskTemplate,
 } from "../domain/types.js";
 import { readFindings } from "../finding/finding-store.js";
+import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-config.js";
 import { writeFileAtomic } from "../util/atomic.js";
 import { shortId } from "../util/hash.js";
 
@@ -46,7 +48,7 @@ export interface TaskRunOverview {
   completedStageCount: number;
   totalStageCount: number;
   pendingCheckpointCount: number;
-  materials: { total: number; pending: number; processing: number; done: number; failed: number };
+  materials: { total: number; pending: number; processing: number; done: number; failed: number; needsConfig: number };
   highSeverityContradictionCount: number;
   reportStatus: ReportStatus | null;
 }
@@ -79,6 +81,22 @@ interface ContradictionResultLike {
 
 interface ReportRecordLike {
   status?: ReportStatus;
+}
+
+function hasConfigCue(note?: string): boolean {
+  return Boolean(note && (note.includes("请先配置") || note.includes("未配置") || note.includes("授权") || note.includes("白名单") || note.includes("拦截")));
+}
+
+function mediaConfigured(modality: Modality, configs: SlotConfigs, mock: boolean): boolean {
+  if (mock) return modality === "audio" || modality === "video" || modality === "image";
+  if (modality === "audio") return configs.asr.configured;
+  if (modality === "image") return configs.vlm.configured || configs.ocr.configured;
+  if (modality === "video") return configs.asr.configured || configs.vlm.configured || configs.ocr.configured;
+  return false;
+}
+
+function needsConfig(material: { modality: Modality; note?: string }, configs: SlotConfigs, mock: boolean): boolean {
+  return hasConfigCue(material.note) && !mediaConfigured(material.modality, configs, mock);
 }
 
 export class TaskService {
@@ -204,7 +222,7 @@ export class TaskService {
       user: actor.id,
       action: "task.stage.advance",
       object: `task-run:${runId}`,
-      result: nextStatus === "failed" ? "error" : "ok",
+      result: "ok",
       caseId,
       detail: { caseId, runId, stageKey, status: nextStatus },
     });
@@ -379,12 +397,15 @@ export class TaskService {
   private async readFacts(caseId: string): Promise<CaseFacts> {
     const manifest = await this.cases.loadManifest(caseId);
     if (!manifest) throw new AppError(404, "专题不存在");
+    const slotConfigs = readSlotConfigs();
+    const mockMedia = useMockMedia();
     const materials = {
       total: manifest.materials.length,
       pending: manifest.materials.filter((m) => m.status === "pending").length,
       processing: manifest.materials.filter((m) => m.status === "processing").length,
       done: manifest.materials.filter((m) => m.status === "done").length,
       failed: manifest.materials.filter((m) => m.status === "failed").length,
+      needsConfig: manifest.materials.filter((m) => m.status === "pending" && needsConfig(m, slotConfigs, mockMedia)).length,
     };
     const contradictionResult = await this.readJson<ContradictionResultLike>(path.join(this.paths.caseDir(caseId), "contradictions.result.json"));
     const contradictions = Array.isArray(contradictionResult?.contradictions) ? contradictionResult.contradictions : [];

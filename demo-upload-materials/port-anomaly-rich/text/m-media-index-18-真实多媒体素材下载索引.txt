@@ -1,0 +1,21 @@
+真实多媒体素材下载索引（演示材料）
+
+DVIDS 港口集装箱检查图片：Coast Guard leads multi-agency security operation in Port Honolulu，页面标注 PUBLIC DOMAIN。
+
+图片 URL：https://www.dvidshub.net/image/8969502/coast-guard-leads-multi-agency-security-operation-port-honolulu。
+
+DVIDS 港口安保训练视频：US Coast Guard Port Security Unit 312 simulated training exercises San Francisco Bay，页面标注 PUBLIC DOMAIN，约 1 分钟。
+
+视频 URL：https://www.dvidshub.net/video/1010679/us-coast-guard-port-security-unit-312-conducts-simulated-training-exercises-san-francisco-bay。
+
+NOAA Fisheries 船舶噪声音频：Large Vessel 或 Small Vessel 音频可用于 ASR/声纹演示。
+
+音频入口：https://www.fisheries.noaa.gov/national/science-data/sounds-ocean-environmental-and-anthropogenic。
+
+Wikimedia Commons Colombo Express in Altenwerder at night-799096.jpeg：CC0 1.0 夜间集装箱船/码头图片。
+
+图片 URL：https://commons.wikimedia.org/wiki/File:Colombo_Express_in_Altenwerder_at_night-799096.jpeg。
+
+访问日期：2026-07-02。
+
+建议下载后作为外部演示附件导入，不随 seed 打包大体积二进制。

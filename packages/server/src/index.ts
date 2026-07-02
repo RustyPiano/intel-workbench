@@ -8,6 +8,7 @@ import { RuntimeAgent, RUNTIME_VERSION } from "mini-agent";
 
 import type { AppServices } from "./app.js";
 import { createApp } from "./app.js";
+import { seedDemoWorkspace } from "./demo/seed.js";
 
 // Loopback only — never 0.0.0.0. (零外发红线，§7.1)
 const HOST = "127.0.0.1";
@@ -36,6 +37,14 @@ async function main(): Promise<void> {
 
   const app = createApp();
   const services = app.locals.services as AppServices;
+
+  if (process.env.MINI_AGENT_DEMO === "1") {
+    const seeded = await seedDemoWorkspace(services.paths, services.audit);
+    if (seeded.seeded) {
+      // eslint-disable-next-line no-console
+      console.log(`演示专题已初始化: ${seeded.caseId}`);
+    }
+  }
 
   // 崩溃清扫先于服务（§4.1）：把上次中断遗留的 `processing` 素材翻 `failed` 可重试。
   const swept = await services.cases.sweepInterrupted();

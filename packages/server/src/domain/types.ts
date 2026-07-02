@@ -35,7 +35,7 @@ export interface Identity {
   mustChangePassword?: boolean;
 }
 
-/** 素材模态（产品 spec §5.2）。一期仅文档可加工，其余降级占位。 */
+/** 素材模态（产品 spec §5.2）。媒体素材先汇入，之后显式加工。 */
 export type Modality = "doc" | "audio" | "video" | "image";
 /** 加工状态机：待加工 / 加工中 / 已完成 / 失败（产品 spec §5.2）。 */
 export type MaterialStatus = "pending" | "processing" | "done" | "failed";
@@ -281,6 +281,8 @@ export interface CaseManifest {
   id: string;
   name: string;
   clearance: Clearance;
+  /** 专题说明（选填，产品 spec §5.2 / §8.3）。 */
+  description?: string;
   status: CaseStatus;
   owner: string;
   created_at: string;

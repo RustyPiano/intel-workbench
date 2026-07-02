@@ -60,7 +60,7 @@ export function NewCasePage() {
     setError(null);
     try {
       // M1：真实创建并落盘（POST /api/cases）。开发模式下涉密会被服务端拒绝。
-      const created = await createCase({ name: name.trim(), clearance });
+      const created = await createCase({ name: name.trim(), clearance, description: desc.trim() || undefined });
       if (files.length > 0) {
         setUploading(true);
         for (const [i, file] of files.entries()) {
@@ -125,28 +125,34 @@ export function NewCasePage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label">安全密级分级 <span style={{ color: "var(--text-muted)", textTransform: "none", fontSize: "11px" }}>（密级选择不得高于当前会话您的最高权限）</span></label>
-            <div className="clearance-grid">
+            <label className="form-label" id="clearance-label">安全密级分级 <span style={{ color: "var(--text-muted)", textTransform: "none", fontSize: "11px" }}>（密级选择不得高于当前会话您的最高权限）</span></label>
+            <div className="clearance-grid" role="radiogroup" aria-labelledby="clearance-label">
               {(Object.keys(CLEARANCE_RANK) as Clearance[]).map((level) => {
                 const isDisabled = CLEARANCE_RANK[level] > maxRank;
                 return (
-                  <div
+                  <label
                     key={level}
                     className={`clearance-option ${clearance === level ? `active ${level}` : ""}`}
-                    onClick={() => {
-                      if (!isDisabled) setClearance(level);
-                    }}
                     style={{
                       opacity: isDisabled ? 0.35 : 1,
                       cursor: isDisabled ? "not-allowed" : "pointer",
                       borderStyle: isDisabled ? "dashed" : "solid",
                     }}
                   >
+                    <input
+                      type="radio"
+                      name="clearance"
+                      value={level}
+                      checked={clearance === level}
+                      disabled={isDisabled}
+                      onChange={() => setClearance(level)}
+                      className="clearance-option__radio"
+                    />
                     <span className="clearance-option__title">{CLEARANCE_LABELS[level]}</span>
                     <span style={{ fontSize: "10px", color: "var(--text-dim)", display: "block", marginTop: "4px" }}>
                       {isDisabled ? "权限不足" : "可选择"}
                     </span>
-                  </div>
+                  </label>
                 );
               })}
             </div>
@@ -156,7 +162,7 @@ export function NewCasePage() {
           </div>
 
           <div className="form-group">
-            <label className="form-label" htmlFor="case-desc">专题描述背景</label>
+            <label className="form-label" htmlFor="case-desc">专题说明 <span style={{ color: "var(--text-muted)", textTransform: "none", fontSize: "11px" }}>（选填）</span></label>
             <textarea
               id="case-desc"
               rows={3}

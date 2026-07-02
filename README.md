@@ -17,15 +17,15 @@
 安装依赖并运行检查：
 
 ```bash
-npm install
-npm run check
+pnpm install
+pnpm check
 ```
 
 启动本地 API 与 Web：
 
 ```bash
-npm run dev:server
-npm run dev:web
+pnpm dev:server
+pnpm dev:web
 ```
 
 首次启动会创建 `admin` 管理员，生成一次性随机口令：
@@ -37,8 +37,16 @@ npm run dev:web
 默认不创建演示账号。确需演示固定账号时，显式设置：
 
 ```bash
-MINI_AGENT_DEMO=1 npm run dev:server
+MINI_AGENT_DEMO=1 pnpm dev:server
 ```
+
+该模式会初始化课程演示数据：`港口异常活动线索核验（模拟数据）`、一条绝密留存样例、预置素材/要素/矛盾/问答/Finding/报告草稿和一条越权拒绝审计。演示账号：
+
+| 账号 | 口令 | 角色 / 密级 |
+| --- | --- | --- |
+| `operator` | `operator123456` | 作业员 / 机密 |
+| `security` | `security123456` | 保密员 / 绝密 |
+| `admin` | `admin12345678` | 管理员 / 绝密 |
 
 ## Local Model Path
 
@@ -67,9 +75,9 @@ export MINI_AGENT_API_KEY=local-dev-key
 ## Verification
 
 ```bash
-npm run typecheck
-npm run test:run
-npm run check
+pnpm typecheck
+pnpm test:run
+pnpm check
 ```
 
-Codex 沙箱可能因 TCP 权限导致 `packages/server/tests/api.test.ts` 出现 null port/EPERM 假阴性，`packages/core/tests/unit/bash.test.ts` 偶发波动；以本机完整 `npm run check` 为准。
+Codex 沙箱可能因 TCP 权限导致 `packages/server/tests/api.test.ts` 出现 null port/EPERM 假阴性，`packages/core/tests/unit/bash.test.ts` 偶发波动；以本机完整 `pnpm check` 为准。

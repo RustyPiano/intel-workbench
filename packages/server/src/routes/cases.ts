@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
+import { AppError } from "../domain/identity.js";
 import type { IngestFile, MaterialService } from "../materials/material-service.js";
 
 /**
@@ -59,10 +60,14 @@ export function createCasesRouter(cases: CaseService, materials: MaterialService
   });
 
   router.post("/", async (req, res) => {
-    const { name, clearance } = (req.body ?? {}) as { name?: string; clearance?: string };
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (body.description !== undefined && typeof body.description !== "string") {
+      throw new AppError(400, "专题说明必须为字符串");
+    }
     const manifest = await cases.create(req.identity, {
-      name: name ?? "",
-      clearance: clearance as never,
+      name: typeof body.name === "string" ? body.name : "",
+      clearance: body.clearance as never,
+      description: body.description,
     });
     res.status(201).json({ ok: true, case: manifest });
   });
@@ -72,10 +77,10 @@ export function createCasesRouter(cases: CaseService, materials: MaterialService
   });
 
   router.patch("/:id", async (req, res) => {
-    const { name, status } = (req.body ?? {}) as { name?: string; status?: string };
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const manifest = await cases.update(req.identity, req.params.id, {
-      name,
-      status: status as never,
+      name: body.name === undefined || typeof body.name === "string" ? body.name : "",
+      status: body.status as never,
     });
     res.json({ ok: true, case: manifest });
   });

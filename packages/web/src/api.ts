@@ -30,6 +30,8 @@ export interface ApiCase {
   id: string;
   name: string;
   clearance: Clearance;
+  /** 专题说明（选填，产品 spec §5.2 / §8.3）。 */
+  description?: string;
   status: "active" | "archived";
   owner: string;
   created_at: string;
@@ -43,8 +45,10 @@ export interface OverviewCaseRow {
   clearance: Clearance;
   status: "active" | "archived";
   materialCount: number;
+  materials: MaterialStatusCounts;
   elementCount: number;
   contradictionCount: number;
+  reportStatus: ReportStatus | null;
   updated_at: string;
 }
 
@@ -82,6 +86,7 @@ export interface VerifyResult {
 
 export type Modality = "doc" | "audio" | "video" | "image";
 export type MaterialStatus = "pending" | "processing" | "done" | "failed";
+export type MaterialStatusCounts = Record<MaterialStatus, number> & { needsConfig: number };
 
 export interface ApiMaterial {
   id: string;
@@ -317,7 +322,7 @@ export interface ApiTaskRunOverview {
   completedStageCount: number;
   totalStageCount: number;
   pendingCheckpointCount: number;
-  materials: { total: number; pending: number; processing: number; done: number; failed: number };
+  materials: { total: number } & MaterialStatusCounts;
   highSeverityContradictionCount: number;
   reportStatus: ReportStatus | null;
 }
@@ -445,7 +450,7 @@ export function getOverview(): Promise<OverviewSummary> {
   return fetch(`${BASE}/overview`, { headers: headers() }).then((r) => unwrap<OverviewSummary>(r, "overview"));
 }
 
-export function createCase(input: { name: string; clearance: Clearance }): Promise<ApiCase> {
+export function createCase(input: { name: string; clearance: Clearance; description?: string }): Promise<ApiCase> {
   return fetch(`${BASE}/cases`, {
     method: "POST",
     headers: headers(true),

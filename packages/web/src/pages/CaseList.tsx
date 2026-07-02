@@ -67,26 +67,25 @@ export function CaseListPage() {
         <div>
           <h1 className="page__title">多源线索核验工作台</h1>
           {user ? (
-            <p style={{ color: "var(--text-dim)", fontSize: "13px", marginTop: "8px" }}>
+            <p className="case-list__identity">
               当前身份：{ROLE_LABELS[user.role]} / {CLEARANCE_LABELS[user.clearance]}，仅展示服务端密级裁剪后可见专题。
             </p>
           ) : null}
         </div>
         <div className="page__actions case-list-actions">
-          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-            <svg className="icon-svg" style={{ position: "absolute", left: "12px", color: "var(--text-muted)", pointerEvents: "none" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <div className="case-list__search-wrapper">
+            <svg className="case-list__search-icon icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
             <input
-              className="search"
+              className="search case-list__search-input"
               type="search"
               placeholder="搜索专题名称 / 负责人..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              style={{ paddingLeft: "34px" }}
             />
           </div>
-          <Link to="/cases/new" className="btn btn--primary" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <Link to="/cases/new" className="btn btn--primary">
             <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
@@ -96,23 +95,23 @@ export function CaseListPage() {
       </div>
 
       {error ? (
-        <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "var(--radius)", padding: "16px 20px", color: "var(--danger-light)" }}>
+        <div className="case-list__error-alert">
           专题列表加载失败：{error}
         </div>
       ) : cases === null ? (
-        <p style={{ color: "var(--text-dim)" }}>正在加载专题…</p>
+        <p className="case-list__loading">正在加载专题……</p>
       ) : cases.length === 0 ? (
-        <div style={{ background: "var(--bg-panel)", padding: "32px 20px", borderRadius: "var(--radius)", border: "1px dashed var(--border)", textAlign: "center", color: "var(--text-dim)" }}>
-          <p style={{ fontSize: "15px", marginBottom: "8px" }}>当前密级权限下暂无专题</p>
-          <p style={{ fontSize: "13px" }}>点击右上角「新建专题」创建第一个分析专题。</p>
+        <div className="case-list__empty-panel">
+          <p className="case-list__empty-title">当前密级权限下暂无专题</p>
+          <p className="case-list__empty-desc">点击右上角「新建专题」创建第一个分析专题。</p>
         </div>
       ) : (
         <>
-          <h2 style={{ fontSize: "14px", fontWeight: "700", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "16px" }}>
-            活动专题 ({filtered.length})
+          <h2 className="case-list__heading">
+            活动专题（{filtered.length}）
           </h2>
           {filtered.length === 0 ? (
-            <div style={{ background: "var(--bg-panel)", padding: "32px 20px", borderRadius: "var(--radius)", border: "1px dashed var(--border)", textAlign: "center", color: "var(--text-dim)" }}>
+            <div className="case-list__empty-panel">
               无匹配的专题
             </div>
           ) : (
@@ -123,7 +122,7 @@ export function CaseListPage() {
                 return (
                   <div key={c.id} className="case-card">
                     <div className="case-card__header">
-                      <span className={`badge badge--clearance tone-${c.clearance}`} style={{ padding: "3px 8px", fontSize: "11px" }}>
+                      <span className={`badge badge--clearance tone-${c.clearance} case-list__badge`}>
                         {CLEARANCE_LABELS[c.clearance]}
                       </span>
                       <span className={`case-card__status ${s.cls}`}>{s.text}</span>
@@ -141,8 +140,8 @@ export function CaseListPage() {
                     </div>
 
                     <div className="case-card__meta">
-                      <span>更新时间: {c.updated_at.slice(0, 10)}</span>
-                      <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost" style={{ padding: "6px 12px", fontSize: "12px", color: "var(--accent-light)", fontWeight: "600", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <span>更新时间：{c.updated_at.slice(0, 10)}</span>
+                      <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost case-list__card-link">
                         进入工作台
                         <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="9 18 15 12 9 6"/>

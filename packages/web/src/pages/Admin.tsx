@@ -200,8 +200,8 @@ export function AdminPromptsPage() {
                 const selected = p.id === selectedId;
                 return (
                   <tr key={p.id} onClick={() => selectPrompt(p.id)} style={{ cursor: "pointer", background: selected ? "rgba(99, 102, 241, 0.12)" : undefined }}>
-                    <td style={{ fontWeight: "700" }}>{p.name}</td>
-                    <td style={{ fontFamily: "monospace", fontSize: "12px", color: selected ? "var(--accent-light)" : "var(--text-dim)" }}>{p.role}</td>
+                    <td data-label="模板名称" style={{ fontWeight: "700" }}>{p.name}</td>
+                    <td data-label="用途" style={{ fontFamily: "monospace", fontSize: "12px", color: selected ? "var(--accent-light)" : "var(--text-dim)" }}>{p.role}</td>
                   </tr>
                 );
               })}
@@ -275,9 +275,9 @@ export function AdminPromptsPage() {
                     <tbody>
                       {versions.map((v) => (
                         <tr key={v.ts}>
-                          <td style={{ fontFamily: "monospace", fontSize: "12px" }}>{v.ts}</td>
-                          <td style={{ color: "var(--text-dim)" }}>{v.bytes} bytes</td>
-                          <td style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                          <td data-label="时间" style={{ fontFamily: "monospace", fontSize: "12px" }}>{v.ts}</td>
+                          <td data-label="大小" style={{ color: "var(--text-dim)" }}>{v.bytes} bytes</td>
+                          <td data-label="操作" style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                             <button
                               type="button"
                               className="btn btn--sm"
@@ -494,27 +494,27 @@ export function AdminUsersPage() {
               const isSelf = u.id === me?.id;
               return (
                 <tr key={u.id}>
-                  <td style={{ fontWeight: "700" }}>
+                  <td data-label="账号 / 姓名" style={{ fontWeight: "700" }}>
                     {u.name} <code style={{ fontSize: "11px", color: "var(--text-muted)" }}>({u.id})</code>
                     {isSelf ? <span style={{ fontSize: "11px", color: "var(--accent-light)", marginLeft: "6px" }}>当前账号</span> : null}
                   </td>
-                  <td>
+                  <td data-label="角色">
                     <select className="input-text" value={u.role} disabled={busy || isSelf} onChange={(e) => act(() => updateUser(u.id, { role: e.target.value as Role }))} style={{ padding: "4px 8px", fontSize: "12px" }}>
                       {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                     </select>
                   </td>
-                  <td>
+                  <td data-label="最大可访问密级">
                     <select className="input-text" value={u.clearance} disabled={busy} onChange={(e) => act(() => updateUser(u.id, { clearance: e.target.value as Clearance }))} style={{ padding: "4px 8px", fontSize: "12px" }}>
                       {CLEARANCE_OPTIONS.map((c) => <option key={c} value={c}>{CLEARANCE_LABELS[c]}</option>)}
                     </select>
                   </td>
-                  <td>
+                  <td data-label="状态">
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: u.enabled ? "var(--ok-light)" : "var(--text-muted)" }}>
                       <span className="status-dot" style={{ backgroundColor: "currentColor" }} />
                       <span>{u.enabled ? "活跃" : "停用"}</span>
                     </span>
                   </td>
-                  <td style={{ display: "flex", gap: "6px" }}>
+                  <td data-label="操作" style={{ display: "flex", gap: "6px" }}>
                     <button type="button" className="btn btn--sm" disabled={busy || isSelf} onClick={() => act(() => updateUser(u.id, { enabled: !u.enabled }))}>
                       {u.enabled ? "停用" : "启用"}
                     </button>

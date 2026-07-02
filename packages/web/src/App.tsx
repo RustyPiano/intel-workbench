@@ -1,3 +1,4 @@
+import React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { RequireRole, RequireSession } from "./components/Guards";
@@ -11,19 +12,46 @@ import {
 } from "./pages/Admin";
 import { AuditCenterPage } from "./pages/AuditCenter";
 import { CaseListPage } from "./pages/CaseList";
-import {
-  CaseAuditPanel,
-  CaseWorkbench,
-  ContradictionsPanel,
-  ElementsPanel,
-  FindingsPanel,
-  InquiryPanel,
-  MaterialsPanel,
-  ReportPanel,
-} from "./pages/CaseWorkbench";
+import { CaseWorkbench } from "./pages/CaseWorkbench";
 import { LoginPage } from "./pages/Login";
 import { NewCasePage } from "./pages/NewCase";
 import { OverviewPage } from "./pages/Overview";
+
+const MaterialsPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/MaterialsPanel").then((module) => ({
+    default: module.MaterialsPanel,
+  }))
+);
+const ElementsPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/ElementsPanel").then((module) => ({
+    default: module.ElementsPanel,
+  }))
+);
+const ContradictionsPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/ContradictionsPanel").then((module) => ({
+    default: module.ContradictionsPanel,
+  }))
+);
+const InquiryPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/InquiryPanel").then((module) => ({
+    default: module.InquiryPanel,
+  }))
+);
+const FindingsPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/FindingsPanel").then((module) => ({
+    default: module.FindingsPanel,
+  }))
+);
+const ReportPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/ReportPanel").then((module) => ({
+    default: module.ReportPanel,
+  }))
+);
+const CaseAuditPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/CaseAuditPanel").then((module) => ({
+    default: module.CaseAuditPanel,
+  }))
+);
 
 /**
  * §8 全路由（横向骨架）：每屏可进入、可从导航到达。

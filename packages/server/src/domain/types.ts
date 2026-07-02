@@ -176,6 +176,12 @@ export interface Contradiction {
   id: string;
   entity: string;
   attribute?: string;
+  normalized_entity?: string;
+  normalized_attribute?: string;
+  value_a?: string;
+  value_b?: string;
+  rule_source?: "rule" | "llm";
+  rule_name?: string;
   scope: "cross-material" | "intra-material";
   claim_a: { text: string; citation: Citation };
   claim_b: { text: string; citation: Citation };

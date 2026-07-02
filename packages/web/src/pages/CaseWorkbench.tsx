@@ -2107,6 +2107,12 @@ const CONTRADICTION_SCOPE_LABELS: Record<Contradiction["scope"], string> = {
   "intra-material": "文件内",
 };
 
+const CONTRADICTION_RULE_LABELS: Record<string, string> = {
+  "same-value": "同值跳过",
+  "numeric-mismatch": "数值冲突",
+  "opposite-status": "状态相反",
+};
+
 function citedClaim(text: string, citation: ApiCitation): ApiClaim {
   return { text, type: "fact", status: "verified", citations: [citation] };
 }
@@ -2164,6 +2170,9 @@ export function ContradictionsPanel() {
   const jobResult = job?.kind === "contradictions" && job.result ? job.result as ContradictionDetectionResult : null;
   const latestResult = jobResult ?? contradictionResult;
   const all = latestResult?.contradictions ?? [];
+  const propositions = latestResult?.groundedPropositions ?? [];
+  const warnings = latestResult?.warnings ?? [];
+  const ruleHits = all.filter((item) => item.rule_source === "rule").length;
   const ackByContradiction = new Map((latestResult?.acknowledgements ?? []).map((ack) => [ack.contradiction_id, ack]));
   const canResolve = user?.role === "security" || user?.role === "admin";
   const running = job?.state === "running";
@@ -2188,8 +2197,10 @@ export function ContradictionsPanel() {
       {latestResult ? (
         <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
           {notStarted ? `可检测素材块 ${latestResult.totalChunks} 个` : `覆盖 ${latestResult.processedChunks}/${latestResult.totalChunks} 个素材块`} · 状态：{statusLabel}
+          {propositions.length > 0 ? ` · 命题 ${propositions.length} 条` : ""}
+          {ruleHits > 0 ? ` · 规则命中 ${ruleHits} 条` : ""}
           {latestResult.truncated ? " · 覆盖不完整" : ""}
-          {latestResult.warnings.length > 0 ? ` · ${latestResult.warnings.join("；")}` : ""}
+          {warnings.length > 0 ? ` · ${warnings.join("；")}` : ""}
         </div>
       ) : null}
       {latestResult?.status === "failed" ? (
@@ -2213,6 +2224,30 @@ export function ContradictionsPanel() {
         <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>{job.error ?? "任务失败"}</div>
       ) : job?.state === "cancelled" ? (
         <div style={{ color: "var(--text-muted)", fontSize: "12px" }}>已取消</div>
+      ) : null}
+
+      {propositions.length > 0 ? (
+        <details className="proposition-panel">
+          <summary>接地命题（{propositions.length}）</summary>
+          <div className="proposition-list">
+            {propositions.slice(0, 20).map((claim, index) => (
+              <div key={`${claim.chunk_id}:${index}`} className="proposition-row">
+                <div>
+                  <strong>{claim.entity}</strong>
+                  <span>{claim.attribute}: {claim.value}</span>
+                  {claim.normalized_entity !== claim.entity || claim.normalized_attribute !== claim.attribute ? (
+                    <small>归一键：{claim.normalized_entity} · {claim.normalized_attribute}</small>
+                  ) : null}
+                  {claim.normalized_value !== claim.value ? (
+                    <small>归一值：{claim.normalized_value}</small>
+                  ) : null}
+                </div>
+                <CitationChips claim={citedClaim(claim.text, claim.citation)} onFrame={setFrameCite} />
+              </div>
+            ))}
+            {propositions.length > 20 ? <div className="proposition-more">仅显示前 20 条</div> : null}
+          </div>
+        </details>
       ) : null}
 
       <div className="contradictions-list">
@@ -2242,8 +2277,17 @@ export function ContradictionsPanel() {
             return (
             <div key={item.id} className="contradiction-row" style={unresolvedHigh ? { borderLeft: "3px solid var(--danger-light)" } : undefined}>
               <div className="contradiction-row__head">
-                <div style={{ fontWeight: 700 }}>{item.attribute ? `${item.entity} · ${item.attribute}` : item.entity}</div>
-                <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{item.attribute ? `${item.entity} · ${item.attribute}` : item.entity}</div>
+                  {(item.normalized_entity || item.normalized_attribute || item.value_a || item.value_b) ? (
+                    <div className="contradiction-meta">
+                      {item.normalized_entity ? `归一实体 ${item.normalized_entity}` : ""}
+                      {item.normalized_attribute ? ` · 归一属性 ${item.normalized_attribute}` : ""}
+                      {item.value_a || item.value_b ? ` · 归一值 ${item.value_a ?? "?"} / ${item.value_b ?? "?"}` : ""}
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ display: "inline-flex", gap: "8px", alignItems: "center", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   {unresolvedHigh ? (
                     <span className="badge badge--devmode" style={{ padding: "3px 8px", fontSize: "11px" }}>未解决</span>
                   ) : ackStatus !== "open" ? (
@@ -2252,6 +2296,11 @@ export function ContradictionsPanel() {
                   <span className={`contradiction-scope contradiction-scope--${item.scope === "cross-material" ? "cross" : "intra"}`}>
                     {CONTRADICTION_SCOPE_LABELS[item.scope]}
                   </span>
+                  {item.rule_source ? (
+                    <span className={`contradiction-rule contradiction-rule--${item.rule_source}`}>
+                      {item.rule_source === "rule" ? (CONTRADICTION_RULE_LABELS[item.rule_name ?? ""] ?? "规则判定") : "LLM 判定"}
+                    </span>
+                  ) : null}
                   <span className="contradiction-confidence">{Math.round(item.confidence * 100)}%</span>
                 </div>
               </div>

@@ -206,12 +206,31 @@ export interface Contradiction {
   id: string;
   entity: string;
   attribute?: string;
+  normalized_entity?: string;
+  normalized_attribute?: string;
+  value_a?: string;
+  value_b?: string;
+  rule_source?: "rule" | "llm";
+  rule_name?: string;
   scope: "cross-material" | "intra-material";
   claim_a: { text: string; citation: ApiCitation };
   claim_b: { text: string; citation: ApiCitation };
   relation: "contradiction";
   rationale: string;
   confidence: number;
+}
+
+export interface GroundedProposition {
+  entity: string;
+  attribute: string;
+  value: string;
+  normalized_entity: string;
+  normalized_attribute: string;
+  normalized_value: string;
+  chunk_id: string;
+  material_id: string;
+  citation: ApiCitation;
+  text: string;
 }
 
 export type ContradictionAcknowledgementStatus = "open" | "resolved" | "dismissed";
@@ -229,6 +248,7 @@ export type ContradictionStatus = "succeeded" | "degraded" | "failed";
 export interface ContradictionDetectionResult {
   status: ContradictionStatus;
   contradictions: Contradiction[];
+  groundedPropositions: GroundedProposition[];
   processedChunks: number;
   totalChunks: number;
   truncated: boolean;

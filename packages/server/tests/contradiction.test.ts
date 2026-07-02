@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,7 +16,28 @@ import { OfflineGuard } from "../src/security/offline-guard.js";
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 const ENDPOINT = "https://stub.local/v1";
 
-type Script = Record<string, unknown> | Error | ((input: GenerateInput) => Record<string, unknown>);
+type Script = Record<string, unknown> | GenerateResult | Error | ((input: GenerateInput) => Record<string, unknown> | GenerateResult);
+
+function isGenerateResult(value: Record<string, unknown> | GenerateResult): value is GenerateResult {
+  return typeof (value as GenerateResult).message === "object";
+}
+
+function toolCall(name: string, args: Record<string, unknown>, id = `call_${name}`): GenerateResult {
+  return {
+    message: { role: "assistant", content: "", toolCalls: [{ id, name, arguments: args }] },
+    stopReason: "tool_use",
+  };
+}
+
+function final(content = "done"): GenerateResult {
+  return { message: { role: "assistant", content }, stopReason: "end_turn" };
+}
+
+function toolResults(input: GenerateInput, name: string): { ok: boolean; content: string }[] {
+  return input.messages
+    .filter((message) => message.role === "tool" && message.toolName === name)
+    .map((message) => JSON.parse(message.content) as { ok: boolean; content: string });
+}
 
 class ScriptedJsonAdapter implements ModelAdapter {
   readonly name = "scripted-contradiction";
@@ -30,6 +51,7 @@ class ScriptedJsonAdapter implements ModelAdapter {
     if (!script) throw new Error("unexpected model call");
     if (script instanceof Error) throw script;
     const body = typeof script === "function" ? script(input) : script;
+    if (isGenerateResult(body)) return body;
     return { message: { role: "assistant", content: JSON.stringify(body) }, stopReason: "end_turn" };
   }
 }
@@ -38,12 +60,13 @@ class CallbackJsonAdapter implements ModelAdapter {
   readonly name = "callback-contradiction";
   readonly inputs: GenerateInput[] = [];
 
-  constructor(private readonly fn: (input: GenerateInput) => Record<string, unknown> | Error) {}
+  constructor(private readonly fn: (input: GenerateInput) => Record<string, unknown> | GenerateResult | Error) {}
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
     const body = this.fn(input);
     if (body instanceof Error) throw body;
+    if (isGenerateResult(body)) return body;
     return { message: { role: "assistant", content: JSON.stringify(body) }, stopReason: "end_turn" };
   }
 }
@@ -96,17 +119,34 @@ function chunkIds(content: string): string[] {
   return [...content.matchAll(/\[([^\]]+#\d+)\]/g)].map((match) => match[1]!);
 }
 
+function firstListedMaterialId(input: GenerateInput): string {
+  const [list] = toolResults(input, "list_materials");
+  const materials = JSON.parse(list?.content ?? "[]") as { material_id: string }[];
+  return materials[0]?.material_id ?? "missing-material";
+}
+
+function windowChunkIds(input: GenerateInput): string[] {
+  const [window] = toolResults(input, "read_material_window");
+  const result = JSON.parse(window?.content ?? "{}") as { chunks?: { chunk_id: string }[] };
+  return result.chunks?.map((chunk) => chunk.chunk_id) ?? [];
+}
+
 const contradiction = { relation: "contradiction", rationale: "values differ", certainty: 0.9 };
 const deterministicContradiction = { relation: "contradiction", rationale: "values differ", certainty: 0.7 };
 
 describe("ContradictionService", () => {
   let fixture: Fixture;
+  let originalAgentMode: string | undefined;
 
   beforeEach(async () => {
+    originalAgentMode = process.env.MINI_AGENT_CONTRADICTION_MODE;
+    delete process.env.MINI_AGENT_CONTRADICTION_MODE;
     fixture = await createFixture();
   });
 
   afterEach(async () => {
+    if (originalAgentMode === undefined) delete process.env.MINI_AGENT_CONTRADICTION_MODE;
+    else process.env.MINI_AGENT_CONTRADICTION_MODE = originalAgentMode;
     await rm(fixture.root, { recursive: true, force: true });
   });
 
@@ -126,6 +166,347 @@ describe("ContradictionService", () => {
     expect(result.contradictions[0]?.claim_b.citation.content_hash).toEqual(expect.any(String));
   });
 
+  it("agent mode can submit contradictions through tools", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      {
+        filename: "single.txt",
+        content: [
+          `Gate 3 status is open. ${"A".repeat(520)}`,
+          "Gate 3 status is closed.",
+        ].join("\n\n"),
+      },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) {
+        const ids = chunkIds(input.messages[0]?.content ?? "");
+        return {
+          claims: [
+            { entity: "Gate 3", attribute: "status", value: "open", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+            { entity: "Gate 3", attribute: "status", value: "closed", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+          ],
+        };
+      }
+      const has = (name: string) => toolResults(input, name).length > 0;
+      if (!has("list_materials")) return toolCall("list_materials", {}, "list");
+      if (!has("read_material_window")) return toolCall("read_material_window", { material_id: firstListedMaterialId(input), start_chunk: 0, limit: 2 }, "read");
+      if (!has("extract_claims_from_scope")) return toolCall("extract_claims_from_scope", { chunk_ids: windowChunkIds(input) }, "extract");
+      if (!has("compare_claims")) return toolCall("compare_claims", { claim_a_id: "claim-1", claim_b_id: "claim-2" }, "compare");
+      if (!has("commit_contradictions")) {
+        return toolCall("commit_contradictions", {
+          contradictions: [{ claim_a_id: "claim-1", claim_b_id: "claim-2", rationale: "opposite statuses", confidence: 0.91 }],
+        }, "commit");
+      }
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result).toMatchObject({ status: "succeeded", contradictions: [expect.objectContaining({ rationale: "opposite statuses", confidence: 0.91 })] });
+    expect(result.groundedPropositions.map((claim) => (claim as { claim_id?: string }).claim_id)).toEqual(["claim-1", "claim-2"]);
+    expect(adapter.inputs.some((input) => input.tools.some((tool) => tool.name === "commit_contradictions"))).toBe(true);
+    const events = await fixture.audit.readAll();
+    expect(events.some((item) => item.action === "tool.commit_contradictions" && item.result === "ok")).toBe(true);
+    const event = events.filter((item) => item.action === "contradiction.detect").pop();
+    expect(event?.detail).toMatchObject({ agentic: { mode: "agent", status: "committed", claims: 2, pairsJudged: 1 } });
+  });
+
+  it("agent mode falls back to batch detection when the agent does not commit", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open." },
+      { filename: "bravo.txt", content: "Gate 3 status is closed." },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) return extractClaims(chunks, ["open", "closed"]);
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.status).toBe("degraded");
+    expect(result.warnings).toContainEqual(expect.stringContaining("commit_contradictions"));
+    expect(adapter.inputs.filter((input) => input.tools.length > 0)).toHaveLength(2);
+  });
+
+  it("agent commit rejects unknown claim ids and then falls back", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "No contradiction here." },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) return { claims: [] };
+      if (toolResults(input, "commit_contradictions").length === 0) {
+        return toolCall("commit_contradictions", {
+          contradictions: [{ claim_a_id: "missing-a", claim_b_id: "missing-b" }],
+        }, "bad_commit");
+      }
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+    const commitResult = adapter.inputs.flatMap((input) => toolResults(input, "commit_contradictions"))[0];
+
+    expect(commitResult).toMatchObject({ ok: false, content: expect.stringContaining("未知 claim_id") });
+    expect(result).toMatchObject({ status: "degraded", contradictions: [] });
+    expect(result.warnings).toContainEqual(expect.stringContaining("commit_contradictions"));
+  });
+
+  it("agent commit rejects pairs that did not pass contradiction judgement", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open." },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) {
+        const ids = chunkIds(input.messages[0]?.content ?? "");
+        return {
+          claims: [
+            { entity: "Gate 3", attribute: "status", value: "open", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+            { entity: "Gate 3", attribute: "status", value: "open", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+          ],
+        };
+      }
+      const has = (name: string) => toolResults(input, name).length > 0;
+      if (!has("list_materials")) return toolCall("list_materials", {}, "list");
+      if (!has("read_material_window")) return toolCall("read_material_window", { material_id: firstListedMaterialId(input), start_chunk: 0, limit: 1 }, "read");
+      if (!has("extract_claims_from_scope")) return toolCall("extract_claims_from_scope", { chunk_ids: windowChunkIds(input) }, "extract");
+      if (!has("commit_contradictions")) {
+        return toolCall("commit_contradictions", {
+          contradictions: [{ claim_a_id: "claim-1", claim_b_id: "claim-2", rationale: "agent tried to force commit" }],
+        }, "commit");
+      }
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+    const commitResult = adapter.inputs.flatMap((input) => toolResults(input, "commit_contradictions"))[0];
+
+    expect(commitResult).toMatchObject({ ok: false, content: expect.stringContaining("未通过矛盾判定") });
+    expect(result).toMatchObject({ status: "degraded", contradictions: [] });
+  });
+
+  it("agent commit rejects cross-entity claim pairs", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open. Gate 4 status is closed." },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) {
+        const ids = chunkIds(input.messages[0]?.content ?? "");
+        return {
+          claims: [
+            { entity: "Gate 3", attribute: "status", value: "open", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+            { entity: "Gate 4", attribute: "status", value: "closed", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+          ],
+        };
+      }
+      const has = (name: string) => toolResults(input, name).length > 0;
+      if (!has("list_materials")) return toolCall("list_materials", {}, "list");
+      if (!has("read_material_window")) return toolCall("read_material_window", { material_id: firstListedMaterialId(input), start_chunk: 0, limit: 1 }, "read");
+      if (!has("extract_claims_from_scope")) return toolCall("extract_claims_from_scope", { chunk_ids: windowChunkIds(input) }, "extract");
+      if (!has("commit_contradictions")) {
+        return toolCall("commit_contradictions", {
+          contradictions: [{ claim_a_id: "claim-1", claim_b_id: "claim-2", rationale: "cross entity forced commit" }],
+        }, "commit");
+      }
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+    const commitResult = adapter.inputs.flatMap((input) => toolResults(input, "commit_contradictions"))[0];
+
+    expect(commitResult).toMatchObject({ ok: false, content: expect.stringContaining("实体不一致") });
+    expect(result).toMatchObject({ status: "degraded", contradictions: [] });
+  });
+
+  it("agent runtime errors fail instead of falling back silently", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open." },
+    ]);
+    const service = new ContradictionService(
+      fixture.paths,
+      fixture.audit,
+      fixture.cases,
+      fixture.materials,
+      { adapter: new ScriptedJsonAdapter([new Error("agent exploded")]), guard: new OfflineGuard(["stub.local"], fixture.audit), modelEndpoint: ENDPOINT },
+    );
+
+    await expect(service.detect(OPERATOR, caseId)).rejects.toMatchObject({
+      result: { status: "failed", error: expect.stringContaining("agent exploded") },
+    });
+  });
+
+  it("default mode does not enter the agentic path", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open." },
+      { filename: "bravo.txt", content: "Gate 3 status is closed." },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length > 0) return new Error("agentic path should not run");
+      return extractClaims(chunks, ["open", "closed"]);
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+    expect(adapter.inputs.every((input) => input.tools.length === 0)).toBe(true);
+  });
+
+  it("normalizes simple aliases, persists propositions, and leaves numeric conflicts to LLM", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "UNITED STATES COAST GUARD patrol count is 11." },
+      { filename: "bravo.txt", content: "USCG patrol count is 12." },
+    ]);
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "UNITED STATES COAST GUARD", attribute: "patrol count", value: "11", chunk_id: chunks[0]!.chunk_id },
+        { entity: "USCG", attribute: "patrol count", value: "12", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }, contradiction]);
+    const service = createService(fixture, adapter);
+
+    const result = await service.detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]).toMatchObject({
+      normalized_entity: "unitedstatescoastguard",
+      normalized_attribute: "patrolcount",
+      value_a: "11",
+      value_b: "12",
+      rule_source: "llm",
+    });
+    expect(result.groundedPropositions.map((claim) => claim.normalized_entity)).toEqual(["unitedstatescoastguard", "unitedstatescoastguard"]);
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(1);
+    await expect(service.getResult(OPERATOR, caseId)).resolves.toMatchObject({
+      groundedPropositions: [
+        { entity: "UNITED STATES COAST GUARD", normalized_entity: "unitedstatescoastguard" },
+        { entity: "USCG", normalized_entity: "unitedstatescoastguard" },
+      ],
+    });
+  });
+
+  it("uses case element aliases when normalizing contradiction entities", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "蓝海星号 draft is 8.1." },
+      { filename: "bravo.txt", content: "Blue Star draft is 8.4." },
+    ]);
+    await writeFile(path.join(fixture.paths.caseDir(caseId), "elements.json"), JSON.stringify([
+      { id: "el-ship", type: "equipment", name: "蓝海星号", aliases: ["Blue Star"], mentions: [], freq: 0 },
+    ]));
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "蓝海星号", attribute: "draft", value: "8.1", chunk_id: chunks[0]!.chunk_id },
+        { entity: "Blue Star", attribute: "draft", value: "8.4", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }, contradiction]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]).toMatchObject({
+      normalized_entity: "蓝海星号",
+      rule_source: "llm",
+    });
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(1);
+  });
+
+  it("does not flag numerically equal values with different formatting", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "LH-7712 draft is 8.10." },
+      { filename: "bravo.txt", content: "LH-7712 draft is 8.1." },
+    ]);
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "LH-7712", attribute: "draft", value: "8.10", chunk_id: chunks[0]!.chunk_id },
+        { entity: "LH-7712", attribute: "draft", value: "8.1", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(0);
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(0);
+  });
+
+  it("cheap-rules opposite status conflicts without LLM judge", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 is open." },
+      { filename: "bravo.txt", content: "Gate 3 is closed." },
+    ]);
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "Gate 3", attribute: "status", value: "open", chunk_id: chunks[0]!.chunk_id },
+        { entity: "Gate 3", attribute: "status", value: "closed", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+    expect(result.contradictions[0]).toMatchObject({ rule_source: "rule", rule_name: "opposite-status" });
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(0);
+  });
+
+  it("does not collapse conflicting element aliases", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "X status is open." },
+      { filename: "bravo.txt", content: "Beta status is closed." },
+    ]);
+    await writeFile(path.join(fixture.paths.caseDir(caseId), "elements.json"), JSON.stringify([
+      { id: "el-alpha", type: "equipment", name: "Alpha", aliases: ["X"], mentions: [], freq: 0 },
+      { id: "el-beta", type: "equipment", name: "Beta", aliases: ["X"], mentions: [], freq: 0 },
+    ]));
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "X", attribute: "status", value: "open", chunk_id: chunks[0]!.chunk_id },
+        { entity: "Beta", attribute: "status", value: "closed", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(0);
+  });
+
+  it("ignores malformed optional elements alias file", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Gate 3 status is open." },
+      { filename: "bravo.txt", content: "Gate 3 status is closed." },
+    ]);
+    await writeFile(path.join(fixture.paths.caseDir(caseId), "elements.json"), "{bad json");
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "Gate 3", attribute: "status", value: "open", chunk_id: chunks[0]!.chunk_id },
+        { entity: "Gate 3", attribute: "status", value: "closed", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(1);
+  });
+
+  it("does not treat symbols stripped by display normalization as same values", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "Fee is $5." },
+      { filename: "bravo.txt", content: "Fee is €5." },
+    ]);
+    const adapter = new ScriptedJsonAdapter([{
+      claims: [
+        { entity: "Fee schedule", attribute: "fee", value: "$5", chunk_id: chunks[0]!.chunk_id },
+        { entity: "Fee schedule", attribute: "fee", value: "€5", chunk_id: chunks[1]!.chunk_id },
+      ],
+    }, { relation: "unrelated", rationale: "currency differs and needs context", certainty: 0.4 }]);
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(0);
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(1);
+  });
+
   it("reports not-started coverage before the first detection run", async () => {
     const { caseId } = await createCaseWithDocs(fixture, [
       { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },
@@ -136,6 +517,7 @@ describe("ContradictionService", () => {
       processedChunks: 0,
       totalChunks: 1,
       contradictions: [],
+      groundedPropositions: [],
     });
   });
 

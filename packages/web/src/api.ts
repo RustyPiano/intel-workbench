@@ -547,6 +547,15 @@ export function listInquiries(caseId: string): Promise<ApiInquiry[]> {
   );
 }
 
+export async function clearInquiries(caseId: string): Promise<void> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, { method: "DELETE", headers: headers() });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `清空失败（HTTP ${res.status}）`);
+  }
+}
+
 /** 深度分析问答（非流式）：走 agent 证据台账路径 + 扩大检索/读取预算，返回完整带引用结论。 */
 export function askInquiryDeep(caseId: string, question: string): Promise<ApiInquiry> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {

@@ -8,6 +8,7 @@ import {
   askInquiryStream,
   cancelJob,
   advanceTaskStage,
+  clearInquiries,
   confirmTaskStage,
   createFinding,
   createTaskRun,
@@ -2464,6 +2465,7 @@ export function InquiryPanel() {
   const [liveQuestion, setLiveQuestion] = useState<string | null>(null);
   const [liveText, setLiveText] = useState("");
   const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
   const userStoppedRef = useRef(false);
@@ -2559,9 +2561,7 @@ export function InquiryPanel() {
     } catch { /* 忽略：保持未校对态 */ }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = input.trim();
+  const runQuestion = async (q: string, deep = deepMode) => {
     if (!q || !user || !caseId || busy) return;
     userStoppedRef.current = false;
     toolOrderRef.current = 0;
@@ -2571,7 +2571,7 @@ export function InquiryPanel() {
     setLiveQuestion(q);
     setLiveText("");
     setToolTrace([]);
-    if (deepMode) {
+    if (deep) {
       setActiveDeep(true);
       try {
         const inquiry = await askInquiryDeep(caseId, q);
@@ -2608,8 +2608,40 @@ export function InquiryPanel() {
     }
   };
 
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await runQuestion(input.trim());
+  };
+
+  const handleEditQuestion = (question: string) => {
+    if (busy) return;
+    setInput(question);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const handleClearHistory = async () => {
+    if (!caseId || busy || history.length === 0) return;
+    if (!window.confirm("清空本专题问答记录？此操作不会删除素材。")) return;
+    try {
+      await clearInquiries(caseId);
+      setHistory([]);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   return (
     <div className="inquiry-layout">
+      <div className="chat-header">
+        <div>
+          <strong>溯源问答</strong>
+          <span>AI 每次只读取当前问题和专题素材；上方记录仅用于回看。</span>
+        </div>
+        <button type="button" className="btn btn--ghost btn--sm" onClick={handleClearHistory} disabled={busy || history.length === 0}>
+          清空记录
+        </button>
+      </div>
       <div className="chat-messages">
         {history.length === 0 && !busy && !liveQuestion ? (
           <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7", padding: "8px" }}>
@@ -2626,6 +2658,10 @@ export function InquiryPanel() {
               </div>
               <div className="chat-content">
                 <p>{inq.question}</p>
+                <div className="chat-actions">
+                  <button type="button" onClick={() => void runQuestion(inq.question)} disabled={busy}>重新运行</button>
+                  <button type="button" onClick={() => handleEditQuestion(inq.question)} disabled={busy}>编辑问题</button>
+                </div>
               </div>
             </div>
             <div className="chat-bubble chat-bubble--ai">
@@ -2659,6 +2695,7 @@ export function InquiryPanel() {
                 </svg>
               </div>
               <div className="chat-content">
+                <div className="live-status-badge">草稿输出 · 等待引用校验</div>
                 <p className="live-narration">{liveText || (activeDeep ? "深度分析中…（已提高检索/读取预算，可能稍慢）" : "研判中…")}</p>
                 {toolTrace.length > 0 ? (
                   <div className="tool-trace" aria-label="工具调用轨迹">
@@ -2730,6 +2767,7 @@ export function InquiryPanel() {
         <input
           type="text"
           className="input-text"
+          ref={inputRef}
           placeholder="向 AI 助手提问有关本专题的关联线索…"
           value={input}
           onChange={(e) => setInput(e.target.value)}

@@ -72,7 +72,11 @@ class DynamicInquiryAdapter implements ModelAdapter {
     }
     const has = (name: string) => toolResults(input, name).length > 0;
 
-    if (this.mode === "no-finalize") {
+    const isRepair = input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿"));
+    if (this.mode === "no-finalize" && !isRepair) {
+      if (!has("search_chunks")) return toolCall("search_chunks", { query: "舰船 线索", k: 6 }, `search_${this.inputs.length}`);
+      const chunkId = firstSearchChunkId(input);
+      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
       return final();
     }
 
@@ -442,7 +446,7 @@ describe.sequential("InquiryService agent harness", () => {
     expect(adapter.readContents.some((content) => content.includes("读取预算已用尽"))).toBe(true);
   });
 
-  it("refuses zero chunks, missing finalize, and finalize with only invalid cites", async () => {
+  it("refuses zero chunks, repairs missing finalize, and rejects finalize with only invalid cites", async () => {
     const emptyCase = (await fixture.cases.create(OPERATOR, { name: "agent 空专题", clearance: "internal" })).id;
     const empty = await createService(fixture, new DynamicInquiryAdapter("valid")).ask(OPERATOR, emptyCase, "舰船线索");
     expect(empty.status).toBe("insufficient");
@@ -450,8 +454,19 @@ describe.sequential("InquiryService agent harness", () => {
     const noFinalizeCase = await createCaseWithDocs(fixture, "agent 无 finalize", [
       { filename: "intel.txt", content: "舰船线索：未见异常。" },
     ]);
-    const noFinalize = await createService(fixture, new DynamicInquiryAdapter("no-finalize")).ask(OPERATOR, noFinalizeCase, "舰船线索");
-    expect(noFinalize.status).toBe("insufficient");
+    const repairAdapter = new DynamicInquiryAdapter("no-finalize");
+    const noFinalize = await createService(fixture, repairAdapter).ask(OPERATOR, noFinalizeCase, "舰船线索");
+    expect(noFinalize.status).toBe("answered");
+    expect(noFinalize.answer).not.toContain("raw final text");
+    expect(noFinalize.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
+    const repairInput = repairAdapter.inputs.find((input) => input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿")));
+    expect(repairInput).toBeDefined();
+    expect(repairInput?.messages.some((message) => message.role === "tool" && message.toolName === "search_chunks")).toBe(true);
+    expect(repairInput?.messages.some((message) => message.role === "tool" && message.toolName === "cite")).toBe(true);
+    expect(repairAdapter.supportInputs.some((input) => String(input.messages[0]?.content ?? "").includes("素材片段"))).toBe(false);
+    const createEvent = (await fixture.audit.readAll()).find((event) => event.action === "inquiry.create" && event.detail?.inquiryId === noFinalize.id);
+    expect(createEvent?.detail).toMatchObject({ finalized: true });
+    expect(createEvent?.detail).not.toHaveProperty("fallback");
 
     const invalidOnly = await createService(fixture, new DynamicInquiryAdapter("invalid-cite")).ask(OPERATOR, noFinalizeCase, "舰船线索");
     expect(invalidOnly.status).toBe("insufficient");

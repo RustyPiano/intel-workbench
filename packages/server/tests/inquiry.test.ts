@@ -119,6 +119,15 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
     expect(list[0].question).toBe("问题一");
   });
 
+  it("clear 清空问答记录并写审计", async () => {
+    const svc = service(stubAdapter(JSON.stringify({ claims: [{ text: "x", type: "fact", citations: [chunkId] }] })));
+    await svc.ask(OPERATOR, caseId, "问题一");
+    await svc.clear(OPERATOR, caseId);
+
+    expect(await svc.list(OPERATOR, caseId)).toEqual([]);
+    expect((await audit.readAll()).some((event) => event.action === "inquiry.clear")).toBe(true);
+  });
+
   describe("token 预算路由（二期 §5.1）", () => {
     const KEY = "MINI_AGENT_CTX_BUDGET_TOKENS";
     let saved: string | undefined;

@@ -84,7 +84,7 @@ export function createApiRouter(services: ApiServices): Router {
         "DELETE /api/cases/:id/materials/:mid",
         "GET /api/cases/:id/audit",
         "GET /api/materials/:mid",
-        "GET/POST /api/cases/:id/inquiries",
+        "GET/POST/DELETE /api/cases/:id/inquiries",
         "GET/POST /api/cases/:id/elements",
         "GET/POST /api/cases/:id/findings",
         "POST /api/cases/:id/findings/:findingId/review",

@@ -139,6 +139,29 @@ describe.sequential("InquiryService askStream", () => {
     expect(inquiry.claims[0]?.citations).toHaveLength(0);
   });
 
+  it("repairs streamed narration that has no finalize", async () => {
+    const caseId = await createCaseWithDocs(fixture, "stream 未提交最终结论", [
+      { filename: "intel.txt", content: "舰船线索：巡逻编队在港外集结。" },
+    ]);
+    const events: InquiryStreamEvent[] = [];
+    const adapter = new StreamingInquiryAdapter("no-finalize");
+
+    const inquiry = await createService(fixture, adapter)
+      .askStream(OPERATOR, caseId, "舰船线索", (event) => events.push(event));
+
+    expect(events.filter((event) => event.type === "token").map((event) => event.text).join("")).toContain("no finalized claims");
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.answer).not.toContain("no finalized claims");
+    expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
+    const repairInput = adapter.inputs.find((input) => input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿")));
+    expect(repairInput).toBeDefined();
+    expect(repairInput?.messages.some((message) => message.role === "tool" && message.toolName === "search_chunks")).toBe(true);
+    expect(repairInput?.messages.some((message) => message.role === "tool" && message.toolName === "cite")).toBe(true);
+    const createEvent = (await fixture.audit.readAll()).find((event) => event.action === "inquiry.create" && event.detail?.inquiryId === inquiry.id);
+    expect(createEvent?.detail).toMatchObject({ finalized: true });
+    expect(createEvent?.detail).not.toHaveProperty("fallback");
+  });
+
   it("preserves tool audit and inquiry.create on the streaming path", async () => {
     const caseId = await createCaseWithDocs(fixture, "stream 审计", [
       { filename: "intel.txt", content: "舰船线索：补给船在夜间靠泊。" },
@@ -218,13 +241,13 @@ describe.sequential("InquiryService askStream", () => {
 
     // 首次问答：创建缓存 agent，写入默认方法论。
     await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
-    expect(await readFile(agentsMd, "utf8")).toContain("search_chunks 检索→read_chunk");
+    expect(await readFile(agentsMd, "utf8")).toContain("最终答案唯一入口是 finalize_answer");
 
     // 后台改方法论 → 下次问答应作废缓存、按新方法论重写 AGENTS.md（即时生效）。
     await promptStore.update(OPERATOR, "inquiry-methodology", "【已改写】只用最精炼的语言回答。");
     await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
     const after = await readFile(agentsMd, "utf8");
     expect(after).toContain("【已改写】只用最精炼的语言回答。");
-    expect(after).not.toContain("search_chunks 检索→read_chunk");
+    expect(after).not.toContain("最终答案唯一入口是 finalize_answer");
   });
 });

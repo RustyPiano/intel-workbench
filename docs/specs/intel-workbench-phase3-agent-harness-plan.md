@@ -24,6 +24,8 @@
 > **v2.5（已过第四轮 Opus + Codex 并行复审，两家独立收敛到同一结论 → 已并入）**。两家一致认定：**红线正确性已收敛（SOUND）**，前三轮全部阻塞正确闭合、core 现状诊断属实。**但 v2.4 在 C-B1 上过度修正**——"per-ask 隔离 worker + 全工具 IPC 代理"是最重的一档解法，且 core 是单进程同步工具循环、**无 RPC 层**（搬进程要重造 IPC + session JSONL 归属 + skill 加载 + worker 生命周期，被严重低估），违反 CLAUDE.md §2。
 > **关键洞察（两家相同）**：C-B1 威胁 100% 来自 agent 路的 `bash`/`write`/`edit`（唯一能用绝对路径碰 audit/cases 的工具）；而 **P3.A 问答只给只读服务工具**（search/read/cite/finalize，server 侧强制校验、无任意写）——**进程内跑也碰不到红线资产，故 P3.A 不需要进程隔离**。
 > **v2.5 修正（做减法）**：① P3.0 = finalize 契约 + run 级注入 + write-ahead 中间件（**全是 core 进程内小改**）；② P3.A 问答**进程内 + 只读服务工具**，三红线照样成立；③ **进程隔离降级为按需里程碑 P3.0-iso**，仅在真给 agent `bash`/`write` 时触发（P3.B+），且届时**只隔离 bash 这一个工具的执行身份**（降权子进程），不搬整个 agent 循环。C-B1 的威胁分析仍成立，只是修法从"提前全隔离"改为"按需、最小隔离"。
+>
+> **v2.6（2026-07-03，产品反馈后补充）**：`finalize_answer` 是输出审计边界，不是固定工具流水线。模型自然语言草稿不入库；若 agent 结束时未调用 `finalize_answer`，harness 先发起一次内部 repair 回合，引导它基于当前证据状态完成 `finalize_answer`；仍失败才进入结构化 fallback 或明确失败。详见 `docs/report/inquiry-agent-harness-decision.md`。
 
 ---
 
@@ -119,12 +121,12 @@ P3.0–P3.C **现在就能做**（本地文本 LLM + mock 多模态）；P3.D �
 **新增/改（全部进程内）**：
 1. **run 级注入（C-B4）**：给 core 加 **conversation/run 级** `extraTools` + `toolMiddleware`（不放 `RuntimeAgent` 实例级共享）。`ledger`/`caseScope`/`actor` 经 `IntelHarness` 每次 `ask` 构造、闭包注入服务工具。两并发 ask 不串线。
 2. **工具中间件（C-B3 / M2′）**：`LoopDependencies` 加可 await 的 `toolMiddleware?(toolCall, next): Promise<result>`。只读服务工具失败即无脏数据；有副作用工具（P3.0-iso 后才引入）走 **write-ahead**（§4.3）。
-3. **finalize 契约（C-B2）**：加 `finalize_answer({claims:[{text, cite_ids}]})` 工具。`Inquiry` **只从 finalize payload + ledger 生成**；未调用 finalize → 整体 `insufficient`，**raw final text 不入库**。注意 `loop.ts:179-181` 把"无 tool call 的 assistant message"当 final——finalize enforcement 在 server 侧组装 Inquiry 时判定（无 finalize 即 insufficient），不依赖改 core loop。
+3. **finalize 契约（C-B2）**：加 `finalize_answer({claims:[{text, cite_ids}]})` 工具。`Inquiry` **只从 finalize payload + ledger 生成**；未调用 finalize 时先进入一次 harness 内部 repair 回合，引导 agent 基于当前证据状态完成提交；仍无 finalize 才判 `insufficient` 或走结构化 fallback。**raw final text 不入库**。注意 `loop.ts:179-181` 把"无 tool call 的 assistant message"当 final——finalize enforcement 在 server 侧组装 Inquiry 时判定，不依赖改 core loop。
 4. **同名冲突 → 报错**（不静默覆盖）。
 
 **P3.A 不引入 `bash`/`write`/`edit`**：问答只用只读服务工具，故 P3.0 不需要进程隔离，core 单进程同步工具循环即可（无 IPC）。
 
-**验收**：run 级注入下两个并发 ask 的 ledger/caseScope **不串线**（C-B4 回归）；`toolMiddleware` 可 await、抛错使 ask 失败、拿完整 payload；无 finalize 的 ask 判 insufficient、raw text 不入库；同名冲突抛错；不传 extraTools 时行为与现状完全一致（既有 424 全绿）。
+**验收**：run 级注入下两个并发 ask 的 ledger/caseScope **不串线**（C-B4 回归）；`toolMiddleware` 可 await、抛错使 ask 失败、拿完整 payload；无 finalize 的 ask 先触发 repair，repair 后仍无 finalize 才进入兜底/失败，raw text 不入库；同名冲突抛错；不传 extraTools 时行为与现状完全一致（既有 424 全绿）。
 
 ---
 
@@ -229,7 +231,7 @@ P3.0–P3.C **现在就能做**（本地文本 LLM + mock 多模态）；P3.D �
 ## 4. 红线作为不变量的具体实现（评审重点）
 
 1. **零外发（气隙为主、guard 为辅，评审 B2）**：**第一道防线是网络隔离**——气隙机器物理不通外网，bash/任意工具都发不出公网（见部署假设）。**第二道是 OfflineGuard 做应用层授权 + 审计留痕（防御纵深）**：应用自身的两类出站——文本 LLM（`ModelAdapter`）与多模态 slot（不同接口）——各自过闸。**闸 (a)** 装饰 `ModelAdapter.generate`；**闸 (b)** 各 slot / 多模态工具入口各自 `authorize`。`generate/embed/transcribe/caption/ocr` 前一律 `OfflineGuard.authorize(endpoint, {user, purpose})`，且 endpoint 非空才允许 real。bash 等工具的网络能力由网络隔离兜底，不靠 guard 拦（guard 也拦不到子进程）。
-2. **Citation 溯源（C-B2：cite 台账 + finalize 契约，两者缺一不可）**：`cite(chunk_id, claim)` 是"接地"通道，校验 `sha256(text)===content_hash`，台账只接受本会话检索过的 chunk。**但 cite 台账约束不住自由文本最终答案**（agent 可在 `finalMessage` 塞未 cite 的新断言，`loop.ts:155`）——故加强制 `finalize_answer({claims:[{text, cite_ids}]})`：**`Inquiry` 只从 finalize payload + ledger 生成，raw final text 不入库**；未 finalize → 整体 `insufficient`。`Inquiry.status`：claim 的 cite_ids 全在 ledger 且 hash 通过 → verified；部分 → 部分待核；无 → insufficient。**待核标注而非拦截**，不限制 agent 表达，只标注接地状态。
+2. **Citation 溯源（C-B2：cite 台账 + finalize 契约，两者缺一不可）**：`cite(chunk_id, claim)` 是"接地"通道，校验 `sha256(text)===content_hash`，台账只接受本会话检索过的 chunk。**但 cite 台账约束不住自由文本最终答案**（agent 可在 `finalMessage` 塞未 cite 的新断言，`loop.ts:155`）——故加强制 `finalize_answer({claims:[{text, cite_ids}]})`：**`Inquiry` 只从 finalize payload + ledger 生成，raw final text 不入库**；未 finalize 不直接判死，先触发内部 repair 回合；repair 后仍未 finalize 才进入兜底/失败。`Inquiry.status`：claim 的 cite_ids 全在 ledger 且 hash 通过 → verified；部分 → 部分待核；无 → insufficient。**待核标注而非拦截**，不限制 agent 表达，只标注接地状态。
 3. **审计链（评审 M2′ 修正：工具中间件，不是 EventBus 旁路）**：harness 的 journal 写在 core `loop.ts`，与 server `AuditService` 无连接。**EventBus 不行**——`EventBus.emit` 同步 fire-and-forget、listener 签名 `(event)=>void`（`events.ts:35`）无法 await，且事件只带**截断预览**（`run-manager.ts:184/228` 的 `previewValue`），审计取证价值打折。**正解：给 core `LoopDependencies` 加可选 `toolMiddleware?(toolCall, next): Promise<result>`**（评审"工具中间件"想法）。server 注入中间件，在 `next()` 前后 `await audit.append(完整 args + result)`；抛错自然冒泡使 `send`/`ask` 失败（HTTP 500）。中间件与工具执行**同一 await 链**，拿到**完整** payload（非预览），P3.C 子 agent 可复用。`action` 命名 `tool.<name>`，完整 args 放 `detail`，detail 标准化加 `caseId/sessionId/runId/toolCallId/seq`（评审 min1）。
    - **write-ahead（C-B3：有副作用工具非原子）**：只读服务工具（search/read/cite）失败时无落盘脏数据，但 `write/edit/bash` 副作用先于审计、且 `Promise.race` 超时后执行体仍继续（`tools/index.ts:127-154`，`write.ts:68` 不查 signal）。故有副作用工具走 **write-ahead**：`next()` 前 append `tool.<name>.intent`（含完整 args），成功后 append `.result`；超时/抛错下 intent 已留痕，审计可见"发起但未确认"。**P3.A 的 worker 内先只放只读服务工具**，副作用工具（含 bash 写 scratch）留到 write-ahead 稳定后再开。EventBus 留给 UI/trace（本就 fire-and-forget）。
 4. **bash 与本机攻击面的处置（v2.4：隔离 worker，C-B1 决策）**：
@@ -258,7 +260,7 @@ P3.0–P3.C **现在就能做**（本地文本 LLM + mock 多模态）；P3.D �
 
 - 每里程碑配 service 级 vitest（临时 dataDir + mock 适配器 + scripted model adapter 重现 agent 多轮）。
 - **红线回归硬门**（每里程碑后）：`cite` 拒伪造/篡改、`OfflineGuard` 拒未白名单、审计链 verify ok。
-- **agent 路新增必测**：① run 级注入：两并发 ask 的 ledger/caseScope/actor **不串线**（C-B4）；② **两道闸**分别拦文本 LLM + 每个 slot 端点、带 {actor,caseId,runId}、空 endpoint 禁 real（B2/M3）；③ `toolMiddleware` 同步 await、完整 payload、抛错使 ask 失败、有副作用工具 **write-ahead**（intent→result）（C-B3/M2′）；④ **无 finalize 的 ask 判 insufficient、raw text 不入库**（C-B2）；⑤ 子 agent 独立 ledger + merge_evidence、数量/深度上限（C-Major）；⑥ `cite` 只接受本会话 `search_chunks` 命中过的 chunk_id（M1）；⑦ 同名冲突抛错、不传同现状（既有 424 全绿）。
+- **agent 路新增必测**：① run 级注入：两并发 ask 的 ledger/caseScope/actor **不串线**（C-B4）；② **两道闸**分别拦文本 LLM + 每个 slot 端点、带 {actor,caseId,runId}、空 endpoint 禁 real（B2/M3）；③ `toolMiddleware` 同步 await、完整 payload、抛错使 ask 失败、有副作用工具 **write-ahead**（intent→result）（C-B3/M2′）；④ **无 finalize 的 ask 触发 repair，repair 后仍无 finalize 才兜底/失败，raw text 不入库**（C-B2）；⑤ 子 agent 独立 ledger + merge_evidence、数量/深度上限（C-Major）；⑥ `cite` 只接受本会话 `search_chunks` 命中过的 chunk_id（M1）；⑦ 同名冲突抛错、不传同现状（既有 424 全绿）。
 - **C-B1 相关必测**：⑧ P3.A 断言 agent 工具集**不含 bash/write/edit**（只读服务工具，无任意写攻击面）；⑨ chunk 只经服务工具内存返回（hash 校验），不经文件系统暴露给 agent；⑩ 审计外部锚定：整体重写审计文件后锚点比对能发现（`verify()` 单独不够）。**（P3.0-iso 才测）** ⑫ bash 降权子进程对 cases/audit 不可读写——OS 隔离冒烟。
 - **context 预算必测（C-Major）**：⑪ 长文档专题下 agent 循环 token 不超 `CTX_BUDGET`（read_chunk cap + 历史摘要生效）。
 - **质量与功能回归（评审 M4）**：① scripted model adapter 做确定性多轮回归（不依赖真模型）；② 本地模型冒烟须见 tool-calling **真实触发**（功能性，非仅质量）；③ 建小评测集（"问题→应引用 chunk"对）防召回/接地退化，定通过门槛。mock 多模态无语义，质量评测留 P3.D。
@@ -275,7 +277,7 @@ P3.0–P3.C **现在就能做**（本地文本 LLM + mock 多模态）；P3.D �
 | **v2.4 全 worker+IPC 过度工程（第四轮两家）** | core 无 RPC 层，搬进程要重造 IPC + session 归属 + skill 加载 + worker 生命周期（被低估）；改为按需最小隔离，复杂度推迟到真给 bash 那一刻 |
 | bash 外发 | 气隙网络隔离为主（不通外网）；降权子进程网络可再收紧；OfflineGuard 做 server 侧模型/slot 调用授权审计 |
 | 专网内横向 | 部署方网络层（专网防火墙）解决 |
-| **agent 自由文本答案夹带未 cite 断言（C-B2）** | 强制 `finalize_answer({claims})`，Inquiry 只从 finalize+ledger 生成，raw text 不入库，无 finalize 判 insufficient |
+| **agent 自由文本答案夹带未 cite 断言（C-B2）** | 强制 `finalize_answer({claims})`，Inquiry 只从 finalize+ledger 生成，raw text 不入库；无 finalize 先 repair，仍失败才兜底/判 insufficient |
 | **有副作用工具与审计非原子（C-B3）** | 工具中间件 write-ahead（intent→result）；P3.A worker 内先只放只读服务工具；超时确认/终止 |
 | **并发 ask 经 agent 级注册表串线（C-B4）** | run/会话级注入或每 ask 独立 worker；测试断言不串线 |
 | **长文档撑爆本地模型上下文（C-Major）** | search 默认回 snippet+id、read_chunk byte/token cap、历史滚动摘要、硬性 CTX_BUDGET |

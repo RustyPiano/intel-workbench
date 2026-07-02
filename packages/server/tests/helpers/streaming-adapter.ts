@@ -49,10 +49,16 @@ export class StreamingInquiryAdapter implements ModelAdapter {
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
-    if (input.tools.length === 0) return final(JSON.stringify({ label: "supports", rationale: "test support label" }));
+    if (input.tools.length === 0) {
+      return final(JSON.stringify({ label: "supports", rationale: "test support label" }));
+    }
     const has = (name: string) => toolResults(input, name).length > 0;
 
-    if (this.mode === "no-finalize") {
+    const isRepair = input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿"));
+    if (this.mode === "no-finalize" && !isRepair) {
+      if (!has("search_chunks")) return toolCall("search_chunks", { query: "舰船 线索", k: 6 }, `search_${this.inputs.length}`);
+      const chunkId = firstSearchChunkId(input);
+      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
       return final("no finalized claims");
     }
 

@@ -12,6 +12,11 @@ export function createInquiriesRouter(inquiries: InquiryService): Router {
     res.json({ ok: true, inquiries: await inquiries.list(req.identity, req.params.id) });
   });
 
+  router.delete("/:id/inquiries", async (req, res) => {
+    await inquiries.clear(req.identity, req.params.id);
+    res.json({ ok: true });
+  });
+
   router.post("/:id/inquiries", async (req, res) => {
     const { question, deep } = (req.body ?? {}) as { question?: string; deep?: boolean };
     const inquiry = await inquiries.ask(req.identity, req.params.id, question ?? "", { deep: deep === true });

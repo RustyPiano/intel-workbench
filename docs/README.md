@@ -37,6 +37,7 @@ as the code evolves.
 ## Reports
 
 - [Practice report](./report/practice-report.md)
+- [溯源问答 Agent Harness 决策记录](./report/inquiry-agent-harness-decision.md)
 - [v1.1.0 release notes](./releases/v1.1.0.md)
 
 ## History (point-in-time records)

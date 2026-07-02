@@ -144,11 +144,11 @@ export function AuditCenterPage() {
                 </svg>
               )}
             </span>
-            {alertCount > 0 ? `发现拒绝/失败/异常事件 (${alertCount})` : "无拒绝/失败/异常事件"}
+            {alertCount > 0 ? `发现非成功审计事件 (${alertCount})` : "无非成功审计事件"}
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.5" }}>
             {alertCount > 0
-              ? "拒绝、失败或异常类事件（如越权创建、外发拦截、加工失败）已在下表高亮。"
+              ? "拒绝、失败、工具校验未通过等事件已在下表高亮；工具未通过通常是 Agent 试读、抽帧或引用校验被边界拦下，不等同系统崩溃。"
               : "当前所有审计事件结果均为 ok。"}
           </p>
         </div>
@@ -160,7 +160,7 @@ export function AuditCenterPage() {
           全部审计日志 ({events?.length ?? 0})
         </button>
         <button type="button" className={`btn ${filter === "alert" ? "btn--primary" : ""}`} onClick={() => setFilter("alert")} style={{ padding: "6px 14px", fontSize: "12px", borderColor: "rgba(239,68,68,0.3)", color: filter === "alert" ? "#fff" : "var(--danger-light)" }}>
-          仅看拒绝/失败/异常 ({alertCount})
+          仅看非成功事件 ({alertCount})
         </button>
         <button type="button" className={`btn ${filter === "deny" ? "btn--primary" : ""}`} onClick={() => setFilter("deny")} style={{ padding: "6px 14px", fontSize: "12px" }}>
           全部拒绝 ({events?.filter((event) => event.result === "deny").length ?? 0})

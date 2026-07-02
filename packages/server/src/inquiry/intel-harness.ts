@@ -5,7 +5,7 @@ import path from "node:path";
 import type { RuntimeTool } from "mini-agent";
 import { z } from "zod";
 
-import type { Citation, Chunk, ChunkLocator, Identity, Modality } from "../domain/types.js";
+import type { Citation, Chunk, ChunkLocator, Identity, Material, Modality } from "../domain/types.js";
 import { cropImage, extractFrame } from "../materials/ffmpeg.js";
 import type { AsrAdapter, OcrAdapter, VlmAdapter } from "../model/slots.js";
 import type { OfflineGuard } from "../security/offline-guard.js";
@@ -39,6 +39,10 @@ export interface IntelToolDeps {
   caseId: string;
   nameById: Map<string, string>;
   retrieve: (query: string, k: number) => Promise<Chunk[]>;
+  navigation?: {
+    listMaterials: () => Promise<Material[]>;
+    loadChunks: () => Promise<Chunk[]>;
+  };
   readBudgetBytes: number;
   perReadCapBytes: number;
   media?: {
@@ -150,9 +154,77 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
         };
       },
     },
+    ...(deps.navigation
+      ? [
+          {
+            name: "list_materials",
+            description: "列出本专题素材及可读切块数，供决定要浏览哪份材料；只返回元数据，不读取正文。",
+            inputSchema: z.object({}),
+            async execute() {
+              const [materials, chunks] = await Promise.all([deps.navigation!.listMaterials(), deps.navigation!.loadChunks()]);
+              const counts = new Map<string, number>();
+              for (const chunk of chunks) counts.set(chunk.material_id, (counts.get(chunk.material_id) ?? 0) + 1);
+              return {
+                ok: true,
+                content: JSON.stringify(
+                  materials.map((material) => ({
+                    material_id: material.id,
+                    filename: material.filename,
+                    modality: material.modality,
+                    status: material.status,
+                    chunk_count: counts.get(material.id) ?? 0,
+                    duration: material.duration,
+                    note: material.note,
+                  })),
+                ),
+              };
+            },
+          },
+          {
+            name: "read_material_window",
+            description: "按素材内 chunk 顺序读取一个窗口；start_chunk 从 0 开始。读到的 chunk 可继续 cite，受本次问答读取预算限制。",
+            inputSchema: z.object({
+              material_id: z.string(),
+              start_chunk: z.number().int().nonnegative().optional(),
+              limit: z.number().int().positive().max(8).optional(),
+            }),
+            async execute(args: unknown) {
+              const { material_id, start_chunk = 0, limit = 3 } = args as { material_id: string; start_chunk?: number; limit?: number };
+              if (!deps.nameById.has(material_id)) return unavailable();
+              const chunks = (await deps.navigation!.loadChunks()).filter((chunk) => chunk.material_id === material_id);
+              if (chunks.length === 0) return { ok: false, content: "该素材没有已加工可读切块。" };
+              if (start_chunk >= chunks.length) return { ok: false, content: `start_chunk 超出范围：该素材共有 ${chunks.length} 个切块。` };
+
+              const read: unknown[] = [];
+              let note: string | undefined;
+              for (let i = start_chunk; i < Math.min(chunks.length, start_chunk + limit); i++) {
+                if (deps.ledger.readBytes >= deps.readBudgetBytes) {
+                  note = `读取预算已用尽（已读 ${deps.ledger.readBytes} 字节）。请基于已读内容调用 finalize_answer。`;
+                  break;
+                }
+                const chunk = chunks[i]!;
+                const remaining = Math.max(0, deps.readBudgetBytes - deps.ledger.readBytes);
+                const capped = sliceByUtf8Bytes(chunk.text, Math.min(deps.perReadCapBytes, remaining));
+                deps.ledger.readBytes += capped.bytes;
+                deps.ledger.retrieved.set(chunk.chunk_id, chunk);
+                read.push({
+                  chunk_index: i,
+                  chunk_id: chunk.chunk_id,
+                  text: capped.text,
+                  truncated: capped.bytes < Buffer.byteLength(chunk.text, "utf8"),
+                  locator: chunk.locator,
+                  modality: chunk.modality,
+                  material_name: deps.nameById.get(chunk.material_id) ?? chunk.material_id,
+                });
+              }
+              return { ok: true, content: JSON.stringify({ material_id, start_chunk, chunks: read, note }) };
+            },
+          },
+        ]
+      : []),
     {
       name: "read_chunk",
-      description: "读取已由 search_chunks 检索到的片段全文；受本次问答读取预算限制，不能读取未检索片段。",
+      description: "读取已由 search_chunks 检索到的片段全文；受本次问答读取预算限制，不能读取未进入本轮证据集的片段。",
       inputSchema: z.object({ chunk_id: z.string() }),
       async execute(args) {
         const { chunk_id } = args as { chunk_id: string };

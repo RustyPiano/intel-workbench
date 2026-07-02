@@ -45,8 +45,10 @@ const TOOL_LABELS: Record<string, string> = {
   caption_frame: "按需画面配文",
   cite: "生成引用锚点",
   finalize_answer: "提交问答结论",
+  list_materials: "列出专题素材",
   ocr_region: "按需区域 OCR",
   read_chunk: "读取素材片段",
+  read_material_window: "浏览素材窗口",
   search_chunks: "检索素材片段",
   transcribe: "按需转写",
 };
@@ -58,6 +60,9 @@ export const AUDIT_RESULT_LABELS: Record<AuditEvent["result"], { text: string; c
 };
 
 export function auditResultLabel(e: Pick<AuditEvent, "action" | "result" | "detail">): { text: string; color: string } {
+  if (e.action.startsWith("tool.") && e.result === "error") {
+    return { text: "未通过", color: "var(--warn-light)" };
+  }
   if (e.action === "material.process" && e.result === "error") {
     if (e.detail?.phase === "ingest-degrade") return { text: "未完成", color: "var(--warn-light)" };
     if (e.detail?.phase === "fail") return { text: "失败", color: "var(--danger-light)" };

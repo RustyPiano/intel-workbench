@@ -206,7 +206,8 @@ function VerificationSummary({ caseInfo, caseId, enabled }: { caseInfo: ApiCase 
   const ackById = new Map((state?.contradictions?.acknowledgements ?? []).map((ack) => [ack.contradiction_id, ack.status]));
   const openHigh = contradictions.filter((item) => item.confidence >= 0.75 && (ackById.get(item.id) ?? "open") === "open").length;
   const reportStatus = state?.report?.status;
-  const auditIssues = state?.audit.filter((event) => event.result !== "ok").length ?? 0;
+  const auditIssues = state?.audit.filter((event) => event.result !== "ok" && !event.action.startsWith("tool.")).length ?? 0;
+  const toolIssues = state?.audit.filter((event) => event.result !== "ok" && event.action.startsWith("tool.")).length ?? 0;
 
   return (
     <section className="verification-summary">
@@ -233,7 +234,7 @@ function VerificationSummary({ caseInfo, caseId, enabled }: { caseInfo: ApiCase 
       <div className="verification-summary__item">
         <span>审计</span>
         <strong>{state?.audit.length ?? "—"}</strong>
-        <small>{auditIssues > 0 ? `${auditIssues} 条拒绝/失败/异常` : "专题链路留痕"}</small>
+        <small>{auditIssues > 0 ? `${auditIssues} 条拒绝/失败/异常` : toolIssues > 0 ? `${toolIssues} 次工具校验未通过` : "专题链路留痕"}</small>
       </div>
     </section>
   );

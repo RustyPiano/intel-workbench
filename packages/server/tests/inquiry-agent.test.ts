@@ -39,6 +39,18 @@ function firstSearchChunkId(input: GenerateInput): string {
   return chunks[0]?.chunk_id ?? "missing";
 }
 
+function firstListedMaterialId(input: GenerateInput): string {
+  const [list] = toolResults(input, "list_materials");
+  const materials = JSON.parse(list?.content ?? "[]") as { material_id: string }[];
+  return materials[0]?.material_id ?? "missing-material";
+}
+
+function firstWindowChunkId(input: GenerateInput): string {
+  const [window] = toolResults(input, "read_material_window");
+  const result = JSON.parse(window?.content ?? "{}") as { chunks?: { chunk_id: string }[] };
+  return result.chunks?.[0]?.chunk_id ?? "missing-window-chunk";
+}
+
 function citedIds(input: GenerateInput): string[] {
   return toolResults(input, "cite")
     .filter((result) => result.ok)
@@ -52,7 +64,7 @@ function citedIds(input: GenerateInput): string[] {
     .filter((id): id is string => typeof id === "string");
 }
 
-type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "duplicate-cites";
+type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "duplicate-cites" | "window";
 
 class DynamicInquiryAdapter implements ModelAdapter {
   readonly name = "scripted-agent";
@@ -77,6 +89,18 @@ class DynamicInquiryAdapter implements ModelAdapter {
       if (!has("search_chunks")) return toolCall("search_chunks", { query: "舰船 线索", k: 6 }, `search_${this.inputs.length}`);
       const chunkId = firstSearchChunkId(input);
       if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
+      return final();
+    }
+
+    if (this.mode === "window") {
+      if (!has("list_materials")) return toolCall("list_materials", {}, "list_materials");
+      if (!has("read_material_window")) {
+        return toolCall("read_material_window", { material_id: firstListedMaterialId(input), start_chunk: 0, limit: 2 }, "read_window");
+      }
+      if (!has("cite")) return toolCall("cite", { chunk_id: firstWindowChunkId(input), claim: "发现窗口线索", quote: "窗口线索" }, "cite_window");
+      if (!has("finalize_answer")) {
+        return toolCall("finalize_answer", { claims: [{ text: "发现窗口线索", cite_ids: [citedIds(input)[0] ?? "missing-cite-id"] }] }, "final_window");
+      }
       return final();
     }
 
@@ -397,14 +421,33 @@ describe.sequential("InquiryService agent harness", () => {
 
     await createService(fixture, adapter).ask(OPERATOR, caseId, "舰船线索");
 
-    // 四个只读 intel 工具 + activate_skill（渐进式加载技能，只读）；精确匹配守住"不泄漏 bash/write"红线。
+    // 六个只读 intel 工具 + activate_skill（渐进式加载技能，只读）；精确匹配守住"不泄漏 bash/write"红线。
     expect(adapter.inputs[0]!.tools.map((tool) => tool.name).sort()).toEqual([
       "activate_skill",
       "cite",
       "finalize_answer",
+      "list_materials",
       "read_chunk",
+      "read_material_window",
       "search_chunks",
     ]);
+  });
+
+  it("lets the agent browse a material window without retrieval search", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 窗口浏览", [
+      { filename: "intel.txt", content: "窗口线索：码头东侧出现异常装载。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("window");
+
+    const inquiry = await createService(fixture, adapter).ask(OPERATOR, caseId, "浏览材料找线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
+    expect(inquiry.claims[0]?.citations[0]?.quote).toBe("窗口线索");
+    const actions = (await fixture.audit.readAll()).map((event) => event.action);
+    expect(actions).toContain("tool.list_materials");
+    expect(actions).toContain("tool.read_material_window");
+    expect(actions).not.toContain("tool.search_chunks");
   });
 
   it("exposes explicit skills to the agent and honors skills.json disable on the next ask", async () => {

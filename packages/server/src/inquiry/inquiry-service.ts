@@ -8,7 +8,7 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Citation, CitationSupportLabel, CitationSupportStatus, Identity, Inquiry, InquiryClaim, Modality } from "../domain/types.js";
+import type { Chunk, Citation, CitationSupportLabel, CitationSupportStatus, Identity, Inquiry, InquiryClaim, Material, Modality } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readCtxBudgetTokens, readQueryRewriteMode, readRerankMinCandidates } from "../model/rag-config.js";
 import type { AsrAdapter, EmbeddingAdapter, OcrAdapter, RerankerAdapter, VlmAdapter } from "../model/slots.js";
@@ -268,7 +268,7 @@ export class InquiryService {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
     }
 
-    return this.runAgentInquiry(actor, caseId, q, nameById, { deep });
+    return this.runAgentInquiry(actor, caseId, q, nameById, manifest.materials, { deep });
   }
 
   async askStream(
@@ -294,7 +294,7 @@ export class InquiryService {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
     }
 
-    const inquiry = await this.runAgentInquiry(actor, caseId, q, nameById, { signal, onEvent });
+    const inquiry = await this.runAgentInquiry(actor, caseId, q, nameById, manifest.materials, { signal, onEvent });
     onEvent({ type: "done", inquiry });
     return inquiry;
   }
@@ -304,6 +304,7 @@ export class InquiryService {
     caseId: string,
     q: string,
     nameById: Map<string, string>,
+    materials: Material[],
     hooks?: { signal?: AbortSignal; onEvent?: (event: InquiryStreamEvent) => void; deep?: boolean },
   ): Promise<Inquiry> {
     const ledger = createCitationLedger();
@@ -321,6 +322,10 @@ export class InquiryService {
       caseId,
       nameById,
       retrieve,
+      navigation: {
+        listMaterials: async () => materials,
+        loadChunks: async () => this.materials.loadCaseChunks(caseId),
+      },
       readBudgetBytes: this.readBudgetBytes(hooks?.deep === true),
       perReadCapBytes: this.perReadCapBytes(),
       media: {

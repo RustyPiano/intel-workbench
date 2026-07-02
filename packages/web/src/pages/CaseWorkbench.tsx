@@ -240,7 +240,34 @@ const REPORT_STATUS_LABELS: Record<ApiReport["status"], string> = {
   exported: "已导出",
 };
 
+const TASK_STAGE_HINTS: Record<string, string> = {
+  "material-ingest": "先把本专题相关文档、音频、视频或图片汇入素材区。",
+  "quality-check": "确认素材已完成解析，失败或待配置的素材先处理掉。",
+  "evidence-units": "系统会把素材切成可引用片段，后续结论都从这里溯源。",
+  "entity-merge": "检查人物、组织、地点、装备等要素是否归并合理。",
+  "proposition-extraction": "从素材中抽取可核验命题，人工确认后再继续。",
+  "contradiction-detection": "检查跨素材说法是否冲突，必要时标记处理结果。",
+  assessment: "把可支撑的事实整理为研判结论。",
+  "report-generation": "用已核准结论生成报告草稿。",
+  "review-export": "复核通过后才能导出，导出动作会进入审计链。",
+};
+
 const MANUAL_STAGE_KEYS = new Set(["proposition-extraction", "assessment"]);
+
+function stageHint(stage?: ApiTaskStageState | null): string {
+  if (!stage) return "还没有启动核验任务。先汇入素材，再启动流程。";
+  return TASK_STAGE_HINTS[stage.key] ?? "按当前阶段要求完成检查后继续。";
+}
+
+function nextTaskAction(snapshot: ApiTaskRunSnapshot | null, creating: boolean, confirming: boolean): string {
+  const current = snapshot?.overview.currentStage;
+  if (!snapshot) return creating ? "正在启动核验任务…" : "点击「开始核验任务」，系统会按素材、证据、矛盾、报告顺序推进。";
+  if (snapshot.run.status === "done") return "流程已完成，可以进入报告复核与导出。";
+  if (snapshot.run.status === "failed") return "流程已失败，请查看失败阶段并处理后重新启动。";
+  if (current?.checkpoint && current.status === "active") return confirming ? "正在确认检查点…" : "当前阶段需要人工确认。检查无误后点击「确认检查点」。";
+  if (current?.status === "active" && MANUAL_STAGE_KEYS.has(current.key)) return "当前阶段需要人工判断。完成后用阶段卡片里的「标记完成」继续。";
+  return "当前阶段由系统处理。完成后会自动进入下一步。";
+}
 
 function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }) {
   const [snapshot, setSnapshot] = useState<ApiTaskRunSnapshot | null>(null);
@@ -352,6 +379,7 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
         ? "流程完成"
         : "流程失败"
     : "尚未开始";
+  const actionText = nextTaskAction(snapshot, creating, confirming);
 
   return (
     <section className="task-overview">
@@ -375,12 +403,36 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
         <span>报告 {reportText}</span>
       </div>
 
+      <div className="task-next">
+        <div>
+          <span className="task-next__label">现在要做</span>
+          <strong>{actionText}</strong>
+          <small>{stageHint(currentStage)}</small>
+        </div>
+        <div className="task-next__actions">
+          {!snapshot ? (
+            <button type="button" className="btn btn--primary" onClick={handleStart} disabled={creating}>
+              {creating ? "启动中…" : "开始核验任务"}
+            </button>
+          ) : null}
+          {currentStage?.checkpoint && currentStage.status === "active" ? (
+            <button type="button" className="btn btn--primary" onClick={handleConfirm} disabled={confirming}>
+              {confirming ? "确认中…" : "确认检查点"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
       <div className="task-stage-strip" aria-label="任务阶段进度">
         {stages.map((stage, index) => (
           <div key={stage.key} className={`task-stage task-stage--${stage.status}`} title={`${index + 1}. ${stage.name} · ${TASK_STATUS_LABELS[stage.status]}`}>
-            <span className="task-stage__index">{index + 1}</span>
+            <div className="task-stage__top">
+              <span className="task-stage__index">{index + 1}</span>
+              <span className="task-stage__status">{TASK_STATUS_LABELS[stage.status]}</span>
+            </div>
             <span className="task-stage__name">{stage.name}</span>
-            {stage.checkpoint ? <span className="task-stage__checkpoint">检查点</span> : null}
+            <span className="task-stage__hint">{stageHint(stage)}</span>
+            {stage.checkpoint ? <span className="task-stage__checkpoint">需人工确认</span> : null}
             {stage.status === "active" && MANUAL_STAGE_KEYS.has(stage.key) ? (
               <span className="task-stage__actions">
                 <button type="button" onClick={() => void handleAdvance(stage.key, "done")} disabled={Boolean(advancing)}>
@@ -396,16 +448,6 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
       </div>
 
       <div className="task-overview__footer">
-        {!snapshot ? (
-          <button type="button" className="btn btn--primary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleStart} disabled={creating}>
-            {creating ? "启动中…" : "开始核验任务"}
-          </button>
-        ) : null}
-        {currentStage?.checkpoint && currentStage.status === "active" ? (
-          <button type="button" className="btn btn--primary" style={{ padding: "6px 12px", fontSize: "12px" }} onClick={handleConfirm} disabled={confirming}>
-            {confirming ? "确认中…" : "确认检查点"}
-          </button>
-        ) : null}
         {error ? <span className="task-overview__error">{error}</span> : null}
       </div>
     </section>
@@ -1446,6 +1488,13 @@ const TYPE_COLORS: Record<ElementType, string> = {
   time: "#facc15",
 };
 
+function compactElementName(name: string, max = 24): string {
+  return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+}
+
+const GRAPH_MIN_EDGES = 12;
+const GRAPH_EDGE_STEP = 6;
+
 function mentionSources(el: ApiElement): string {
   return [...new Set(el.mentions.map((m) => m.material_name))].join("、");
 }
@@ -1579,18 +1628,19 @@ export function ElementsPanel() {
             <tbody>
               {filtered.map((item) => (
                 <tr key={item.id}>
-                  <td style={{ fontWeight: "700" }}>{item.name}</td>
-                  <td>
+                  <td data-label="要素名称" style={{ fontWeight: "700" }}>{item.name}</td>
+                  <td data-label="类型">
                     <span className={`entity-tag entity-tag--${item.type}`}>{ELEMENT_TYPE_LABELS[item.type]}</span>
                   </td>
-                  <td style={{ fontFamily: "monospace", fontSize: "14px", fontWeight: "600" }}>{item.freq}</td>
+                  <td data-label="提及频次" style={{ fontFamily: "monospace", fontSize: "14px", fontWeight: "600" }}>{item.freq}</td>
                   <td
+                    data-label="出处关联"
                     style={{ fontSize: "12px", color: "var(--accent-light)", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     title={item.mentions.map((m) => `${m.material_name}${m.locator.paragraph ? ` 第${m.locator.paragraph}段` : ""}：${m.snippet}`).join("\n")}
                   >
                     {mentionSources(item)}
                   </td>
-                  <td style={{ color: "var(--text-dim)", fontSize: "13px" }}>{item.aliases.join("、") || "—"}</td>
+                  <td data-label="别名" style={{ color: "var(--text-dim)", fontSize: "13px" }}>{item.aliases.join("、") || "—"}</td>
                 </tr>
               ))}
               {filtered.length === 0 ? (
@@ -1624,6 +1674,7 @@ function ElementGraphView({ caseId }: { caseId: string }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const [edgeLimit, setEdgeLimit] = useState(GRAPH_MIN_EDGES);
 
   useEffect(() => {
     let alive = true;
@@ -1632,6 +1683,7 @@ function ElementGraphView({ caseId }: { caseId: string }) {
     setSelectedNodeId(null);
     setSelectedEdgeKey(null);
     setFrameCite(null);
+    setEdgeLimit(GRAPH_MIN_EDGES);
     getElementGraph(caseId)
       .then((next) => alive && setGraph(next))
       .catch((e: Error) => alive && setError(e.message));
@@ -1650,13 +1702,27 @@ function ElementGraphView({ caseId }: { caseId: string }) {
     );
   }
 
-  const visibleNodes = graph.nodes.filter((node) => node.degree >= 1);
+  const visibleNodes = graph.nodes
+    .filter((node) => node.degree >= 1)
+    .sort((a, b) => b.degree - a.degree || b.freq - a.freq || a.name.localeCompare(b.name));
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const focusNodeId = selectedNodeId ?? visibleNodes[0]?.id ?? null;
+  const focusNode = focusNodeId ? nodeById.get(focusNodeId) ?? null : null;
+  const focusEdgesAll = focusNodeId
+    ? graph.edges
+      .filter((edge) => edge.source === focusNodeId || edge.target === focusNodeId)
+      .sort((a, b) => b.weight - a.weight)
+    : [];
+  const focusEdges = focusEdgesAll.slice(0, edgeLimit);
+  const canShowMoreEdges = edgeLimit < focusEdgesAll.length;
+  const neighborNodes = focusEdges
+    .map((edge) => nodeById.get(edge.source === focusNodeId ? edge.target : edge.source))
+    .filter((node): node is NonNullable<typeof node> => Boolean(node));
   const positions = new Map<string, { x: number; y: number }>();
-  const radius = 190;
-  visibleNodes.forEach((node, index) => {
-    const angle = -Math.PI / 2 + (2 * Math.PI * index) / visibleNodes.length;
-    positions.set(node.id, { x: 360 + Math.cos(angle) * radius, y: 250 + Math.sin(angle) * radius });
+  if (focusNode) positions.set(focusNode.id, { x: 410, y: 310 });
+  neighborNodes.forEach((node, index) => {
+    const angle = -Math.PI / 2 + (2 * Math.PI * index) / Math.max(neighborNodes.length, 1);
+    positions.set(node.id, { x: 410 + Math.cos(angle) * 290, y: 310 + Math.sin(angle) * 230 });
   });
   const selectedEdge = graph.edges.find((edge) => `${edge.source}__${edge.target}` === selectedEdgeKey) ?? null;
   const selectedClaim: ApiClaim | null = selectedEdge
@@ -1667,69 +1733,191 @@ function ElementGraphView({ caseId }: { caseId: string }) {
         citations: selectedEdge.citations,
       }
     : null;
+  const topNodes = visibleNodes.slice(0, 12);
   const isolated = graph.nodes.filter((node) => node.degree === 0);
-  const hasSelection = Boolean(selectedNodeId || selectedEdgeKey);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px", minHeight: 0 }}>
+    <div className="element-graph">
+      <section className="graph-help">
+        <div>
+          <div className="graph-help__title">关系网络怎么看</div>
+          <p>这里展示“同一素材片段里一起出现过”的要素。粗线表示共现次数更多，只说明材料中经常一起被提到，不等于因果关系或已确认结论。</p>
+        </div>
+        <div className="graph-help__steps">
+          <span>点一个点：看它关联哪些要素</span>
+          <span>点一条线：看这组关系的出处证据</span>
+          <span>回到素材：核对原文片段</span>
+        </div>
+      </section>
+
+      <div className="graph-meta">
+        <div className="graph-stats">
+          <span><strong>{visibleNodes.length}</strong> 个联网要素</span>
+          <span><strong>{graph.edges.length}</strong> 条共现关系</span>
+          <span><strong>{isolated.length}</strong> 个孤立要素</span>
+        </div>
+        <div className="graph-legend" aria-label="要素类型图例">
+          {ELEMENT_TYPES.map((type) => (
+            <span key={type}>
+              <i style={{ background: TYPE_COLORS[type] }} />
+              {ELEMENT_TYPE_LABELS[type]}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {graph.truncated ? <div style={{ color: "var(--warn-light)", fontSize: "12px" }}>为保持可读，仅展示频次最高的 40 个要素</div> : null}
       {visibleNodes.length === 0 ? (
         <div style={{ color: "var(--text-muted)", fontSize: "13px", lineHeight: "1.7" }}>要素之间暂无共现关系（同一片段未同时出现）。下方列出全部要素。</div>
       ) : (
-      <svg viewBox="0 0 720 520" style={{ width: "100%", minHeight: "360px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "rgba(15, 23, 42, 0.35)" }}>
-        {graph.edges.map((edge) => {
-          const source = positions.get(edge.source);
-          const target = positions.get(edge.target);
-          if (!source || !target) return null;
-          const key = `${edge.source}__${edge.target}`;
-          const active = selectedNodeId ? edge.source === selectedNodeId || edge.target === selectedNodeId : selectedEdgeKey === key;
-          return (
-            <line
-              key={key}
-              x1={source.x}
-              y1={source.y}
-              x2={target.x}
-              y2={target.y}
-              stroke={active ? "#facc15" : "#94a3b8"}
-              strokeWidth={1 + Math.min(edge.weight, 5)}
-              opacity={hasSelection ? (active ? 0.85 : 0.12) : 0.4}
-              strokeLinecap="round"
-              style={{ cursor: "pointer" }}
-              onClick={() => {
-                setSelectedEdgeKey(key);
-                setSelectedNodeId(null);
-              }}
-            />
-          );
-        })}
-        {visibleNodes.map((node) => {
-          const pos = positions.get(node.id);
-          if (!pos) return null;
-          const active = selectedNodeId === node.id || graph.edges.some((edge) => selectedEdgeKey === `${edge.source}__${edge.target}` && (edge.source === node.id || edge.target === node.id));
-          return (
-            <g
-              key={node.id}
-              style={{ cursor: "pointer" }}
-              opacity={hasSelection ? (active ? 1 : 0.35) : 1}
-              onClick={() => {
-                setSelectedNodeId(node.id);
-                setSelectedEdgeKey(null);
-              }}
-            >
-              <circle cx={pos.x} cy={pos.y} r={6 + Math.min(node.freq, 8)} fill={TYPE_COLORS[node.type]} stroke="#0f172a" strokeWidth="2" />
-              <text x={pos.x + 12} y={pos.y + 4} fill="#e5e7eb" fontSize="12" fontWeight="700">
-                {node.name}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+        <>
+        <div className="graph-toolbar">
+          <span>当前显示 {focusEdges.length}/{focusEdgesAll.length} 条关系</span>
+          <button type="button" onClick={() => setEdgeLimit((value) => value + GRAPH_EDGE_STEP)} disabled={!canShowMoreEdges}>
+            显示更多关系
+          </button>
+          <button type="button" onClick={() => setEdgeLimit(GRAPH_MIN_EDGES)} disabled={edgeLimit <= GRAPH_MIN_EDGES}>
+            收起重点
+          </button>
+          <button type="button" onClick={() => setSelectedEdgeKey(null)} disabled={!selectedEdgeKey}>
+            清除高亮
+          </button>
+        </div>
+        <div className="graph-focus-layout">
+          <aside className="graph-node-list" aria-label="中心要素">
+            <div className="graph-node-list__title">选择中心要素</div>
+            <div className="graph-node-list__hint">优先列出连接最多、最适合先看的要素。</div>
+            {topNodes.map((node) => (
+              <button
+                key={node.id}
+                type="button"
+                className={`graph-node-list__button ${focusNodeId === node.id ? "is-active" : ""}`}
+                onClick={() => {
+                  setSelectedNodeId(node.id);
+                  setSelectedEdgeKey(null);
+                  setEdgeLimit(GRAPH_MIN_EDGES);
+                }}
+              >
+                <span>{node.name}</span>
+                <small>{ELEMENT_TYPE_LABELS[node.type]} · {node.degree} 条关系 · 提及 {node.freq} 次</small>
+              </button>
+            ))}
+          </aside>
+
+          <div className="graph-canvas">
+            {focusNode ? (
+              <svg viewBox="0 0 820 620" className="graph-svg" role="img" aria-label={`${focusNode.name} 的共现关系网络`} onClick={() => setSelectedEdgeKey(null)}>
+                {focusEdges.map((edge) => {
+                  const source = positions.get(edge.source);
+                  const target = positions.get(edge.target);
+                  if (!source || !target) return null;
+                  const key = `${edge.source}__${edge.target}`;
+                  const active = selectedEdgeKey === key;
+                  return (
+                    <line
+                      key={key}
+                      x1={source.x}
+                      y1={source.y}
+                      x2={target.x}
+                      y2={target.y}
+                      stroke={active ? "#facc15" : "#94a3b8"}
+                      strokeWidth={2 + Math.min(edge.weight, 6)}
+                      opacity={active ? 0.92 : 0.5}
+                      strokeLinecap="round"
+                      style={{ cursor: "pointer" }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedEdgeKey(key);
+                      }}
+                    >
+                      <title>{nodeById.get(edge.source)?.name ?? edge.source} 与 {nodeById.get(edge.target)?.name ?? edge.target} 共现 {edge.weight} 次</title>
+                    </line>
+                  );
+                })}
+                {neighborNodes.map((node) => {
+                  const pos = positions.get(node.id);
+                  if (!pos) return null;
+                  const labelOnRight = pos.x >= 410;
+                  return (
+                    <g
+                      key={node.id}
+                      style={{ cursor: "pointer" }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedNodeId(node.id);
+                        setSelectedEdgeKey(null);
+                        setEdgeLimit(GRAPH_MIN_EDGES);
+                      }}
+                    >
+                      <circle cx={pos.x} cy={pos.y} r={8 + Math.min(node.freq, 7)} fill={TYPE_COLORS[node.type]} stroke="#0f172a" strokeWidth="2" />
+                      <text
+                        x={pos.x + (labelOnRight ? 18 : -18)}
+                        y={pos.y + 4}
+                        fill="#e5e7eb"
+                        fontSize="12"
+                        fontWeight="700"
+                        textAnchor={labelOnRight ? "start" : "end"}
+                      >
+                        {compactElementName(node.name)}
+                      </text>
+                    </g>
+                  );
+                })}
+                {focusNode ? (
+                  <g>
+                    <circle cx="410" cy="310" r={38} fill={TYPE_COLORS[focusNode.type]} stroke="#f8fafc" strokeWidth="2" />
+                    <circle cx="410" cy="310" r={52} fill="none" stroke={TYPE_COLORS[focusNode.type]} strokeWidth="2" opacity="0.35" />
+                    <text x="410" y="384" fill="#f8fafc" fontSize="15" fontWeight="800" textAnchor="middle">
+                      {compactElementName(focusNode.name, 30)}
+                    </text>
+                    <text x="410" y="405" fill="#94a3b8" fontSize="12" textAnchor="middle">
+                      中心要素 · {focusNode.degree} 条关系
+                    </text>
+                  </g>
+                ) : null}
+              </svg>
+            ) : null}
+          </div>
+        </div>
+        </>
       )}
 
+      {focusNode ? (
+        <div className="graph-selection">
+          <div className="graph-selection__head">
+            <strong>{focusNode.name}</strong>
+            <span className={`entity-tag entity-tag--${focusNode.type}`}>{ELEMENT_TYPE_LABELS[focusNode.type]}</span>
+            <span>提及 {focusNode.freq} 次 · 连接 {focusNode.degree} 个要素</span>
+          </div>
+          <div className="graph-selection__links">
+            {focusEdges.length > 0 ? focusEdges.map((edge) => {
+              const otherId = edge.source === focusNode.id ? edge.target : edge.source;
+              const other = nodeById.get(otherId);
+              return (
+                <button
+                  key={`${edge.source}__${edge.target}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedEdgeKey(`${edge.source}__${edge.target}`);
+                  }}
+                >
+                  {other?.name ?? otherId} · 共现 {edge.weight} 次
+                </button>
+              );
+            }) : <span>暂无共现关系。</span>}
+          </div>
+          <small>点击上面的关系可查看引用出处；关系网络只提示线索密度，结论仍需回到素材核验。</small>
+        </div>
+      ) : null}
+
       {selectedClaim ? (
-        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "10px 12px", background: "rgba(16,24,40,0.45)", fontSize: "13px", lineHeight: "1.7" }}>
-          {selectedClaim.text}
+        <div className="graph-selection">
+          <div className="graph-selection__head">
+            <strong>{selectedClaim.text}</strong>
+            <span>共现证据</span>
+          </div>
           <CitationChips claim={selectedClaim} onFrame={setFrameCite} />
+          <small>这些引用说明两个要素在同一片段中一起出现；是否构成有效判断，需要打开素材原文核对。</small>
         </div>
       ) : null}
 

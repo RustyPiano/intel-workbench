@@ -73,6 +73,17 @@ const TABS: { to: string; label: string }[] = [
   { to: "audit", label: "审计" },
 ];
 
+const SUPPORT_STATUS_LABELS: Record<NonNullable<ApiCitation["support_status"]>, string> = {
+  supported: "已支撑",
+  "support-unverified": "待复核支撑",
+  unsupported: "不支撑",
+};
+
+function supportStatusLabel(status?: string): string {
+  if (!status) return "";
+  return SUPPORT_STATUS_LABELS[status as NonNullable<ApiCitation["support_status"]>] ?? status;
+}
+
 /**
  * 专题工作台外壳（产品 spec §8.4）：顶部标签页 + 子路由内容区。
  * M2：标题/密级取自真实专题 manifest。
@@ -205,7 +216,7 @@ function VerificationSummary({ caseInfo, caseId, enabled }: { caseInfo: ApiCase 
       <div className="verification-summary__item">
         <span>看证据</span>
         <strong>{caseInfo?.clearance ? CLEARANCE_LABELS[caseInfo.clearance] : "—"}</strong>
-        <small>引用片段带 hash / 定位</small>
+        <small>引用片段可定位回原文</small>
       </div>
       <div className="verification-summary__item">
         <span>出报告</span>
@@ -250,6 +261,18 @@ const TASK_STAGE_HINTS: Record<string, string> = {
   assessment: "把可支撑的事实整理为研判结论。",
   "report-generation": "用已核准结论生成报告草稿。",
   "review-export": "复核通过后才能导出，导出动作会进入审计链。",
+};
+
+const TASK_STAGE_TAB_PATHS: Record<string, string> = {
+  "material-ingest": "materials",
+  "quality-check": "materials",
+  "evidence-units": "materials",
+  "entity-merge": "elements",
+  "proposition-extraction": "inquiry",
+  "contradiction-detection": "contradictions",
+  assessment: "findings",
+  "report-generation": "report",
+  "review-export": "report",
 };
 
 const MANUAL_STAGE_KEYS = new Set(["proposition-extraction", "assessment"]);
@@ -380,6 +403,7 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
         : "流程失败"
     : "尚未开始";
   const actionText = nextTaskAction(snapshot, creating, confirming);
+  const currentStagePath = currentStage ? TASK_STAGE_TAB_PATHS[currentStage.key] : null;
 
   return (
     <section className="task-overview">
@@ -410,6 +434,11 @@ function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }
           <small>{stageHint(currentStage)}</small>
         </div>
         <div className="task-next__actions">
+          {currentStagePath ? (
+            <NavLink to={currentStagePath} className="btn" style={{ padding: "6px 12px", fontSize: "12px" }}>
+              去对应板块
+            </NavLink>
+          ) : null}
           {!snapshot ? (
             <button type="button" className="btn btn--primary" onClick={handleStart} disabled={creating}>
               {creating ? "启动中…" : "开始核验任务"}
@@ -516,7 +545,7 @@ function mediaStatusText(content: MaterialContent): string {
   const mt = content.material;
   if (mt.status === "processing") return mt.note ?? "加工中：后台正在处理，完成后自动刷新";
   if (mt.status === "pending") return legacyMediaPlaceholder(mt.note) ? mediaPendingText(mt.modality) : (mt.note ?? mediaPendingText(mt.modality));
-  if (mt.status === "failed") return mt.note ?? "加工失败。请检查模型/本地服务配置后点击「重试加工」。";
+  if (mt.status === "failed") return mt.note ?? "加工失败。请检查识别服务配置后点击「重试加工」。";
   const eng = `引擎 ${mt.engine ?? "—"}`;
   const dur = mt.duration ? ` · ${mt.duration}s` : "";
   const warn = mt.note ? ` · 警告：${mt.note}` : "";
@@ -833,7 +862,7 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
         </button>
       </div>
       <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
-      {support ? <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>支持性：{support}</div> : null}
+      {support ? <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>支持性：{supportStatusLabel(support)}</div> : null}
       <div style={{ fontSize: "12px", color: "var(--text)" }}>{quote}</div>
       {artifactHash ? (
         <button
@@ -842,7 +871,7 @@ function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => vo
           onClick={() => { void navigator.clipboard?.writeText(artifactHash); }}
           style={{ alignSelf: "flex-start", padding: 0, border: 0, background: "transparent", color: "var(--text-muted)", fontSize: "11px", fontFamily: "monospace", cursor: "copy" }}
         >
-          frame/crop sha256: {artifactHash.slice(0, 12)}…
+          帧指纹：{artifactHash.slice(0, 12)}…
         </button>
       ) : null}
     </div>
@@ -878,6 +907,7 @@ export function MaterialsPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [materials, setMaterials] = useState<ApiMaterial[] | null>(null);
+  const [materialFilter, setMaterialFilter] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeIdRef = useRef<string | null>(null);
   const appliedFocusKeyRef = useRef<string | null>(null);
@@ -1117,6 +1147,22 @@ export function MaterialsPanel() {
 
   const activeProcessing = content ? content.material.status === "processing" || processingIds.has(content.material.id) : false;
   const activeElapsed = content ? elapsedLabel(processStartedAt[content.material.id], now) : "进行中";
+  const filteredMaterials = useMemo(() => {
+    if (!materials) return null;
+    const q = materialFilter.trim().toLowerCase();
+    if (!q) return materials;
+    return materials.filter((m) => {
+      const displayMaterial = processingIds.has(m.id) ? { ...m, status: "processing" as const, note: m.note ?? "加工中：请求已发送，等待后端接手" } : m;
+      return [
+        m.filename,
+        m.modality,
+        MODALITY_LABELS[m.modality],
+        displayMaterial.status,
+        materialListStatus(displayMaterial).text,
+        displayMaterial.note ?? "",
+      ].some((value) => value.toLowerCase().includes(q));
+    });
+  }, [materialFilter, materials, processingIds]);
 
   return (
     <div className="materials-layout">
@@ -1132,11 +1178,20 @@ export function MaterialsPanel() {
       <div className="materials-sidebar">
         <div style={{ padding: "12px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>
-            线索素材 ({materials?.length ?? 0})
+            线索素材 ({materials ? (materialFilter.trim() ? `${filteredMaterials?.length ?? 0}/${materials.length}` : materials.length) : 0})
           </span>
           <button type="button" className="btn btn--primary" style={{ padding: "4px 10px", fontSize: "11px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
             {busy ? "汇入中…" : "+ 汇入"}
           </button>
+        </div>
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+          <input
+            className="input-text"
+            style={{ padding: "8px 10px", fontSize: "12px" }}
+            value={materialFilter}
+            onChange={(e) => setMaterialFilter(e.target.value)}
+            placeholder="按文件名 / 类型 / 状态 / 备注过滤"
+          />
         </div>
 
         {error ? <div style={{ padding: "12px", fontSize: "12px", color: "var(--danger-light)" }}>{error}</div> : null}
@@ -1176,10 +1231,14 @@ export function MaterialsPanel() {
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)" }}>加载中…</div>
         ) : materials.length === 0 ? (
           <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-            暂无素材。点击「+ 汇入」上传线索：文档会尝试自动解析并建立检索片段；音频、视频与图片汇入后可点击「开始加工」进行转写与识别，需对应模型或本地服务已配置。
+            暂无素材。点击「+ 汇入」上传线索：文档会尝试自动解析并建立检索片段；音频、视频与图片汇入后可点击「开始加工」进行转写与识别，需对应识别能力已配置。
+          </div>
+        ) : filteredMaterials?.length === 0 ? (
+          <div style={{ padding: "16px", fontSize: "13px", color: "var(--text-dim)", lineHeight: "1.6" }}>
+            无匹配素材。可按文件名、类型、加工状态或备注继续缩小范围。
           </div>
         ) : (
-          materials.map((m) => {
+          filteredMaterials!.map((m) => {
             const displayMaterial = processingIds.has(m.id) ? { ...m, status: "processing" as const, note: m.note ?? "加工中：请求已发送，等待后端接手" } : m;
             const s = materialListStatus(displayMaterial);
             return (
@@ -1649,7 +1708,7 @@ export function ElementsPanel() {
                     {elements === null
                       ? "加载中…"
                       : all.length === 0
-                        ? "尚未抽取要素。点击「提取要素」从已加工素材中抽取人物/组织/地点/事件等（需文本模型已配置）。每个要素都会绑定到素材出处。"
+                        ? "尚未抽取要素。点击「提取要素」从已加工素材中抽取人物/组织/地点/事件等（需文本解析能力已配置）。每个要素都会绑定到素材出处。"
                         : "无匹配的要素。"}
                   </td>
                 </tr>
@@ -2244,7 +2303,8 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
         const docFocus = c.modality === "doc" && caseId ? docCitationFocus(c) : null;
         const quote = c.quote ?? c.snippet;
         const supportStatus = c.support_status ?? c.support_label;
-        const support = supportStatus ? ` · 支持性：${supportStatus}` : "";
+        const supportLabel = supportStatusLabel(supportStatus);
+        const support = supportLabel ? ` · 支持性：${supportLabel}` : "";
         const loc = c.locator.timecode
           ? ` · 时间：${c.locator.timecode}秒${c.locator.speaker ? ` · 说话人：${c.locator.speaker}` : ""}`
           : c.locator.paragraph
@@ -2275,9 +2335,9 @@ function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCi
                   <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                 </svg>
               ) : null}
-              {i + 1}
+              引用 {i + 1}
             </span>
-            {supportStatus ? <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{supportStatus}</span> : null}
+            {supportLabel ? <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{supportLabel}</span> : null}
             {c.quote ? <span title={c.quote} style={{ fontSize: "11px", color: "var(--text-dim)", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>“{c.quote}”</span> : null}
           </span>
         );
@@ -2321,7 +2381,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
                 return (
                   <div key={i} style={{ marginTop: "4px" }}>
                     · {c.text}
-                    {c.support_status ? <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "6px" }}>{c.support_status}</span> : null}
+                    {c.support_status ? <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "6px" }}>{supportStatusLabel(c.support_status)}</span> : null}
                     {reviewedRefs.has(ref)
                       ? <span style={{ color: "#4caf50", fontSize: "11px", marginLeft: "6px" }}>✓ 已校对</span>
                       : <button type="button" className="btn btn--ghost" style={{ padding: "1px 8px", fontSize: "11px", marginLeft: "6px" }} onClick={() => onReview(ref)}>点此校对</button>
@@ -2344,7 +2404,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
           <div key={i} style={{ marginBottom: "6px" }}>
             {i + 1}. {c.text}
             {c.support_status === "support-unverified" ? (
-              <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>support-unverified</span>
+              <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>{supportStatusLabel(c.support_status)}</span>
             ) : null}
             {c.type === "inference" ? (
               <>
@@ -2675,12 +2735,6 @@ const FINDING_STATUS_LABELS: Record<ApiFinding["review_status"], string> = {
   rejected: "已驳回",
 };
 
-const SUPPORT_STATUS_LABELS: Record<NonNullable<ApiCitation["support_status"]>, string> = {
-  supported: "supported",
-  "support-unverified": "support-unverified",
-  unsupported: "unsupported",
-};
-
 function isPromotableClaim(claim: ApiClaim): boolean {
   if (claim.citations.length === 0) return false;
   if (claim.support_status === "unsupported") return false;
@@ -2701,6 +2755,7 @@ export function FindingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     if (!user || !caseId) return;
@@ -2716,17 +2771,21 @@ export function FindingsPanel() {
       setError(null);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setLoaded(true);
     }
   }, [user, caseId]);
 
   useEffect(() => {
+    setLoaded(false);
     void load();
   }, [load]);
 
   const canCreate = Boolean(user && (user.role === "admin" || caseInfo?.owner === user.id));
   const canReview = user?.role === "security" || user?.role === "admin";
-  const createTitle = canCreate ? "创建 Finding" : "仅专题创建者或管理员可创建 Finding";
-  const reviewTitle = canReview ? "复核 Finding" : "仅保密员或管理员可复核 Finding";
+  const createTitle = canCreate ? "生成研判结论" : "仅专题创建者或管理员可生成研判结论";
+  const reviewTitle = canReview ? "复核研判结论" : "仅保密员或管理员可复核研判结论";
+  const inquiryPath = caseId ? `/cases/${encodeURIComponent(caseId)}/inquiry` : "../inquiry";
   const claimRows = inquiries.flatMap((inquiry) =>
     inquiry.claims.map((claim, index) => ({ inquiry, claim, ref: `${inquiry.id}:${index}` })).filter((row) => isPromotableClaim(row.claim)),
   );
@@ -2760,10 +2819,17 @@ export function FindingsPanel() {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: "20px", height: "520px" }}>
+    <div className="findings-layout">
       <div className="contradictions-list">
-        {findings.length === 0 ? (
-          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>暂无 Finding。</div>
+        {!loaded ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载研判结论…</div>
+        ) : findings.length === 0 ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.8" }}>
+            <div>先去溯源问答生成带引用结论。</div>
+            <NavLink to={inquiryPath} className="btn" style={{ marginTop: "12px", padding: "6px 12px", fontSize: "12px" }}>
+              去溯源问答
+            </NavLink>
+          </div>
         ) : (
           findings.map((finding) => (
             <div key={finding.id} className="contradiction-row">
@@ -2781,7 +2847,7 @@ export function FindingsPanel() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
                 {finding.supporting_citations.map((citation, index) => (
                   <span key={`${citation.material_id}:${citation.content_hash}:${index}`}>
-                    引用 {index + 1} support_status: {citation.support_status ? SUPPORT_STATUS_LABELS[citation.support_status] : "未标注"}
+                    引用 {index + 1} 支持状态：{citation.support_status ? supportStatusLabel(citation.support_status) : "未标注"}
                   </span>
                 ))}
               </div>
@@ -2805,9 +2871,16 @@ export function FindingsPanel() {
       </div>
 
       <div className="report-sidebar" style={{ overflow: "auto" }}>
-        <div className="report-sidebar__title">从问答结论创建</div>
-        {claimRows.length === 0 ? (
-          <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>暂无可创建 Finding 的支撑结论。</div>
+        <div className="report-sidebar__title">从问答结论生成研判</div>
+        {!loaded ? (
+          <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>加载问答结论…</div>
+        ) : claimRows.length === 0 ? (
+          <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
+            先去溯源问答生成带引用结论。
+            <NavLink to={inquiryPath} className="btn" style={{ marginTop: "10px", padding: "5px 10px", fontSize: "12px" }}>
+              去溯源问答
+            </NavLink>
+          </div>
         ) : (
           claimRows.map(({ claim, ref }) => (
             <div key={ref} style={{ borderBottom: "1px solid var(--border)", paddingBottom: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -2816,7 +2889,7 @@ export function FindingsPanel() {
                 <CitationChips claim={claim} onFrame={setFrameCite} />
               </div>
               <button type="button" className="btn btn--primary" style={{ padding: "5px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canCreate} title={createTitle} onClick={() => handleCreate(claim, ref)}>
-                {busy === `create:${ref}` ? "创建中…" : "创建 Finding"}
+                {busy === `create:${ref}` ? "生成中…" : "生成研判结论"}
               </button>
             </div>
           ))
@@ -2840,12 +2913,12 @@ const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: string }
 
 const GATE_REASON_GLOSSES: Record<string, string> = {
   "coverage:uncited-fact": "存在无引用支撑的事实性内容",
-  "coverage:body-unsupported": "正文未逐字复述所选已审 Finding 结论",
-  "citation:no-span": "引用缺少有效 span 原文",
-  "citation:invalid": "引用无法匹配当前素材原文或哈希",
-  "finding:missing": "报告引用的 Finding 不存在",
-  "finding:rejected": "报告引用了已驳回 Finding",
-  "finding:not-approved": "报告引用了未核准 Finding",
+  "coverage:body-unsupported": "正文未逐字复述所选已核准研判结论",
+  "citation:no-span": "引用缺少有效原文定位",
+  "citation:invalid": "引用无法匹配当前素材原文",
+  "finding:missing": "报告引用的研判结论不存在",
+  "finding:rejected": "报告引用了已驳回研判结论",
+  "finding:not-approved": "报告引用了未核准研判结论",
   "contradiction:high-severity-unresolved": "存在未处理的高置信矛盾",
 };
 
@@ -2876,6 +2949,7 @@ export function ReportPanel() {
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
+    setLoaded(false);
     Promise.all([getReport(caseId), listFindings(caseId)])
       .then(([r, fs]) => {
         if (!alive) return;
@@ -2888,7 +2962,11 @@ export function ReportPanel() {
         }
         setLoaded(true);
       })
-      .catch((e: Error) => alive && setError(e.message));
+      .catch((e: Error) => {
+        if (!alive) return;
+        setError(e.message);
+        setLoaded(true);
+      });
     return () => {
       alive = false;
     };
@@ -2946,6 +3024,23 @@ export function ReportPanel() {
 
   const status = report?.status ?? "draft";
   const stepIndex = REPORT_STEPS.findIndex((s) => s.status === status);
+  const classificationLabel = report?.spec.classification
+    ? CLEARANCE_LABELS[report.spec.classification as keyof typeof CLEARANCE_LABELS] ?? report.spec.classification
+    : "";
+  const noApprovedFindings = loaded && approvedFindings.length === 0;
+  const findingsPath = caseId ? `/cases/${encodeURIComponent(caseId)}/findings` : "../findings";
+  const submitReason = !report
+    ? "先生成报告草稿。"
+    : noApprovedFindings
+      ? "提交前需先去研判结论复核，至少核准一条结论。"
+      : status !== "draft"
+        ? "只有草稿状态可以提交复核。"
+        : "";
+  const reviewReason = noApprovedFindings
+    ? "复核前需先去研判结论复核，至少核准一条结论。"
+    : status !== "in_review"
+      ? "仅待复核状态可以核准。"
+      : "";
   const toggleFinding = (findingId: string) => {
     setSelectedFindingIds((prev) => prev.includes(findingId) ? prev.filter((id) => id !== findingId) : [...prev, findingId]);
   };
@@ -2956,11 +3051,11 @@ export function ReportPanel() {
         <div className="report-toolbar">
           <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
             状态：<strong style={{ color: "var(--accent-light)" }}>{REPORT_STEPS[stepIndex]?.label ?? "草稿起草"}</strong>
-            {report?.spec.classification ? ` · 密级 ${report.spec.classification}` : ""}
+            {classificationLabel ? ` · 密级 ${classificationLabel}` : ""}
             {report && !report.rendered ? (
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "8px", color: "var(--danger-light)" }}>
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                公文渲染未完成（缺 python3?）
+                公文渲染未完成，请检查服务环境
               </span>
             ) : ""}
           </span>
@@ -2974,20 +3069,19 @@ export function ReportPanel() {
 
         <textarea
           className="report-textarea"
-          placeholder={selectedFindingIds.length > 0 ? "已选择 Finding，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后由 intel-bulletin 渲染为公文格式。"}
+          placeholder={selectedFindingIds.length > 0 ? "已选择研判结论，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后渲染为公文格式。"}
           value={body}
           onChange={(e) => setBody(e.target.value)}
           disabled={selectedFindingIds.length > 0}
         />
         <div style={{ color: "var(--text-muted)", fontSize: "12px", paddingTop: "6px" }}>
-          正文须逐字复述所选已审 Finding 结论；自由叙述暂不支持
+          正文须逐字复述所选已核准研判结论；自由叙述暂不支持
         </div>
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px 0" }}>{error}</div> : null}
         {gateReasons.length > 0 ? (
           <div style={{ border: "1px solid rgba(248,113,113,0.35)", background: "rgba(127,29,29,0.22)", borderRadius: "var(--radius)", padding: "10px 12px", color: "var(--danger-light)", fontSize: "12px", display: "flex", flexDirection: "column", gap: "4px" }}>
             {gateReasons.map((reason) => (
               <div key={reason} style={{ display: "flex", gap: "8px", alignItems: "baseline", flexWrap: "wrap" }}>
-                <code>{reason}</code>
                 <span>{gateReasonGloss(reason)}</span>
               </div>
             ))}
@@ -2999,9 +3093,14 @@ export function ReportPanel() {
         <div className="report-sidebar__title">报告复核状态</div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准 Finding</div>
+          <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准研判结论</div>
           {approvedFindings.length === 0 ? (
-            <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>暂无已核准 Finding</span>
+            <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <span>暂无已核准研判结论。请先去研判结论复核，核准后再提交报告。</span>
+              <NavLink to={findingsPath} className="btn" style={{ width: "fit-content", padding: "5px 10px", fontSize: "12px" }}>
+                去研判结论复核
+              </NavLink>
+            </div>
           ) : approvedFindings.map((finding) => (
             <label key={finding.id} style={{ display: "flex", gap: "8px", alignItems: "flex-start", color: "var(--text-dim)", fontSize: "12px", lineHeight: "1.5" }}>
               <input type="checkbox" checked={selectedFindingIds.includes(finding.id)} onChange={() => toggleFinding(finding.id)} disabled={busy} />
@@ -3033,32 +3132,34 @@ export function ReportPanel() {
             <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>加载报告状态…</span>
           ) : (
             <>
-              <button type="button" className="btn btn--primary" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report || status !== "draft"} onClick={() => run(() => submitReport(caseId!))}>
+              <button type="button" className="btn btn--primary" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report || status !== "draft" || noApprovedFindings} title={submitReason || "提交保密员复核"} onClick={() => run(() => submitReport(caseId!))}>
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
                 </svg>
                 提交保密员复核
               </button>
+              {submitReason ? <span style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.5" }}>{submitReason}</span> : null}
               {canReview ? (
-                <button type="button" className="btn" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || status !== "in_review"} onClick={() => run(() => approveReport(caseId!))}>
+                <button type="button" className="btn" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || status !== "in_review" || noApprovedFindings} title={reviewReason || "核准报告"} onClick={() => run(() => approveReport(caseId!))}>
                   <svg className="icon-svg" style={{ color: "var(--ok-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
                   复核核准
                 </button>
               ) : null}
+              {canReview && reviewReason ? <span style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.5" }}>{reviewReason}</span> : null}
               <button
                 type="button"
                 className={status === "approved" || status === "exported" ? "btn btn--primary" : "btn btn--danger"}
                 style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                 disabled={busy || !report}
-                title={status === "approved" || status === "exported" ? "导出公文 .md" : "点击测试服务端导出闸门：未复核会拒绝并写审计"}
+                title={status === "approved" || status === "exported" ? "导出公文 .md" : "点击测试导出校验：未复核会拒绝并写审计"}
                 onClick={handleExport}
               >
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                {status === "approved" || status === "exported" ? "导出报告 (.md)" : "测试导出闸门"}
+                {status === "approved" || status === "exported" ? "导出报告 (.md)" : "测试导出校验"}
               </button>
             </>
           )}
@@ -3074,6 +3175,7 @@ export function CaseAuditPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
+  const [auditFilter, setAuditFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -3089,7 +3191,22 @@ export function CaseAuditPanel() {
 
   const last = events && events.length > 0 ? events[events.length - 1] : null;
   // 倒序：最新动作在前。
-  const rows = events ? [...events].reverse() : [];
+  const normalizedAuditFilter = auditFilter.trim().toLowerCase();
+  const rows = events
+    ? events
+      .filter((e) => {
+        if (!normalizedAuditFilter) return true;
+        return [
+          auditActionLabel(e),
+          e.action,
+          e.object,
+          e.user,
+          JSON.stringify(e.detail ?? {}),
+        ].some((value) => value.toLowerCase().includes(normalizedAuditFilter));
+      })
+      .slice()
+      .reverse()
+    : [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -3098,20 +3215,28 @@ export function CaseAuditPanel() {
           <svg className="icon-svg" style={{ width: "14px", height: "14px", color: "var(--accent-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
-          本地审计链完整性校验（Integrity Chain）
+          专题审计链完整性校验
         </h4>
         <p style={{ fontSize: "12px", color: "var(--text-dim)", lineHeight: "1.6" }}>
-          本专题所有变更会镜像自全局 append-only 审计链。共 <strong style={{ color: "#fff" }}>{events?.length ?? "…"}</strong> 条事件
+          本专题所有变更会同步到全局审计链。共 <strong style={{ color: "#fff" }}>{events?.length ?? "…"}</strong> 条事件
           {last ? (
             <>
               ；末位指纹 <code style={{ color: "var(--warn-light)", fontFamily: "monospace" }}>{last.event_hash.slice(0, 12)}…{last.event_hash.slice(-6)}</code>
             </>
           ) : null}
-          。全局审计链可在审计中心一键 verify；专题页展示的是该全局链的本专题镜像。
+          。全局审计链可在审计中心一键校验；专题页展示的是该全局链的本专题镜像。
         </p>
       </div>
 
       {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px" }}>{error}</div> : null}
+
+      <div className="audit-filters">
+        <input className="search audit-filters__input audit-filters__input--wide" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} placeholder="按动作 / 对象 / 用户 / 详情过滤" />
+        <div className="audit-filters__spacer" />
+        <NavLink to="/audit" className="btn" style={{ padding: "6px 14px", fontSize: "12px" }}>
+          去全局审计中心
+        </NavLink>
+      </div>
 
       <div className="audit-layout">
         <table className="audit-table">
@@ -3122,7 +3247,7 @@ export function CaseAuditPanel() {
               <th>研判动作</th>
               <th>对象</th>
               <th>执行状态</th>
-              <th>防篡改指纹 (HASH)</th>
+              <th>防篡改指纹</th>
             </tr>
           </thead>
           <tbody>
@@ -3147,7 +3272,7 @@ export function CaseAuditPanel() {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={6} style={{ textAlign: "center", color: "var(--text-muted)", padding: "32px" }}>
-                  {events === null ? "加载审计记录…" : "本专题暂无审计事件。"}
+                  {events === null ? "加载审计记录…" : events.length === 0 ? "本专题暂无审计事件。" : "无匹配的审计事件。"}
                 </td>
               </tr>
             ) : null}

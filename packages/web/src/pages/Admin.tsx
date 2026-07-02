@@ -186,7 +186,7 @@ export function AdminPromptsPage() {
         <h1 className="page__title">提示词模板</h1>
       </div>
       {listError ? <p style={{ color: "var(--danger-light)", marginBottom: "12px" }}>{listError}</p> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)", gap: "16px", alignItems: "start" }}>
+      <div className="admin-prompts-layout" style={{ display: "grid", gap: "16px", alignItems: "start" }}>
         <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", background: "rgba(0,0,0,0.15)" }}>
           <table className="elements-table">
             <thead>
@@ -280,19 +280,17 @@ export function AdminPromptsPage() {
                           <td style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                             <button
                               type="button"
-                              className="btn"
+                              className="btn btn--sm"
                               disabled={versionBusy !== null || saving}
                               onClick={() => void loadVersionBody(v.ts, "preview")}
-                              style={{ padding: "4px 10px", fontSize: "11px" }}
                             >
                               {versionBusy?.ts === v.ts && versionBusy.mode === "preview" ? "读取中…" : "查看"}
                             </button>
                             <button
                               type="button"
-                              className="btn"
+                              className="btn btn--sm"
                               disabled={versionBusy !== null || saving}
                               onClick={() => void loadVersionBody(v.ts, "rollback")}
-                              style={{ padding: "4px 10px", fontSize: "11px" }}
                             >
                               {versionBusy?.ts === v.ts && versionBusy.mode === "rollback" ? "读取中…" : "回滚到此版本"}
                             </button>
@@ -329,7 +327,7 @@ export function AdminPromptsPage() {
   );
 }
 
-/** Skill 管理：列表 / 启停 / 自检（产品 spec §8.12）。 */
+/** 能力管理：列表 / 启停 / 自检（产品 spec §8.12）。 */
 export function AdminSkillsPage() {
   const { user, data: skills, error, reload } = useAdminData<ApiSkill[]>((u) => (u ? listSkills() : undefined));
   const [busy, setBusy] = useState<string | null>(null);
@@ -347,10 +345,10 @@ export function AdminSkillsPage() {
 
   return (
     <div className="page">
-      <h1 className="page__title">Skill 技能管理</h1>
-      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>技能列表、启停与健康自检。</p>
+      <h1 className="page__title">能力管理</h1>
+      <p style={{ fontSize: "13px", color: "var(--text-dim)", margin: "8px 0 16px" }}>能力列表、启停与健康自检。</p>
       {error ? <p style={{ color: "var(--danger-light)" }}>{error}</p> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px" }}>
+      <div className="admin-skills-grid">
         {(skills ?? []).map((s) => (
           <div key={s.name} style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "16px", background: "rgba(0,0,0,0.15)", display: "flex", flexDirection: "column", gap: "12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
@@ -371,7 +369,7 @@ export function AdminSkillsPage() {
             </p>
           </div>
         ))}
-        {skills && skills.length === 0 ? <p style={{ color: "var(--text-muted)" }}>未发现 Skill。</p> : null}
+        {skills && skills.length === 0 ? <p style={{ color: "var(--text-muted)" }}>未发现可用能力。</p> : null}
       </div>
     </div>
   );
@@ -517,10 +515,10 @@ export function AdminUsersPage() {
                     </span>
                   </td>
                   <td style={{ display: "flex", gap: "6px" }}>
-                    <button type="button" className="btn" disabled={busy || isSelf} onClick={() => act(() => updateUser(u.id, { enabled: !u.enabled }))} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                    <button type="button" className="btn btn--sm" disabled={busy || isSelf} onClick={() => act(() => updateUser(u.id, { enabled: !u.enabled }))}>
                       {u.enabled ? "停用" : "启用"}
                     </button>
-                    <button type="button" className="btn" disabled={busy} onClick={() => handleReset(u)} style={{ padding: "4px 10px", fontSize: "11px" }}>
+                    <button type="button" className="btn btn--sm" disabled={busy} onClick={() => handleReset(u)}>
                       重置口令
                     </button>
                   </td>

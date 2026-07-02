@@ -120,13 +120,13 @@ export function AuditCenterPage() {
                 </svg>
               )}
             </span>
-            {verify === null ? "正在校验审计链…" : verify.ok ? "全局审计哈希链完整性校验通过" : `哈希链校验失败：第 ${verify.brokenAt} 条断链`}
+            {verify === null ? "正在校验审计链…" : verify.ok ? "全局审计链完整性校验通过" : `审计链校验失败：第 ${verify.brokenAt} 条断链`}
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-dim)", marginTop: "6px", lineHeight: "1.5" }}>
             {verify === null
-              ? "重算 payload_hash / event_hash 全链中…"
+              ? "正在重算全链指纹…"
               : verify.ok
-                ? <>共 {verify.count} 条事件，append-only 哈希链无断层。{lastHash ? <>最近块：<code style={{ color: "#fff", fontFamily: "monospace" }}>{shortHash(lastHash)}</code></> : null}</>
+                ? <>共 {verify.count} 条事件，追加式审计链无断层。{lastHash ? <>最近指纹：<code style={{ color: "#fff", fontFamily: "monospace" }}>{shortHash(lastHash)}</code></> : null}</>
                 : verify.reason}
           </p>
         </div>
@@ -186,7 +186,7 @@ export function AuditCenterPage() {
               <th>动作</th>
               <th>关联专题</th>
               <th>结果</th>
-              <th>event_hash</th>
+              <th>防篡改指纹</th>
             </tr>
           </thead>
           <tbody>
@@ -196,7 +196,9 @@ export function AuditCenterPage() {
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: "24px" }}>暂无审计事件</td>
+                <td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: "24px" }}>
+                  {filter === "all" && !actionQuery && !objectQuery ? "暂无审计事件" : "无匹配的审计事件"}
+                </td>
               </tr>
             ) : (
               rows.map((e) => {

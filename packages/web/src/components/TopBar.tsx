@@ -57,12 +57,12 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
 
       <div className="topbar__right">
         <span className={`badge badge--clearance ${CLEARANCE_TONE[clearance]}`}>
-          密级：{CLEARANCE_LABELS[clearance]}
+          权限：{CLEARANCE_LABELS[clearance]}及以下
         </span>
-        <span className="badge badge--offline" title="应用层出站经 OfflineGuard 白名单授权并审计；离线部署可置空白名单。">
+        <span className="badge badge--offline" title="外部访问须经白名单授权并审计；离线部署可置空白名单。">
           离线
         </span>
-        <span className="badge badge--devmode" title="开发模式：未接入正式开源模型链路，禁止涉密专题">
+        <span className="badge badge--devmode" title="开发模式：未接入正式运行环境，禁止涉密专题">
           开发模式
         </span>
 

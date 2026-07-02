@@ -145,6 +145,11 @@ a {
   color: #fff;
   box-shadow: none;
 }
+.btn--sm {
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
 
 /* Form Fields */
 .form-group {
@@ -441,6 +446,14 @@ a {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+.admin-prompts-layout {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+}
+.admin-skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
 }
 .search {
   background: rgba(15, 23, 42, 0.5);
@@ -916,14 +929,12 @@ a {
   gap: 8px;
 }
 .task-stage-strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 4px;
 }
 .task-stage {
-  flex: 1 0 148px;
-  min-width: 148px;
+  min-width: 0;
   min-height: 108px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1485,13 +1496,13 @@ a {
   overflow-wrap: anywhere;
 }
 @media (min-width: 721px) {
-  .elements-table th:nth-child(2),
-  .elements-table td:nth-child(2) {
+  .elements-main .elements-table th:nth-child(2),
+  .elements-main .elements-table td:nth-child(2) {
     width: 76px;
     min-width: 76px;
   }
-  .elements-table th:nth-child(3),
-  .elements-table td:nth-child(3) {
+  .elements-main .elements-table th:nth-child(3),
+  .elements-main .elements-table td:nth-child(3) {
     width: 84px;
     min-width: 84px;
   }
@@ -1514,7 +1525,10 @@ a {
 .entity-tag--person { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
 .entity-tag--org { background: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.3); }
 .entity-tag--loc { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
+.entity-tag--location { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3); }
 .entity-tag--event { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+.entity-tag--equipment { background: rgba(245, 158, 11, 0.15); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.3); }
+.entity-tag--time { background: rgba(20, 184, 166, 0.15); color: #5eead4; border: 1px solid rgba(20, 184, 166, 0.3); }
 
 .element-graph {
   display: flex;
@@ -1742,6 +1756,12 @@ a {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 520px;
+}
+.findings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 20px;
   height: 520px;
 }
 .contradictions-list {
@@ -2105,6 +2125,7 @@ a {
 .audit-filters {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -2122,8 +2143,13 @@ a {
   width: 170px;
 }
 
+.audit-filters__input--wide {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
 .audit-filters__spacer {
-  flex: 1;
+  flex: 1 1 120px;
 }
 
 @media (max-width: 720px) {
@@ -2232,9 +2258,24 @@ a {
     line-height: 1.35;
   }
 
-  .page__actions,
+  .page__actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .page__actions > *,
   .search {
     width: 100%;
+  }
+
+  .page__actions .btn {
+    justify-content: center;
+  }
+
+  .admin-prompts-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .dashboard-grid {
@@ -2254,6 +2295,10 @@ a {
 
   .case-card__stats {
     grid-template-columns: 1fr;
+  }
+
+  .clearance-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workbench {
@@ -2288,6 +2333,7 @@ a {
   .materials-layout,
   .elements-layout,
   .contradictions-layout,
+  .findings-layout,
   .inquiry-layout,
   .report-layout,
   .audit-layout {
@@ -2328,29 +2374,29 @@ a {
     overflow-x: visible;
   }
 
-  .table-scroll > .elements-table {
+  .elements-main.table-scroll > .elements-table {
     min-width: 0;
   }
 
-  .elements-table,
-  .elements-table thead,
-  .elements-table tbody,
-  .elements-table tr,
-  .elements-table td {
+  .elements-main .elements-table,
+  .elements-main .elements-table thead,
+  .elements-main .elements-table tbody,
+  .elements-main .elements-table tr,
+  .elements-main .elements-table td {
     display: block;
     width: 100%;
   }
 
-  .elements-table thead {
+  .elements-main .elements-table thead {
     display: none;
   }
 
-  .elements-table tr {
+  .elements-main .elements-table tr {
     border-bottom: 1px solid var(--border);
     padding: 10px 12px;
   }
 
-  .elements-table td {
+  .elements-main .elements-table td {
     display: grid;
     grid-template-columns: 82px minmax(0, 1fr);
     gap: 10px;
@@ -2363,7 +2409,7 @@ a {
     white-space: normal !important;
   }
 
-  .elements-table td::before {
+  .elements-main .elements-table td::before {
     content: attr(data-label);
     color: var(--text-muted);
     font-size: 11px;

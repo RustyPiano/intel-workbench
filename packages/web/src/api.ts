@@ -234,6 +234,7 @@ export interface ContradictionDetectionResult {
   truncated: boolean;
   warnings: string[];
   error?: string;
+  notStarted?: boolean;
   acknowledgements?: ContradictionAcknowledgement[];
 }
 

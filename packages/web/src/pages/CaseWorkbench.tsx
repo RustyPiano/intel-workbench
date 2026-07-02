@@ -2170,8 +2170,9 @@ export function ContradictionsPanel() {
   const total = job?.progress.total ?? 0;
   const done = job?.progress.done ?? 0;
   const progressWidth = running && total > 0 ? `${Math.min(100, Math.round((done / total) * 100))}%` : "38%";
-  const noProcessedChunks = latestResult !== null && latestResult.totalChunks === 0;
-  const statusLabel = noProcessedChunks ? "未执行" : latestResult?.status === "failed" ? "失败" : latestResult?.status === "degraded" ? "部分覆盖完成" : latestResult ? "完成" : "未检测";
+  const notStarted = Boolean(latestResult?.notStarted);
+  const noProcessedChunks = !notStarted && latestResult !== null && latestResult.totalChunks === 0;
+  const statusLabel = notStarted ? "未检测" : noProcessedChunks ? "未执行" : latestResult?.status === "failed" ? "失败" : latestResult?.status === "degraded" ? "部分覆盖完成" : latestResult ? "完成" : "未检测";
 
   return (
     <div className="contradictions-layout">
@@ -2186,7 +2187,7 @@ export function ContradictionsPanel() {
 
       {latestResult ? (
         <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
-          覆盖 {latestResult.processedChunks}/{latestResult.totalChunks} 个素材块 · 状态：{statusLabel}
+          {notStarted ? `可检测素材块 ${latestResult.totalChunks} 个` : `覆盖 ${latestResult.processedChunks}/${latestResult.totalChunks} 个素材块`} · 状态：{statusLabel}
           {latestResult.truncated ? " · 覆盖不完整" : ""}
           {latestResult.warnings.length > 0 ? ` · ${latestResult.warnings.join("；")}` : ""}
         </div>
@@ -2221,9 +2222,13 @@ export function ContradictionsPanel() {
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
             矛盾检测失败，未产出可复核结果。
           </div>
+        ) : notStarted ? (
+          <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
+            尚未执行矛盾检测。点击「检测矛盾」后系统会读取已加工素材块并生成可复核结果。
+          </div>
         ) : noProcessedChunks ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>
-            暂无已加工素材，未执行矛盾检测。请先完成文档解析或媒体加工。
+            暂无可检测的已加工素材块。请先完成文档解析或媒体加工。
           </div>
         ) : all.length === 0 ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.7" }}>

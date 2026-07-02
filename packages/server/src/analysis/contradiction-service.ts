@@ -62,6 +62,7 @@ export interface ContradictionDetectionResult {
   truncated: boolean;
   warnings: string[];
   error?: string;
+  notStarted?: boolean;
   acknowledgements?: ContradictionAcknowledgement[];
 }
 
@@ -288,15 +289,16 @@ export class ContradictionService {
       result = JSON.parse(await readFile(this.contradictionsResultFile(caseId), "utf8")) as ContradictionDetectionResult;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-      const contradictions = await this.get(actor, caseId);
-      result = this.makeResult(contradictions, {
-        clusters: 0,
-        pairsJudged: 0,
-        batches: 0,
-        chunksCovered: 0,
-        chunksTotal: 0,
-        failedBatches: 0,
-      });
+      const chunks = await this.materials.loadCaseChunks(caseId);
+      result = {
+        status: "succeeded",
+        contradictions: [],
+        processedChunks: 0,
+        totalChunks: chunks.length,
+        truncated: false,
+        warnings: [],
+        notStarted: true,
+      };
     }
     return { ...result, acknowledgements: await readContradictionAcknowledgements(this.paths, caseId) };
   }

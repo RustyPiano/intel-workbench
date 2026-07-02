@@ -126,6 +126,19 @@ describe("ContradictionService", () => {
     expect(result.contradictions[0]?.claim_b.citation.content_hash).toEqual(expect.any(String));
   });
 
+  it("reports not-started coverage before the first detection run", async () => {
+    const { caseId } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },
+    ]);
+
+    await expect(createService(fixture, new ScriptedJsonAdapter([])).getResult(OPERATOR, caseId)).resolves.toMatchObject({
+      notStarted: true,
+      processedChunks: 0,
+      totalChunks: 1,
+      contradictions: [],
+    });
+  });
+
   it("出站被拒时显式抛出并记 error 审计（不静默吞成空结果）", async () => {
     const { caseId } = await createCaseWithDocs(fixture, [
       { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },

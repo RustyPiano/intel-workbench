@@ -13,7 +13,6 @@ import {
   type ApiInquiry,
   type ApiInquiryStreamEvent,
   type ApiQuestionSuggestion,
-  type QuestionSuggestionCategory,
 } from "../../../api";
 import { useSession } from "../../../state/session";
 import { CitationChips } from "../components/CitationChips";
@@ -97,14 +96,6 @@ interface ToolTraceEntry {
   status: "running" | "ok" | "failed";
 }
 
-const QUESTION_CATEGORY_LABELS: Record<QuestionSuggestionCategory, string> = {
-  basic: "基础",
-  timeline: "时间线",
-  relationship: "关联关系",
-  contradiction: "矛盾核实",
-  verification: "待核实",
-  analysis: "深度分析",
-};
 
 type SuggestionMode = "rule" | "llm";
 
@@ -170,7 +161,7 @@ function QuestionSuggestionCards({
             onClick={() => onPick(s.question)}
           >
             <span className={`category-tag category-tag--${s.category}`}>
-              {QUESTION_CATEGORY_LABELS[s.category]}
+              {s.category.toUpperCase()}
             </span>
             <div className="chat-suggestion-card__question">{s.question}</div>
           </button>
@@ -396,8 +387,8 @@ export function InquiryPanel() {
     <div className="inquiry-layout">
       <div className="chat-header">
         <div>
-          <strong>溯源问答</strong>
-          <span>AI 每次只读取当前问题和专题素材；上方记录仅用于回看。</span>
+          <strong>补充核验</strong>
+          <span>AI 每次只读取当前问题和专题素材；答案需先转入核验池并人工核准后，才可用于报告。</span>
         </div>
         <button type="button" className="btn btn--ghost btn--sm" onClick={handleClearHistory} disabled={busy || history.length === 0}>
           清空记录
@@ -406,7 +397,7 @@ export function InquiryPanel() {
       <div className="chat-messages">
         {history.length === 0 && !busy && !liveQuestion ? (
           <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7", padding: "8px" }}>
-            向 AI 提问本专题已加工素材中的关联线索。每条结论都会绑定到素材出处；无支撑时系统回「现有材料不足以判断」，不臆造。
+            向 AI 提问本专题已加工素材中的关联线索。每条答案都会绑定到素材出处；无支撑时系统回「现有材料不足以判断」，不臆造。
           </div>
         ) : null}
         {history.map((inq) => (

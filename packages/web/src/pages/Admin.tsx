@@ -199,7 +199,7 @@ export function AdminPromptsPage() {
               {(prompts ?? []).map((p) => {
                 const selected = p.id === selectedId;
                 return (
-                  <tr key={p.id} onClick={() => selectPrompt(p.id)} style={{ cursor: "pointer", background: selected ? "rgba(99, 102, 241, 0.12)" : undefined }}>
+                  <tr key={p.id} onClick={() => selectPrompt(p.id)} style={{ cursor: "pointer", background: selected ? "rgba(14, 165, 233, 0.08)" : undefined }}>
                     <td data-label="模板名称" style={{ fontWeight: "700" }}>{p.name}</td>
                     <td data-label="用途" style={{ fontFamily: "monospace", fontSize: "12px", color: selected ? "var(--accent-light)" : "var(--text-dim)" }}>{p.role}</td>
                   </tr>

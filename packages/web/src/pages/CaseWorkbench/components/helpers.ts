@@ -183,12 +183,12 @@ export const ELEMENT_TYPE_LABELS = {
 export const ELEMENT_TYPES: (keyof typeof ELEMENT_TYPE_LABELS)[] = ["person", "org", "location", "event", "equipment", "time"];
 
 export const TYPE_COLORS: Record<keyof typeof ELEMENT_TYPE_LABELS, string> = {
-  person: "#38bdf8",
-  org: "#a78bfa",
-  location: "#34d399",
-  event: "#f59e0b",
-  equipment: "#f87171",
-  time: "#facc15",
+  person: "#7dd3fc",       // 哑光天蓝
+  org: "#c084fc",          // 哑光柔紫
+  location: "#86efac",     // 哑光薄荷绿
+  event: "#fed7aa",        // 哑光柔橙
+  equipment: "#fca5a5",    // 哑光柔粉
+  time: "#fef08a",         // 哑光软黄
 };
 
 export function compactElementName(name: string, max = 24): string {
@@ -212,6 +212,18 @@ export const TASK_STATUS_LABELS: Record<ApiTaskStageState["status"], string> = {
   skipped: "跳过",
 };
 
+export const TASK_STAGE_DISPLAY_NAMES: Record<string, string> = {
+  "proposition-extraction": "补充核验取证",
+  "contradiction-detection": "矛盾核验",
+  assessment: "结论核验",
+  "report-generation": "报告起草",
+};
+
+export function taskStageName(stage?: Pick<ApiTaskStageState, "key" | "name"> | null): string {
+  if (!stage) return "";
+  return TASK_STAGE_DISPLAY_NAMES[stage.key] ?? stage.name;
+}
+
 export const REPORT_STATUS_LABELS: Record<ApiReport["status"], string> = {
   draft: "草稿",
   in_review: "待复核",
@@ -224,10 +236,10 @@ export const TASK_STAGE_HINTS: Record<string, string> = {
   "quality-check": "确认素材已完成解析，失败或待配置的素材先处理掉。",
   "evidence-units": "系统会把素材切成可引用片段，后续结论都从这里溯源。",
   "entity-merge": "检查人物、组织、地点、装备等要素是否归并合理。",
-  "proposition-extraction": "命题是带出处的事实陈述。去溯源问答点示例问题，生成并复核后标记完成。",
-  "contradiction-detection": "检查跨素材说法是否冲突，必要时标记处理结果。",
-  assessment: "把可支撑的事实整理为研判结论。",
-  "report-generation": "用已核准结论生成报告草稿。",
+  "proposition-extraction": "去补充核验生成带引用的事实答案，转入核验池并人工核准后才可供报告使用。",
+  "contradiction-detection": "对比不同素材里的说法，处理冲突后再进入结论核验。",
+  assessment: "把问答答案和核验结果转入核验池，人工核准后才供报告引用。",
+  "report-generation": "基于已核准结论生成报告。",
   "review-export": "复核通过后才能导出，导出动作会进入审计链。",
 };
 
@@ -253,10 +265,10 @@ export function stageHint(stage?: ApiTaskStageState | null): string {
 export function nextTaskAction(snapshot: ApiTaskRunSnapshot | null, creating: boolean, confirming: boolean): string {
   const current = snapshot?.overview.currentStage;
   if (!snapshot) return creating ? "正在启动核验任务…" : "点击「开始核验任务」，系统会按素材、证据、矛盾、报告顺序推进。";
-  if (snapshot.run.status === "done") return "流程已完成，可以进入报告复核与导出。";
+  if (snapshot.run.status === "done") return "流程已完成，报告已导出并写入审计链。";
   if (snapshot.run.status === "failed") return "流程已失败，请查看失败阶段并处理后重新启动。";
   if (current?.checkpoint && current.status === "active") return confirming ? "正在确认检查点…" : "当前阶段需要人工确认。检查无误后点击「确认检查点」。";
-  if (current?.key === "proposition-extraction" && current.status === "active") return "在溯源问答选择示例问题并发送，让 AI 输出可引用的事实陈述。";
+  if (current?.key === "proposition-extraction" && current.status === "active") return "在补充核验选择示例问题并发送，让 AI 输出带引用的事实答案。";
   if (current?.status === "active" && MANUAL_STAGE_KEYS.has(current.key)) return "当前阶段需要人工判断。完成后用阶段卡片里的「标记完成」继续。";
   return "当前阶段由系统处理。完成后会自动进入下一步。";
 }
@@ -275,12 +287,12 @@ export const REPORT_STEPS: { status: ApiReport["status"]; label: string; hint: s
 
 export const GATE_REASON_GLOSSES: Record<string, string> = {
   "coverage:uncited-fact": "存在无引用支撑的事实性内容",
-  "coverage:body-unsupported": "正文未逐字复述所选已核准研判结论",
+  "coverage:body-unsupported": "正文未逐字复述所选已核准结论",
   "citation:no-span": "引用缺少有效原文定位",
   "citation:invalid": "引用无法匹配当前素材原文",
-  "finding:missing": "报告引用的研判结论不存在",
-  "finding:rejected": "报告引用了已驳回研判结论",
-  "finding:not-approved": "报告引用了未核准研判结论",
+  "finding:missing": "报告引用的核验池条目不存在",
+  "finding:rejected": "报告引用了已驳回核验池条目",
+  "finding:not-approved": "报告引用了未核准核验池条目",
   "contradiction:high-severity-unresolved": "存在未处理的高置信矛盾",
 };
 

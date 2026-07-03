@@ -18,9 +18,9 @@ function isAlert(e: AuditEvent): boolean {
 
 /** 结果色 → 徽标底色/描边（与 auditResultLabel 的 ok/warn/danger 三档口径一致）。 */
 const RESULT_TONE: Record<string, { glow: string; border: string }> = {
-  "var(--ok-light)": { glow: "var(--ok-glow)", border: "rgba(16,185,129,0.3)" },
-  "var(--warn-light)": { glow: "var(--warn-glow)", border: "rgba(245,158,11,0.3)" },
-  "var(--danger-light)": { glow: "var(--danger-glow)", border: "rgba(239,68,68,0.3)" },
+  "var(--ok-light)": { glow: "var(--ok-glow)", border: "rgba(134, 239, 172, 0.2)" },
+  "var(--warn-light)": { glow: "var(--warn-glow)", border: "rgba(252, 211, 77, 0.2)" },
+  "var(--danger-light)": { glow: "var(--danger-glow)", border: "rgba(252, 165, 165, 0.2)" },
 };
 
 function shortHash(h: string): string {
@@ -103,7 +103,7 @@ export function AuditCenterPage() {
 
       {/* 完整性校验 + 告警概览 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px", marginBottom: "20px" }}>
-        <div style={{ background: verify?.ok ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)", border: `1px solid ${verify?.ok ? "rgba(16, 185, 129, 0.25)" : "rgba(239, 68, 68, 0.25)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
+        <div style={{ background: verify?.ok ? "rgba(134, 239, 172, 0.04)" : "rgba(252, 165, 165, 0.04)", border: `1px solid ${verify?.ok ? "rgba(134, 239, 172, 0.2)" : "rgba(252, 165, 165, 0.2)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: verify?.ok ? "var(--ok-light)" : "var(--danger-light)", fontWeight: "700", fontSize: "14px" }}>
             <span>
               {verify === null ? (
@@ -131,7 +131,7 @@ export function AuditCenterPage() {
           </p>
         </div>
 
-        <div style={{ background: alertCount > 0 ? "rgba(239, 68, 68, 0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${alertCount > 0 ? "rgba(239, 68, 68, 0.25)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
+        <div style={{ background: alertCount > 0 ? "rgba(252, 165, 165, 0.04)" : "rgba(255,255,255,0.01)", border: `1px solid ${alertCount > 0 ? "rgba(252, 165, 165, 0.2)" : "var(--border)"}`, borderRadius: "var(--radius)", padding: "16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", color: alertCount > 0 ? "var(--danger-light)" : "var(--text-dim)", fontWeight: "700", fontSize: "14px" }}>
             <span>
               {alertCount > 0 ? (

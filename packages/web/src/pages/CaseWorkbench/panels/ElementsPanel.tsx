@@ -405,9 +405,9 @@ function ElementGraphView({ caseId }: { caseId: string }) {
                         y1={source.y}
                         x2={target.x}
                         y2={target.y}
-                        stroke={active ? "#facc15" : "#94a3b8"}
+                        stroke={active ? "#38bdf8" : "rgba(255, 255, 255, 0.15)"}
                         strokeWidth={2 + Math.min(edge.weight, 6)}
-                        opacity={active ? 0.92 : 0.5}
+                        opacity={active ? 0.92 : 0.45}
                         strokeLinecap="round"
                         style={{ cursor: "pointer" }}
                         onClick={(event) => {

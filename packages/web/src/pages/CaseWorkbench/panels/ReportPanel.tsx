@@ -4,11 +4,13 @@ import {
   approveReport,
   draftReport,
   exportReport,
+  generateAutoDraft,
   getReport,
   listFindings,
   submitReport,
   type ApiFinding,
   type ApiReport,
+  type DraftReportInput,
 } from "../../../api";
 import { useSession } from "../../../state/session";
 import { CLEARANCE_LABELS } from "../../../types";
@@ -28,10 +30,12 @@ export function ReportPanel() {
   const [body, setBody] = useState("");
   const [approvedFindings, setApprovedFindings] = useState<ApiFinding[]>([]);
   const [selectedFindingIds, setSelectedFindingIds] = useState<string[]>([]);
+  const [generatedSections, setGeneratedSections] = useState<DraftReportInput["sections"] | null>(null);
   const [gateReasons, setGateReasons] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -46,6 +50,12 @@ export function ReportPanel() {
           setTitle(r.spec.title);
           setBody(specToBody(r));
           setSelectedFindingIds([...new Set(r.spec.sections.flatMap((section) => section.finding_ids ?? []))]);
+          setGeneratedSections(null);
+        } else {
+          setTitle("");
+          setBody("");
+          setSelectedFindingIds([]);
+          setGeneratedSections(null);
         }
         setLoaded(true);
       })
@@ -69,6 +79,7 @@ export function ReportPanel() {
       setReport(next);
       setTitle(next.spec.title);
       setBody(specToBody(next));
+      setGeneratedSections(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -82,7 +93,14 @@ export function ReportPanel() {
       return;
     }
     const finding_ids = selectedFindingIds.filter((findingId) => approvedFindings.some((finding) => finding.id === findingId));
-    void run(() => draftReport(caseId!, finding_ids.length > 0 ? { title: title.trim(), finding_ids } : { title: title.trim(), body }));
+    void run(() => draftReport(
+      caseId!,
+      generatedSections?.length
+        ? { title: title.trim(), sections: generatedSections }
+        : finding_ids.length > 0
+          ? { title: title.trim(), finding_ids }
+          : { title: title.trim(), body },
+    ));
   };
 
   const handleExport = async () => {
@@ -109,6 +127,24 @@ export function ReportPanel() {
     }
   };
 
+  const handleGenerateAutoDraft = async () => {
+    if (!user || !caseId || generating) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      const draft = await generateAutoDraft(caseId);
+      const sectionFindingIds = [...new Set((draft.sections ?? []).flatMap((section) => section.finding_ids ?? []))];
+      setTitle(draft.title || '');
+      setBody(draft.sections?.map(s => `## ${s.heading}\n\n${s.body}`).join('\n\n') || '');
+      setSelectedFindingIds(sectionFindingIds);
+      setGeneratedSections(draft.sections ?? null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const status = report?.status ?? "draft";
   const stepIndex = REPORT_STEPS.findIndex((s) => s.status === status);
   const classificationLabel = report?.spec.classification
@@ -117,18 +153,19 @@ export function ReportPanel() {
   const noApprovedFindings = loaded && approvedFindings.length === 0;
   const findingsPath = caseId ? `/cases/${encodeURIComponent(caseId)}/findings` : "../findings";
   const submitReason = !report
-    ? "先生成报告草稿。"
+    ? "先基于已核准结论生成报告。"
     : noApprovedFindings
-      ? "提交前需先去研判结论复核，至少核准一条结论。"
+      ? "提交前需先去结论核验，至少核准一条结论。"
       : status !== "draft"
         ? "只有草稿状态可以提交复核。"
         : "";
   const reviewReason = noApprovedFindings
-    ? "复核前需先去研判结论复核，至少核准一条结论。"
+    ? "复核前需先去结论核验，至少核准一条结论。"
     : status !== "in_review"
       ? "仅待复核状态可以核准。"
       : "";
   const toggleFinding = (findingId: string) => {
+    setGeneratedSections(null);
     setSelectedFindingIds((prev) => prev.includes(findingId) ? prev.filter((id) => id !== findingId) : [...prev, findingId]);
   };
 
@@ -154,15 +191,57 @@ export function ReportPanel() {
 
         <input type="text" className="report-title-input" placeholder="报告标题，例如：关于某网络入侵事件的情况通报" value={title} onChange={(e) => setTitle(e.target.value)} />
 
+        {!report && loaded && (
+          <div className="report-auto-draft" style={{
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            padding: "16px",
+            marginBottom: "16px",
+            background: "var(--bg-dim)"
+          }}>
+            <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+              基于已核准结论自动起草
+            </h3>
+            <p style={{ margin: "0 0 12px 0", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
+              只使用核验池中已核准结论生成报告；补充核验答案和候选判断必须先入池并核准。
+            </p>
+
+            <button
+              type="button"
+              className="btn btn--primary"
+              style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+              onClick={handleGenerateAutoDraft}
+              disabled={generating || approvedFindings.length === 0}
+              title={approvedFindings.length === 0 ? "需要至少一条已核准结论" : "自动起草报告"}
+            >
+              {generating ? (
+                <>生成中...</>
+              ) : (
+                <>
+                  自动生成报告草稿
+                </>
+              )}
+            </button>
+            {approvedFindings.length === 0 && (
+              <p style={{ margin: "8px 0 0 0", fontSize: "11px", color: "var(--text-muted)", textAlign: "center" }}>
+                需要至少一条已核准结论才能生成报告
+              </p>
+            )}
+          </div>
+        )}
+
         <textarea
           className="report-textarea"
-          placeholder={selectedFindingIds.length > 0 ? "已选择研判结论，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后渲染为公文格式。"}
+          placeholder={selectedFindingIds.length > 0 ? "已选择已核准结论，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后渲染为公文格式。"}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={(e) => {
+            setBody(e.target.value);
+            setGeneratedSections(null);
+          }}
           disabled={selectedFindingIds.length > 0}
         />
         <div style={{ color: "var(--text-muted)", fontSize: "12px", paddingTop: "6px" }}>
-          正文须逐字复述所选已核准研判结论；自由叙述暂不支持
+          正文须逐字复述所选已核准结论；自由叙述暂不支持
         </div>
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px 0" }}>{error}</div> : null}
         {gateReasons.length > 0 ? (
@@ -180,12 +259,12 @@ export function ReportPanel() {
         <div className="report-sidebar__title">报告复核状态</div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准研判结论</div>
+          <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准结论</div>
           {approvedFindings.length === 0 ? (
             <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7", display: "flex", flexDirection: "column", gap: "8px" }}>
-              <span>暂无已核准研判结论。请先去研判结论复核，核准后再提交报告。</span>
+              <span>暂无已核准结论。请先去结论核验，核准后再提交报告。</span>
               <NavLink to={findingsPath} className="btn" style={{ width: "fit-content", padding: "5px 10px", fontSize: "12px" }}>
-                去研判结论复核
+                去结论核验
               </NavLink>
             </div>
           ) : approvedFindings.map((finding) => (

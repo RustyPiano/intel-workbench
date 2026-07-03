@@ -617,7 +617,7 @@ export function MaterialsPanel() {
               ) : content.text !== undefined ? (
                 <>
                   {content.material.note ? (
-                    <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "8px 12px", color: "var(--warn-light)", fontSize: "12px", lineHeight: "1.6", marginBottom: "10px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                    <div style={{ background: "rgba(252, 211, 77, 0.04)", border: "1px solid rgba(252, 211, 77, 0.2)", borderRadius: "var(--radius)", padding: "8px 12px", color: "var(--warn-light)", fontSize: "12px", lineHeight: "1.6", marginBottom: "10px", display: "inline-flex", alignItems: "center", gap: "6px" }}>
                       <svg className="icon-svg" style={{ color: "var(--warn-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                       <span>{content.material.note}</span>
                     </div>
@@ -627,7 +627,7 @@ export function MaterialsPanel() {
                   </pre>
                 </>
               ) : (
-                <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
+                <div style={{ background: "rgba(252, 211, 77, 0.04)", border: "1px solid rgba(252, 211, 77, 0.2)", borderRadius: "var(--radius)", padding: "16px", color: "var(--warn-light)", fontSize: "13px", lineHeight: "1.6" }}>
                   <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
                     <svg className="icon-svg" style={{ color: "var(--warn-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                     <strong>{content.note ?? "该素材尚未加工完成。"}</strong>

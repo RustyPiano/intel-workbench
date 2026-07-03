@@ -1,34 +1,34 @@
 /* 情报分析工作台 — Premium M0 Redesign UI Styling. All local styles. */
 
 :root {
-  --bg: #000000;              /* Vercel 纯黑背景 */
-  --bg-sidebar: #09090b;      /* 深灰侧边栏 */
-  --bg-panel: #09090b;        /* 面板深灰背景 */
-  --bg-card: #09090b;         /* 卡片背景 */
-  --bg-elev: #18181b;         /* 弹出/悬浮层背景 */
+  --bg: #0a0a0c;              /* 深碳偏冷黑背景 */
+  --bg-sidebar: #0e0e11;      /* 深灰侧边栏 */
+  --bg-panel: #0e0e11;        /* 面板深灰背景 */
+  --bg-card: #121215;         /* 卡片背景 */
+  --bg-elev: #1a1a20;         /* 弹出/悬浮层背景 */
   --bg-hover: rgba(255, 255, 255, 0.04);
   
   --border: rgba(255, 255, 255, 0.06);    /* 极细半透明边框 */
-  --border-active: #ffffff;               /* 活动状态变白 */
+  --border-active: #38bdf8;               /* 钴蓝激活描边 */
   
   --text: #fafafa;            /* 纯白主字 */
   --text-dim: #a1a1aa;
   --text-muted: #71717a;      /* 变暗的次要文字 */
   
-  --accent: #ffffff;          /* 强调色统一为纯白 */
-  --accent-light: #ffffff;
-  --accent-glow: rgba(255, 255, 255, 0.02);
+  --accent: #0ea5e9;          /* 强调色统一为亮钴蓝 */
+  --accent-light: #38bdf8;
+  --accent-glow: rgba(56, 189, 248, 0.04);
   
   --warn: #d97706;
-  --warn-light: #f59e0b;
+  --warn-light: #fcd34d;      /* 哑光警告色 */
   --warn-glow: rgba(245, 158, 11, 0.02);
   
   --danger: #dc2626;
-  --danger-light: #ef4444;
+  --danger-light: #fca5a5;    /* 哑光危险色 */
   --danger-glow: rgba(239, 68, 68, 0.02);
   
   --ok: #059669;
-  --ok-light: #10b981;
+  --ok-light: #86efac;        /* 哑光成功色 */
   --ok-glow: rgba(16, 185, 129, 0.02);
 
   --radius-sm: 4px;
@@ -120,14 +120,15 @@ a {
   cursor: not-allowed;
 }
 .btn--primary {
-  background: #ffffff;
-  border-color: #ffffff;
-  color: #000000;
-  font-weight: 600;
+  background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%);
+  border-color: #0ea5e9;
+  color: #ffffff;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(14, 165, 233, 0.15);
 }
 .btn--primary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(255, 255, 255, 0.9);
+  background: #38bdf8;
+  border-color: #38bdf8;
 }
 .btn--danger {
   background: var(--danger);
@@ -299,7 +300,6 @@ a {
   background: rgba(255, 255, 255, 0.05);
   color: #fff;
   font-weight: 600;
-  border-left: 2px solid var(--accent-light);
 }
 
 /* Main Content Area */
@@ -1484,7 +1484,7 @@ a {
   min-height: 560px;
 }
 .materials-sidebar {
-  background: rgba(16, 24, 40, 0.3);
+  background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow-y: auto;
@@ -1736,7 +1736,8 @@ a {
   display: grid;
   grid-template-columns: 200px 1fr;
   gap: 20px;
-  height: 520px;
+  height: calc(100vh - 280px);
+  min-height: 520px;
 }
 .elements-categories {
   display: flex;
@@ -2072,16 +2073,18 @@ a {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: 520px;
+  height: calc(100vh - 280px);
+  min-height: 520px;
 }
 .findings-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
   gap: 20px;
-  height: 520px;
+  height: calc(100vh - 280px);
+  min-height: 520px;
 }
 .contradictions-list {
-  background: rgba(16, 24, 40, 0.3);
+  background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow-y: auto;
@@ -2329,12 +2332,12 @@ a {
   line-height: 1.6;
 }
 .chat-bubble--user .chat-content {
-  background: #18181b;                 /* Vercel dark gray */
-  border-color: rgba(255, 255, 255, 0.08);
+  background: #18181b;
+  border-color: rgba(56, 189, 248, 0.25);  /* 钴蓝钢铁微描边，突显专属性 */
   color: #ffffff;
 }
 .chat-bubble--ai .chat-content {
-  background: #09090b;                 /* Vercel panel gray */
+  background: #0e0e11;
   border-color: rgba(255, 255, 255, 0.04);
 }
 .chat-bubble--ai .chat-content p {
@@ -2583,25 +2586,18 @@ a {
 .category-tag {
   font-family: monospace;
   font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 3px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-dim);
-  border: 1px solid rgba(255, 255, 255, 0.06);
 }
-.category-tag--basic,
-.category-tag--timeline,
-.category-tag--relationship,
-.category-tag--contradiction,
-.category-tag--verification,
-.category-tag--analysis {
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--text-dim);
-  border-color: rgba(255, 255, 255, 0.05);
-}
+.category-tag--basic { background: rgba(56, 189, 248, 0.08); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.2); }
+.category-tag--timeline { background: rgba(168, 85, 247, 0.08); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.2); }
+.category-tag--relationship { background: rgba(236, 72, 153, 0.08); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.2); }
+.category-tag--contradiction { background: rgba(239, 68, 68, 0.08); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.2); }
+.category-tag--verification { background: rgba(245, 158, 11, 0.08); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.2); }
+.category-tag--analysis { background: rgba(16, 185, 129, 0.08); color: #86efac; border: 1px solid rgba(16, 185, 129, 0.2); }
 
 /* 4.2 Chat Input Area Redesign */
 .chat-input-area-new {
@@ -2724,10 +2720,11 @@ a {
   display: grid;
   grid-template-columns: 1fr 300px;
   gap: 20px;
-  height: 520px;
+  height: calc(100vh - 280px);
+  min-height: 520px;
 }
 .report-editor {
-  background: rgba(16, 24, 40, 0.45);
+  background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 24px;
@@ -2827,9 +2824,10 @@ a {
 .audit-layout {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: rgba(16, 24, 40, 0.3);
+  background: rgba(255, 255, 255, 0.01);
   overflow-y: auto;
-  height: 520px;
+  height: calc(100vh - 280px);
+  min-height: 520px;
 }
 .audit-table {
   width: 100%;

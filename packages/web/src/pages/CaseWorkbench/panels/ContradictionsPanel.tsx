@@ -104,7 +104,7 @@ export function ContradictionsPanel() {
       {latestResult ? (
         <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
           {notStarted ? `可检测素材块 ${latestResult.totalChunks} 个` : `覆盖 ${latestResult.processedChunks}/${latestResult.totalChunks} 个素材块`} · 状态：{statusLabel}
-          {propositions.length > 0 ? ` · 命题 ${propositions.length} 条` : ""}
+          {propositions.length > 0 ? ` · 证据陈述 ${propositions.length} 条` : ""}
           {ruleHits > 0 ? ` · 规则命中 ${ruleHits} 条` : ""}
           {latestResult.truncated ? " · 覆盖不完整" : ""}
           {warnings.length > 0 ? ` · ${warnings.join("；")}` : ""}
@@ -135,7 +135,7 @@ export function ContradictionsPanel() {
 
       {propositions.length > 0 ? (
         <details className="proposition-panel">
-          <summary>接地命题（{propositions.length}）</summary>
+          <summary>证据陈述（{propositions.length}）</summary>
           <div className="proposition-list">
             {propositions.slice(0, 20).map((claim, index) => (
               <div key={`${claim.chunk_id}:${index}`} className="proposition-row">
@@ -238,7 +238,7 @@ export function ContradictionsPanel() {
                       value={ackNotes[item.id] ?? ""}
                       onChange={(e) => setAckNotes((prev) => ({ ...prev, [item.id]: e.target.value }))}
                       disabled={!canResolve || ackStatus !== "open" || Boolean(resolving)}
-                      style={{ minWidth: "220px", flex: "1 1 220px", background: "rgba(15,23,42,0.45)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text)", padding: "5px 8px", fontSize: "12px" }}
+                      style={{ minWidth: "220px", flex: "1 1 220px", background: "rgba(255, 255, 255, 0.01)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--text)", padding: "5px 8px", fontSize: "12px" }}
                     />
                     <button
                       type="button"

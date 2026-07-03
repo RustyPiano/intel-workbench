@@ -183,11 +183,11 @@ export function FindingsPanel() {
             <span className="badge" style={{ padding: "3px 8px", fontSize: "11px" }}>报告前置步骤</span>
           </div>
           <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7" }}>
-            本页把带出处的问答答案、矛盾核验结果和时间线建议整理成核验池条目。转入核验池后先人工核准，已核准结论才会进入报告复核。
+            核验并筛选系统抽取的问答、冲突与时间线结论。人工核准后的结论可作为报告起草素材。
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", color: "var(--text-muted)", fontSize: "12px" }}>
-            <span>待入池候选：系统建议，尚未入池</span>
-            <span>核验池：等待核准或驳回</span>
+            <span>待入池候选：系统生成推荐</span>
+            <span>核验池：待人工核准</span>
             <span>已核准：报告可引用</span>
           </div>
         </div>

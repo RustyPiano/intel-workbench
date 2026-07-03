@@ -161,7 +161,12 @@ function QuestionSuggestionCards({
             onClick={() => onPick(s.question)}
           >
             <span className={`category-tag category-tag--${s.category}`}>
-              {s.category.toUpperCase()}
+              {s.category === "basic" ? "基础" :
+               s.category === "timeline" ? "时间线" :
+               s.category === "relationship" ? "关联" :
+               s.category === "contradiction" ? "冲突" :
+               s.category === "verification" ? "待核" :
+               s.category === "analysis" ? "分析" : s.category}
             </span>
             <div className="chat-suggestion-card__question">{s.question}</div>
           </button>

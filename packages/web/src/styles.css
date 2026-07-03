@@ -405,7 +405,13 @@ a {
   border: 1px solid var(--border);
   white-space: nowrap;
 }
-.badge::before {
+.badge--offline::before,
+.badge--devmode::before,
+.badge--clearance::before,
+.badge--clearance.tone-internal::before,
+.badge--clearance.tone-secret::before,
+.badge--clearance.tone-confidential::before,
+.badge--clearance.tone-topsecret::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -568,7 +574,7 @@ a {
   gap: 16px;
 }
 .search {
-  background: rgba(15, 23, 42, 0.5);
+  background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
@@ -861,6 +867,7 @@ a {
 }
 .case-list__search-input {
   padding-left: 34px;
+  width: 260px;
 }
 .case-list__error-alert {
   background: rgba(239, 68, 68, 0.08);
@@ -1371,6 +1378,7 @@ a {
 .workbench__body {
   flex: 1;
   min-height: 0;
+  padding-bottom: 24px;
 }
 .verification-summary {
   display: grid;

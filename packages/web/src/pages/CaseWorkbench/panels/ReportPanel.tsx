@@ -203,7 +203,7 @@ export function ReportPanel() {
               基于已核准结论自动起草
             </h3>
             <p style={{ margin: "0 0 12px 0", fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.5" }}>
-              只使用核验池中已核准结论生成报告；补充核验答案和候选判断必须先入池并核准。
+              仅使用已核准结论进行报告组装。若有新结论，需先前往「结论核验」进行核准。
             </p>
 
             <button
@@ -232,7 +232,7 @@ export function ReportPanel() {
 
         <textarea
           className="report-textarea"
-          placeholder={selectedFindingIds.length > 0 ? "已选择已核准结论，保存后将按已核准结论生成段落。" : "正文：可分多段填写基本情况、分析研判、处置建议……保存后渲染为公文格式。"}
+          placeholder={selectedFindingIds.length > 0 ? "已选择核准结论，保存后将自动组装为报告段落。" : "填写报告正文内容，保存后将渲染为标准公文格式。"}
           value={body}
           onChange={(e) => {
             setBody(e.target.value);
@@ -241,7 +241,7 @@ export function ReportPanel() {
           disabled={selectedFindingIds.length > 0}
         />
         <div style={{ color: "var(--text-muted)", fontSize: "12px", paddingTop: "6px" }}>
-          正文须逐字复述所选已核准结论；自由叙述暂不支持
+          当前仅支持基于已核准结论自动生成报告内容
         </div>
         {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", padding: "8px 0" }}>{error}</div> : null}
         {gateReasons.length > 0 ? (

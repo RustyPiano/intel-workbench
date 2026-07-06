@@ -921,6 +921,27 @@ export interface ApiBriefContradiction {
   acknowledgement_status: ContradictionAcknowledgementStatus | null;
 }
 
+/** 自动研判批处理进度（阶段三 M3）：每题状态 + 整体进度，实时读 auto-inquiry.json。 */
+export type ApiAutoInquiryItemStatus = "pending" | "running" | "candidate" | "done" | "failed";
+export interface ApiAutoInquiryItem {
+  question: string;
+  status: ApiAutoInquiryItemStatus;
+  inquiryId?: string;
+  inquiryStatus?: "answered" | "insufficient" | "error";
+  candidateCount?: number;
+  error?: string;
+}
+export interface ApiAutoInquiryProgress {
+  status: "running" | "done" | "cancelled";
+  total: number;
+  completed: number;
+  currentIndex: number | null;
+  items: ApiAutoInquiryItem[];
+  startedAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+}
+
 export interface ApiBrief {
   caseId: string;
   generatedAt: string;
@@ -935,6 +956,8 @@ export interface ApiBrief {
   openQuestions: ApiQuestionSuggestion[];
   task: ApiTaskRunSnapshot | null;
   autopilot: boolean;
+  /** 自动研判批处理进度（阶段三 M3，未跑过则 null）。 */
+  autoInquiry: ApiAutoInquiryProgress | null;
   /** 报告覆盖度（M4 前占位 null）。 */
   coverage: null;
 }
@@ -949,7 +972,7 @@ export const refreshBrief = (caseId: string) => getBrief(caseId, true);
 
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 
-export type JobKind = "elements" | "contradictions";
+export type JobKind = "elements" | "contradictions" | "auto-inquiry";
 export type JobState = "running" | "done" | "error" | "cancelled";
 export interface JobProgress { phase: string; done: number; total: number; detail?: Record<string, unknown>; }
 export interface ApiJob {

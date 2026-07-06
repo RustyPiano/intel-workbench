@@ -1760,6 +1760,89 @@ a {
   flex: 1;
   min-width: 0;
 }
+/* 自动研判批处理进度（阶段三 M3）：整体进度条 + 逐题状态徽章。 */
+.auto-inquiry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+}
+.auto-inquiry__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.auto-inquiry__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.auto-inquiry__status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.auto-inquiry__spacer {
+  flex: 1;
+}
+.auto-inquiry__bar {
+  display: flex;
+  gap: 3px;
+}
+.auto-inquiry__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.auto-inquiry__seg--running { background: var(--accent-light); }
+.auto-inquiry__seg--candidate { background: var(--ok-light); }
+.auto-inquiry__seg--done { background: var(--accent); }
+.auto-inquiry__seg--failed { background: var(--danger-light); }
+.auto-inquiry__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auto-inquiry__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  padding: 6px 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+button.auto-inquiry__item {
+  cursor: pointer;
+  transition: var(--transition);
+}
+button.auto-inquiry__item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-active);
+}
+.auto-inquiry__item-text {
+  flex: 1;
+  min-width: 0;
+}
+.auto-inquiry__badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--text-muted);
+}
+.auto-inquiry__badge--running { color: var(--accent-light); border-color: rgba(56, 189, 248, 0.3); }
+.auto-inquiry__badge--candidate { color: var(--ok-light); border-color: rgba(16, 185, 129, 0.3); }
+.auto-inquiry__badge--failed { color: var(--danger-light); border-color: rgba(239, 68, 68, 0.3); }
 @media (max-width: 860px) {
   .brief-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));

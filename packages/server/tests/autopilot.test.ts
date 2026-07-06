@@ -118,7 +118,28 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
     return { detect };
   }
 
-  function makeAutopilot(elements: unknown, contradictions: unknown, modelConfigured = true): AutopilotService {
+  /** 脚本化自动研判执行体：写 auto-inquiry.json（模拟真实批处理的落盘副作用）。 */
+  function fakeAutoInquiry() {
+    const run = vi.fn(async (_actor: Identity, _caseId: string, ctx: { setProgress: (p: unknown) => void }) => {
+      ctx.setProgress({ phase: "auto-inquiry", done: 1, total: 1 });
+      const now = new Date().toISOString();
+      const progress = {
+        status: "done" as const,
+        total: 1,
+        completed: 1,
+        currentIndex: null,
+        items: [{ question: "关于目标甲，哪个说法更可信？", status: "candidate" as const, candidateCount: 1, inquiryStatus: "answered" as const }],
+        startedAt: now,
+        updatedAt: now,
+        finishedAt: now,
+      };
+      await writeCaseJson("auto-inquiry.json", progress);
+      return progress;
+    });
+    return { run };
+  }
+
+  function makeAutopilot(elements: unknown, contradictions: unknown, modelConfigured = true, autoInquiry: unknown = fakeAutoInquiry()): AutopilotService {
     return new AutopilotService(
       paths,
       audit,
@@ -127,21 +148,24 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
       registry,
       elements as never,
       contradictions as never,
+      autoInquiry as never,
       modelConfigured,
     );
   }
 
-  it("素材全部 processed → 自动创建 TaskRun 并跑要素/矛盾，停在第一个 checkpoint", async () => {
+  it("素材全部 processed → 自动创建 TaskRun 并跑要素/矛盾/自动研判，停在第一个 checkpoint", async () => {
     await cases.attachMaterial(caseId, material(caseId));
     const elements = fakeElements();
     const contradictions = fakeContradictions();
-    const autopilot = makeAutopilot(elements, contradictions);
+    const autoInquiry = fakeAutoInquiry();
+    const autopilot = makeAutopilot(elements, contradictions, true, autoInquiry);
 
     await autopilot.onMaterialsSettled(OPERATOR, caseId);
 
-    // 非 checkpoint 阶段的真实执行体被调用。
+    // 非 checkpoint 阶段的真实执行体被依序调用（要素 → 矛盾 → 自动研判）。
     expect(elements.extract).toHaveBeenCalledTimes(1);
     expect(contradictions.detect).toHaveBeenCalledTimes(1);
+    expect(autoInquiry.run).toHaveBeenCalledTimes(1);
 
     const snapshot = await tasks.getCurrentRun(OPERATOR, caseId);
     expect(snapshot).not.toBeNull();
@@ -153,15 +177,30 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
     // 矛盾就绪：矛盾结果落盘，概览计入高置信矛盾。
     expect(snapshot!.overview.highSeverityContradictionCount).toBe(1);
 
-    // 自动动作以 system-autopilot 落审计（创建 + 两次推进）。
+    // 自动动作以 system-autopilot 落审计（创建 + 三次推进：要素/矛盾/自动研判）。
     const autoEvents = (await audit.readCaseEvents(caseId)).filter((e) => e.user === "system-autopilot");
     expect(autoEvents.some((e) => e.action === "autopilot.run.create")).toBe(true);
-    expect(autoEvents.filter((e) => e.action === "autopilot.advance")).toHaveLength(2);
+    expect(autoEvents.filter((e) => e.action === "autopilot.advance")).toHaveLength(3);
 
     // 手动路径不受影响：checkpoint 仍可人工确认并推进。
     const confirmed = await tasks.confirmStage(OPERATOR, caseId, snapshot!.run.id, "entity-merge");
     expect(stageStatus(confirmed.run, "entity-merge")).toBe("done");
     expect(stageStatus(confirmed.run, "proposition-extraction")).toBe("active");
+  });
+
+  it("已有批次产物 → 自动研判幂等跳过（不再触发执行体）", async () => {
+    await cases.attachMaterial(caseId, material(caseId));
+    await writeCaseJson("auto-inquiry.json", { status: "done", total: 0, completed: 0, currentIndex: null, items: [], startedAt: "t", updatedAt: "t" });
+    const elements = fakeElements();
+    const contradictions = fakeContradictions();
+    const autoInquiry = fakeAutoInquiry();
+
+    await makeAutopilot(elements, contradictions, true, autoInquiry).onMaterialsSettled(OPERATOR, caseId);
+
+    expect(elements.extract).toHaveBeenCalledTimes(1);
+    expect(contradictions.detect).toHaveBeenCalledTimes(1);
+    // auto-inquiry.json 已在盘上 → 该执行体跳过（幂等，避免重复研判）。
+    expect(autoInquiry.run).not.toHaveBeenCalled();
   });
 
   it("autopilot=false → 不触发（既不建 run 也不调用执行体）", async () => {
@@ -255,10 +294,12 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
     expect(skip?.detail).toMatchObject({ reason: "model-unavailable" });
   });
 
-  it("经素材服务收口触发：ingest 文本素材后自动建 run 并跑要素抽取", async () => {
+  it("经素材服务收口触发：ingest 文本素材后全链路自动跑（要素→矛盾→自动研判）", async () => {
     const materials = new MaterialService(paths, audit, cases);
     const elements = fakeElements();
-    const autopilot = makeAutopilot(elements, fakeContradictions());
+    const contradictions = fakeContradictions();
+    const autoInquiry = fakeAutoInquiry();
+    const autopilot = makeAutopilot(elements, contradictions, true, autoInquiry);
     materials.setAutopilotHook((actor, cid) => {
       void autopilot.onMaterialsSettled(actor, cid);
     });
@@ -266,7 +307,10 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
     await materials.ingest(OPERATOR, caseId, [{ filename: "线索.txt", content: "目标甲在码头出现。" }]);
     await autopilot.idle(caseId); // 等待后台自动推进结束
 
+    // 全链路：三个执行体依序跑完（素材 settled → 要素 → 矛盾 → 自动研判）。
     expect(elements.extract).toHaveBeenCalledTimes(1);
+    expect(contradictions.detect).toHaveBeenCalledTimes(1);
+    expect(autoInquiry.run).toHaveBeenCalledTimes(1);
     const snapshot = await tasks.getCurrentRun(OPERATOR, caseId);
     expect(snapshot).not.toBeNull();
     expect(stageStatus(snapshot!.run, "evidence-units")).toBe("done");

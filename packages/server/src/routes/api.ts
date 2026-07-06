@@ -9,6 +9,7 @@ import type { ElementGraphService } from "../analysis/element-graph-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { ElementService } from "../elements/element-service.js";
 import type { FindingService } from "../finding/finding-service.js";
+import type { AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { JobRegistry } from "../jobs/job-registry.js";
 import type { MaterialService } from "../materials/material-service.js";
@@ -59,6 +60,7 @@ export interface ApiServices {
   admin: AdminService;
   suggestions: SuggestionService;
   briefs: BriefService;
+  autoInquiry: AutoInquiryService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -124,7 +126,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
   router.use("/cases", createTaskRouter(services.tasks));
   router.use("/cases", createInquiriesRouter(services.inquiries));
-  router.use("/cases", createJobsRouter({ registry: services.jobRegistry, elements: services.elements, contradictions: services.contradictions, cases: services.cases, audit: services.audit }));
+  router.use("/cases", createJobsRouter({ registry: services.jobRegistry, elements: services.elements, contradictions: services.contradictions, autoInquiry: services.autoInquiry, cases: services.cases, audit: services.audit }));
   router.use("/cases", createElementsRouter(services.elements));
   router.use("/cases", createFindingsRouter(services.findings));
   router.use("/cases", createElementGraphRouter(services.elementGraph));

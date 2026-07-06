@@ -7,16 +7,17 @@ import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import type { AuditResult, Identity } from "../domain/types.js";
 import type { ElementService } from "../elements/element-service.js";
+import type { AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import type { JobContext, JobRegistry } from "../jobs/job-registry.js";
 import type { TaskService } from "./task-service.js";
 
 /**
- * 自动流水线（阶段三 M1 / 计划 D2·D6）。素材全部加工完成后，由素材服务在状态转换的
- * 收口处触发：自动创建/复用核验 TaskRun，并按流水线顺序预跑不需人工输入的分析执行体
- * （要素抽取 → 矛盾检测），使「要素与矛盾」在用户不点任何按钮时就绪；checkpoint 阶段
- * （实体归并、矛盾检测确认）仍由 TaskService.computeStages 停在人工确认处。
+ * 自动流水线（阶段三 M1·M3 / 计划 D2·D3·D6）。素材全部加工完成后，由素材服务在状态转换的
+ * 收口处触发：自动创建/复用核验 TaskRun，并按流水线顺序预跑不需人工输入的执行体
+ * （要素抽取 → 矛盾检测 → 自动研判），使「要素、矛盾、候选结论」在用户不点任何按钮时就绪；
+ * checkpoint 阶段（实体归并、矛盾检测确认）仍由 TaskService.computeStages 停在人工确认处。
  *
- * 复用现有构件（D2）：分析经 JobRegistry.start 运行 → 现有 `/jobs/:kind/cancel` 即可停止，
+ * 复用现有构件（D2·D3）：分析/研判经 JobRegistry.start 运行 → 现有 `/jobs/:kind/cancel` 即可停止，
  * 且与人工触发的同类 job 天然去重；阶段状态仍由 TaskService 从落盘产物派生，不另建系统。
  * 所有自动动作以 `system-autopilot` 落审计（D6）；创建/推进/失败均写事件。
  */
@@ -25,19 +26,22 @@ const SYSTEM_ACTOR = "system-autopilot";
 
 interface AutopilotStep {
   stageKey: string;
-  kind: "elements" | "contradictions";
+  kind: "elements" | "contradictions" | "auto-inquiry";
   /** 产物已在盘上 → 幂等跳过（避免重复触发重跑、与人工复核抢跑）。 */
   artifact: string;
 }
 
 /**
- * 预跑顺序即流水线中「不需人工输入」的分析执行体。矛盾检测在实体归并 checkpoint 之后，
- * 但其执行体本身不依赖 checkpoint 确认，故此处按序预跑以满足「矛盾自动就绪」；阶段游标仍
- * 由 computeStages 停在第一个未确认 checkpoint（详见 implementation-notes.md Deviations）。
+ * 预跑顺序即流水线中「不需人工输入」的执行体。矛盾检测在实体归并 checkpoint 之后、自动研判
+ * 对应更靠后的「补充核验取证」阶段，但其执行体本身都不依赖 checkpoint 确认，故此处按序预跑以
+ * 满足「矛盾/候选结论自动就绪」；阶段游标仍由 computeStages 停在第一个未确认 checkpoint
+ * （详见 implementation-notes.md Deviations）。自动研判置于矛盾检测之后，使 suggestion 出题能
+ * 用上已检出的矛盾（矛盾派生问题价值最高）。
  */
 const STEPS: AutopilotStep[] = [
   { stageKey: "evidence-units", kind: "elements", artifact: "elements.json" },
   { stageKey: "contradiction-detection", kind: "contradictions", artifact: "contradictions.result.json" },
+  { stageKey: "proposition-extraction", kind: "auto-inquiry", artifact: "auto-inquiry.json" },
 ];
 
 export class AutopilotService {
@@ -52,6 +56,7 @@ export class AutopilotService {
     private readonly registry: JobRegistry,
     private readonly elements: Pick<ElementService, "extract">,
     private readonly contradictions: Pick<ContradictionService, "detect">,
+    private readonly autoInquiry: Pick<AutoInquiryService, "run">,
     /** 文本 LLM 是否已配置（未配置则自动分析降级跳过，不产生失败 run，人工路径仍可用）。 */
     private readonly modelConfigured: boolean,
   ) {}
@@ -132,9 +137,10 @@ export class AutopilotService {
 
   private runBody(kind: AutopilotStep["kind"], actor: Identity, caseId: string, ctx: JobContext): Promise<unknown> {
     const onProgress = (p: { done: number; total: number }) => ctx.setProgress({ phase: kind, done: p.done, total: p.total });
-    return kind === "elements"
-      ? this.elements.extract(actor, caseId, { signal: ctx.signal, onProgress })
-      : this.contradictions.detect(actor, caseId, { signal: ctx.signal, onProgress });
+    if (kind === "elements") return this.elements.extract(actor, caseId, { signal: ctx.signal, onProgress });
+    if (kind === "contradictions") return this.contradictions.detect(actor, caseId, { signal: ctx.signal, onProgress });
+    // 自动研判批处理自行落盘进度并按 ctx.setProgress 汇报（题数），信号贯通到底层 agent。
+    return this.autoInquiry.run(actor, caseId, ctx);
   }
 
   /**

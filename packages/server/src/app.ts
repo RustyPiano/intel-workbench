@@ -19,6 +19,7 @@ import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.j
 import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
 import { FindingService } from "./finding/finding-service.js";
+import { AutoInquiryService } from "./inquiry/auto-inquiry-service.js";
 import { InquiryService } from "./inquiry/inquiry-service.js";
 import { JobRegistry } from "./jobs/job-registry.js";
 import { MaterialService } from "./materials/material-service.js";
@@ -74,6 +75,7 @@ export interface AppServices {
   admin: AdminService;
   suggestions: SuggestionService;
   briefs: BriefService;
+  autoInquiry: AutoInquiryService;
   /** 模型槽适配器（二期 P2.2；mock-first，供媒体管线/稠密检索消费）。 */
   slots: ModelSlots;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
@@ -187,13 +189,16 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const tasks = new TaskService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
   const suggestions = new SuggestionService(audit, inquiries, findings, contradictions, elementGraph, context, promptService, llm);
+  // 自动研判批处理（阶段三 M3 / D3）：suggestion 出题 → 逐题走与手动一致的 agent 问答 → 结构化候选入池；
+  // 进度落 auto-inquiry.json 供简报现算叠加。作为 auto-inquiry job kind 与 autopilot 第三执行体消费。
+  const autoInquiry = new AutoInquiryService(paths, audit, suggestions, inquiries);
   // 研判简报聚合（阶段三 M2 / D1·D5）：只读既有产物 + LLM 概览段（逐句绑定引用），brief.json 缓存。
-  const briefs = new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, suggestions, llm);
+  const briefs = new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, suggestions, autoInquiry, llm);
 
-  // 自动流水线（阶段三 M1 / D6）：素材全部加工完成后自动创建/推进核验流水线并预跑要素抽取、
-  // 矛盾检测（经 JobRegistry，复用 /jobs/:kind/cancel 停止）。挂在素材状态转换收口处；素材服务
+  // 自动流水线（阶段三 M1·M3 / D6）：素材全部加工完成后自动创建/推进核验流水线并预跑要素抽取、
+  // 矛盾检测、自动研判（经 JobRegistry，复用 /jobs/:kind/cancel 停止）。挂在素材状态转换收口处；素材服务
   // 先于分析服务装配，故经 setAutopilotHook 后置注线。启动崩溃清扫不经此路径 → 不触发自动分析。
-  const autopilot = new AutopilotService(paths, audit, cases, tasks, jobRegistry, elements, contradictions, modelConfigured);
+  const autopilot = new AutopilotService(paths, audit, cases, tasks, jobRegistry, elements, contradictions, autoInquiry, modelConfigured);
   materials.setAutopilotHook((actor, caseId) => {
     void autopilot.onMaterialsSettled(actor, caseId).catch(() => undefined);
   });
@@ -216,6 +221,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     admin,
     suggestions,
     briefs,
+    autoInquiry,
     slots,
     modelConfigured,
     egressAllowlist: guard.allowlist,
@@ -223,7 +229,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions, briefs }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions, briefs, autoInquiry }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

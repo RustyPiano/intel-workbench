@@ -36,6 +36,11 @@ const stubSuggestions = {
   ],
 };
 
+/** 默认无自动研判进度（未跑过批处理）；需要时各用例可覆写。 */
+const stubAutoInquiry = {
+  getProgress: async () => null,
+};
+
 function scriptedAdapter(content: () => string, calls?: { n: number }): ModelAdapter {
   return {
     name: "scripted",
@@ -137,7 +142,7 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
   function makeBrief(content: () => string, calls?: { n: number }, adapterNull = false): BriefService {
     const guard = new OfflineGuard(["stub.local"], audit);
     const llm: LlmDeps = { adapter: adapterNull ? null : scriptedAdapter(content, calls), guard, modelEndpoint: adapterNull ? "" : "https://stub.local/v1" };
-    return new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, stubSuggestions, llm);
+    return new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, stubSuggestions, stubAutoInquiry, llm);
   }
 
   it("聚合六板块数据面：概览+统计+时间线+实体+未处置矛盾+待核问题", async () => {

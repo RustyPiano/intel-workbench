@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  cancelJob,
   getBrief,
   refreshBrief,
   updateCase,
+  type ApiAutoInquiryItemStatus,
+  type ApiAutoInquiryProgress,
   type ApiBrief,
   type ApiBriefContradiction,
   type ApiBriefOverviewSentence,
@@ -122,6 +125,78 @@ function ContradictionCard({ c, onFrame }: { c: ApiBriefContradiction; onFrame: 
   );
 }
 
+const AUTO_INQUIRY_STATUS_LABEL: Record<ApiAutoInquiryItemStatus, string> = {
+  pending: "待跑",
+  running: "进行中",
+  candidate: "已产生候选",
+  done: "已完成",
+  failed: "失败",
+};
+
+/**
+ * 自动研判批处理进度（阶段三 M3）：整体进度 + 逐题状态徽章；运行中提供取消按钮；
+ * 已产生候选的问题深链到「结论核验」Tab（候选结论在那里入池复核）。数据源为简报轮询
+ * 携带的 autoInquiry（durable，读 auto-inquiry.json），跨服务重启仍可见。
+ */
+function AutoInquiryProgressBlock({
+  progress,
+  cancelling,
+  onCancel,
+  onOpenFindings,
+}: {
+  progress: ApiAutoInquiryProgress;
+  cancelling: boolean;
+  onCancel: () => void;
+  onOpenFindings: () => void;
+}) {
+  const statusLabel = progress.status === "running" ? "研判进行中" : progress.status === "cancelled" ? "已取消" : "研判完成";
+  return (
+    <div className="auto-inquiry">
+      <div className="auto-inquiry__head">
+        <span className="auto-inquiry__title">自动研判</span>
+        <span className="auto-inquiry__status">
+          {statusLabel} · {progress.completed}/{progress.total}
+        </span>
+        <span className="auto-inquiry__spacer" />
+        {progress.status === "running" ? (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel} disabled={cancelling}>
+            {cancelling ? "取消中…" : "取消"}
+          </button>
+        ) : null}
+      </div>
+      <div className="auto-inquiry__bar" aria-hidden="true">
+        {progress.items.map((item, i) => (
+          <span key={i} className={`auto-inquiry__seg auto-inquiry__seg--${item.status}`} />
+        ))}
+      </div>
+      <div className="auto-inquiry__items">
+        {progress.items.map((item, i) => {
+          const badge = (
+            <span className={`auto-inquiry__badge auto-inquiry__badge--${item.status}`}>{AUTO_INQUIRY_STATUS_LABEL[item.status]}</span>
+          );
+          return item.status === "candidate" ? (
+            <button
+              key={i}
+              type="button"
+              className="auto-inquiry__item"
+              title="已产生候选结论，点击去结论核验复核入池"
+              onClick={onOpenFindings}
+            >
+              <span className="auto-inquiry__item-text">{item.question}</span>
+              {badge}
+            </button>
+          ) : (
+            <div key={i} className="auto-inquiry__item" title={item.error ?? undefined}>
+              <span className="auto-inquiry__item-text">{item.question}</span>
+              {badge}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function BriefPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
@@ -130,6 +205,7 @@ export function BriefPanel() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
+  const [cancellingBatch, setCancellingBatch] = useState(false);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
 
   useEffect(() => {
@@ -185,6 +261,27 @@ export function BriefPanel() {
     if (!caseId) return;
     navigate(`/cases/${encodeURIComponent(caseId)}/inquiry?q=${encodeURIComponent(question)}`);
     scrollWorkbenchBodyIntoView();
+  };
+
+  const openFindings = () => {
+    if (!caseId) return;
+    navigate(`/cases/${encodeURIComponent(caseId)}/findings`);
+    scrollWorkbenchBodyIntoView();
+  };
+
+  const handleCancelBatch = async () => {
+    if (!caseId || cancellingBatch) return;
+    setCancellingBatch(true);
+    setError(null);
+    try {
+      // 复用 jobs 通用取消端点；随即重拉简报以尽快反映取消态（简报轮询亦会补更新）。
+      await cancelJob(caseId, "auto-inquiry");
+      setBrief(await getBrief(caseId));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCancellingBatch(false);
+    }
   };
 
   if (!caseId) return null;
@@ -314,6 +411,14 @@ export function BriefPanel() {
           </BriefSection>
 
           <BriefSection title="待核问题" count={brief.openQuestions.length} caseId={caseId} tab="inquiry" tabLabel="去补充核验">
+            {brief.autoInquiry && brief.autoInquiry.total > 0 ? (
+              <AutoInquiryProgressBlock
+                progress={brief.autoInquiry}
+                cancelling={cancellingBatch}
+                onCancel={handleCancelBatch}
+                onOpenFindings={openFindings}
+              />
+            ) : null}
             {brief.openQuestions.length === 0 ? (
               <div className="brief-empty">暂无系统建议的待核问题。</div>
             ) : (

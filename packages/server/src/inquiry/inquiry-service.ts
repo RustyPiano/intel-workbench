@@ -198,11 +198,11 @@ export class InquiryService {
     private readonly promptStore?: PromptStore,
   ) {}
 
-  async ask(actor: Identity, caseId: string, question: string, opts: { deep?: boolean } = {}): Promise<Inquiry> {
+  async ask(actor: Identity, caseId: string, question: string, opts: { deep?: boolean; signal?: AbortSignal } = {}): Promise<Inquiry> {
     if (process.env.MINI_AGENT_INQUIRY_MODE === "single") {
       return this.askSingle(actor, caseId, question, opts.deep === true);
     }
-    return this.askViaAgent(actor, caseId, question, opts.deep === true);
+    return this.askViaAgent(actor, caseId, question, opts.deep === true, opts.signal);
   }
 
   private async askSingle(actor: Identity, caseId: string, question: string, deep = false): Promise<Inquiry> {
@@ -296,7 +296,7 @@ export class InquiryService {
     return inquiry;
   }
 
-  private async askViaAgent(actor: Identity, caseId: string, question: string, deep = false): Promise<Inquiry> {
+  private async askViaAgent(actor: Identity, caseId: string, question: string, deep = false, signal?: AbortSignal): Promise<Inquiry> {
     const q = question?.trim();
     if (!q) throw new AppError(400, "问题不能为空");
     const manifest = await this.cases.get(actor, caseId); // 访问 + 密级校验
@@ -313,7 +313,8 @@ export class InquiryService {
       throw new AppError(503, "文本 LLM 未配置：请设置 MINI_AGENT_MODEL / MINI_AGENT_API_KEY / MINI_AGENT_BASE_URL");
     }
 
-    return this.runAgentInquiry(actor, caseId, q, nameById, manifest.materials, { deep });
+    // signal 贯通到底层 agent（自动研判批处理取消用；与 askStream 同一条 conversation.send 中止路径）。
+    return this.runAgentInquiry(actor, caseId, q, nameById, manifest.materials, { deep, signal });
   }
 
   async askStream(

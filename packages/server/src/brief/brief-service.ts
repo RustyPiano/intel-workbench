@@ -19,6 +19,7 @@ import type {
 import type { ElementService } from "../elements/element-service.js";
 import { findingsFilePath } from "../finding/finding-store.js";
 import type { FindingService } from "../finding/finding-service.js";
+import type { AutoInquiryProgress, AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import { chunkToCitation } from "../inquiry/citation.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-config.js";
@@ -129,6 +130,8 @@ export interface CaseBrief extends BriefSnapshot {
   task: TaskRunSnapshot | null;
   /** autopilot 是否开启（`autopilot !== false`，实时）。 */
   autopilot: boolean;
+  /** 自动研判批处理进度（阶段三 M3，实时读 auto-inquiry.json，不进指纹）。未跑过则 null。 */
+  autoInquiry: AutoInquiryProgress | null;
   /** 报告覆盖度（M4 前占位 null）。 */
   coverage: null;
 }
@@ -173,6 +176,7 @@ export class BriefService {
     private readonly findings: Pick<FindingService, "list">,
     private readonly tasks: Pick<TaskService, "getCurrentRun">,
     private readonly suggestions: Pick<SuggestionService, "suggestQuestions">,
+    private readonly autoInquiry: Pick<AutoInquiryService, "getProgress">,
     private readonly llm: LlmDeps,
   ) {}
 
@@ -187,13 +191,17 @@ export class BriefService {
       ? cached
       : await this.recompute(actor, caseId, manifest, fingerprint);
 
-    // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、覆盖度占位。
-    const task = await this.tasks.getCurrentRun(actor, caseId);
+    // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、自动研判进度、覆盖度占位。
+    const [task, autoInquiry] = await Promise.all([
+      this.tasks.getCurrentRun(actor, caseId),
+      this.autoInquiry.getProgress(caseId),
+    ]);
     return {
       ...snapshot,
       caseId,
       task,
       autopilot: manifest.autopilot !== false,
+      autoInquiry,
       coverage: null,
     };
   }

@@ -22,8 +22,8 @@ const SERVER_DIR = path.resolve(EVAL_DIR, "..");
 const RESULTS_DIR = path.join(EVAL_DIR, "results");
 const DEFAULT_CASE_ID = "港口异常分析";
 const ACTOR: Identity = { id: "eval", name: "eval", role: "operator", clearance: "internal" };
-/** agent 多轮工具循环耗时明显长于单发 generateJson 的 TIMEOUT_MS(60s，inquiry-service.ts)，单题放宽到 3 分钟。 */
-const AGENT_TIMEOUT_MS = 180_000;
+/** agent 多轮工具循环耗时明显长于单发 generateJson 的 TIMEOUT_MS(60s，inquiry-service.ts)，单题默认放宽到 3 分钟；广度综合题可用 --timeout 调大。 */
+const DEFAULT_TIMEOUT_SECONDS = 180;
 
 /**
  * 固定题集（取材 demo-upload-materials/port-anomaly-rich/DOCUMENT_INDEX.md 的矛盾设计），
@@ -48,6 +48,15 @@ const QUESTIONS: EvalQuestion[] = [
   { id: "insufficient-2", category: "证据不足", question: "苏E2M77号货车的委托运输公司是哪一家？" },
 ];
 
+/** 每条结论摘要（离线核对内容质量用；不进指标，只记录）。 */
+interface ClaimSummary {
+  text: string;
+  status: Inquiry["claims"][number]["status"];
+  support_status?: string;
+  citations: number;
+  materials: string[];
+}
+
 interface AttemptResult {
   qid: string;
   category: string;
@@ -58,6 +67,10 @@ interface AttemptResult {
   fallback?: string;
   cited: number;
   used: number;
+  /** 回答正文（answered/insufficient/error 均记录，供离线核对内容质量）。 */
+  answer?: string;
+  /** 每条结论摘要（文本 + 支持态 + 引用数/来源材料）。 */
+  claims?: ClaimSummary[];
   errorMessage?: string;
   errorClass?: string;
   latencyMs: number;
@@ -127,11 +140,21 @@ async function readInquiryDetail(audit: AuditService, caseId: string, inquiryId:
   return undefined;
 }
 
-async function runOneQuestion(inquiries: InquiryService, audit: AuditService, caseId: string, q: EvalQuestion, attempt: number): Promise<AttemptResult> {
+function summarizeClaims(inquiry: Inquiry): ClaimSummary[] {
+  return inquiry.claims.map((claim) => ({
+    text: claim.text,
+    status: claim.status,
+    ...(claim.support_status ? { support_status: claim.support_status } : {}),
+    citations: claim.citations.length,
+    materials: [...new Set(claim.citations.map((c) => c.material_name))],
+  }));
+}
+
+async function runOneQuestion(inquiries: InquiryService, audit: AuditService, caseId: string, q: EvalQuestion, attempt: number, timeoutMs: number): Promise<AttemptResult> {
   const base = { qid: q.id, category: q.category, question: q.question, attempt };
   const start = Date.now();
   try {
-    const inquiry = await withTimeout(inquiries.ask(ACTOR, caseId, q.question, {}), AGENT_TIMEOUT_MS);
+    const inquiry = await withTimeout(inquiries.ask(ACTOR, caseId, q.question, {}), timeoutMs);
     const latencyMs = Date.now() - start;
     const detail = await readInquiryDetail(audit, caseId, inquiry.id);
     const message = inquiry.status === "error" ? inquiry.answer : undefined;
@@ -142,6 +165,8 @@ async function runOneQuestion(inquiries: InquiryService, audit: AuditService, ca
       fallback: typeof detail?.fallback === "string" ? detail.fallback : undefined,
       cited: typeof detail?.cited === "number" ? detail.cited : 0,
       used: typeof detail?.used === "number" ? detail.used : 0,
+      answer: inquiry.answer,
+      claims: summarizeClaims(inquiry),
       errorMessage: message,
       errorClass: message ? classifyError(message) : undefined,
       latencyMs,
@@ -230,6 +255,10 @@ async function main(): Promise<void> {
   const nRaw = argValue("n") ?? "1";
   const n = Number(nRaw);
   if (!Number.isInteger(n) || n < 1) throw new Error(`--n must be a positive integer, got ${nRaw}`);
+  const timeoutRaw = argValue("timeout") ?? String(DEFAULT_TIMEOUT_SECONDS);
+  const timeoutSeconds = Number(timeoutRaw);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw new Error(`--timeout must be a positive number of seconds, got ${timeoutRaw}`);
+  const timeoutMs = Math.round(timeoutSeconds * 1000);
 
   const model = readModelConfig();
   if (!model.configured) {
@@ -295,7 +324,7 @@ async function main(): Promise<void> {
   const attempts: AttemptResult[] = [];
   for (const q of QUESTIONS) {
     for (let attempt = 1; attempt <= n; attempt++) {
-      const result = await runOneQuestion(inquiries, audit, caseId, q, attempt);
+      const result = await runOneQuestion(inquiries, audit, caseId, q, attempt, timeoutMs);
       attempts.push(result);
       const tag = result.errorClass ? ` [${result.errorClass}]` : "";
       console.error(`[${q.id}#${attempt}] status=${result.status} finalized=${result.finalized} cited=${result.cited} used=${result.used} ${result.latencyMs}ms${tag}`);
@@ -310,7 +339,7 @@ async function main(): Promise<void> {
   const resultFile = path.join(RESULTS_DIR, `agent-eval-${label}.json`);
   await writeFile(
     resultFile,
-    `${JSON.stringify({ label, caseId, n, ts: new Date().toISOString(), questions: QUESTIONS.length, attempts: attempts.length, summary, results: attempts }, null, 2)}\n`,
+    `${JSON.stringify({ label, caseId, n, timeoutSeconds, ts: new Date().toISOString(), questions: QUESTIONS.length, attempts: attempts.length, summary, results: attempts }, null, 2)}\n`,
     "utf8",
   );
   console.log(`\nWrote ${resultFile}`);

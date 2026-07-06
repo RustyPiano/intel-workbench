@@ -6,6 +6,19 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * 置位表示供应商返回的 tool call 参数无法解析为合法 JSON，且轻量修复也救不回。
+   * 此时 `arguments` 被置为 `{}`；运行循环见此标记会跳过真实执行，直接合成一条失败的
+   * tool result 反馈给模型，让它用合法 JSON 重发（截断时拆成更小的调用）。
+   */
+  argumentsParseError?: {
+    /** 原始 `JSON.parse` 抛出的错误信息。 */
+    message: string;
+    /** 原始参数字符串的前若干字符（预览用，已截断）。 */
+    rawArguments: string;
+    /** 供应商 finish_reason 为 `length`（输出被截断）时为 true。 */
+    truncated: boolean;
+  };
 }
 
 export interface RuntimeMessage {

@@ -99,3 +99,111 @@ describe("cite tool span 红线", () => {
     expect(ledger.cited.size).toBe(0);
   });
 });
+
+/** 新工具/回退测试共用装配：登记单 chunk 并按名取工具。 */
+function intelToolsFor(chunk: Chunk) {
+  const ledger = createCitationLedger();
+  ledger.retrieved.set(chunk.chunk_id, chunk);
+  const tools = createIntelTools({
+    ledger,
+    actor: OPERATOR,
+    caseId: "case-1",
+    nameById: new Map([[chunk.material_id, "录音.wav"]]),
+    retrieve: async () => [],
+    readBudgetBytes: 1000,
+    perReadCapBytes: 1000,
+  });
+  const find = (name: string) => tools.find((tool) => tool.name === name)!;
+  return { ledger, find };
+}
+
+type ToolReply = { ok: boolean; content: string };
+
+describe("cite 模糊定位（exact 失败后的归一化回退）", () => {
+  it("引号/标点/空白变体命中后登记原文逐字片段（哈希链不变）", async () => {
+    const text = "舰船线索：“铁锚号” 于夜间\n靠泊，装载异常。";
+    const chunk = audioChunk(text);
+    const { ledger, find } = intelToolsFor(chunk);
+
+    // 模型常见变体：中文引号→英文引号、全角标点→半角、换行→空格。
+    const result = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "铁锚号夜间靠泊", quote: '"铁锚号" 于夜间 靠泊,装载异常.' }) as ToolReply;
+
+    expect(result.ok).toBe(true);
+    const citeId = (JSON.parse(result.content) as { cite_id: string }).cite_id;
+    const citation = ledger.cited.get(citeId)!;
+    // 登记的是原文逐字片段，而非模型给的变体。
+    expect(citation.quote).toBe("“铁锚号” 于夜间\n靠泊，装载异常。");
+    expect(chunk.text.slice(citation.quote_char_start, citation.quote_char_end)).toBe(citation.quote);
+    expect(citation.quote_hash).toBe(sha256(citation.quote!));
+  });
+
+  it("归一化仍无命中的乱造引文维持拒绝，且错误信息可操作", async () => {
+    const chunk = audioChunk("舰船线索：码头发现异常装载。");
+    const { ledger, find } = intelToolsFor(chunk);
+
+    const result = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "凭空结论", quote: "凭空捏造的引用内容" }) as ToolReply;
+
+    expect(result.ok).toBe(false);
+    expect(result.content).toContain("无法逐字定位");
+    expect(ledger.cited.size).toBe(0);
+  });
+});
+
+describe("add_claim 逐条提交与 finalize_answer 封卷", () => {
+  it("add_claim 校验 cite_id 存在并逐条累积，finalize_answer 空参封卷", async () => {
+    const chunk = audioChunk("舰船线索：码头发现异常装载。");
+    const { ledger, find } = intelToolsFor(chunk);
+    const cite = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "码头有异常装载", quote: "码头发现异常装载" }) as ToolReply;
+    const citeId = (JSON.parse(cite.content) as { cite_id: string }).cite_id;
+
+    // 未登记的 cite_id → 拒绝。
+    const bogus = await find("add_claim").execute({ text: "凭空结论", cite_ids: ["cite-999"] }) as ToolReply;
+    expect(bogus.ok).toBe(false);
+    expect(bogus.content).toContain("cite-999");
+
+    // 无草稿时空参封卷 → 提示先 add_claim。
+    const early = await find("finalize_answer").execute({}) as ToolReply;
+    expect(early.ok).toBe(false);
+    expect(early.content).toContain("add_claim");
+    expect(ledger.finalize).toBeNull();
+
+    const added = await find("add_claim").execute({ text: "码头有异常装载", cite_ids: [citeId] }) as ToolReply;
+    expect(added.ok).toBe(true);
+    expect(JSON.parse(added.content)).toEqual({ claim_index: 1, total: 1 });
+
+    const sealed = await find("finalize_answer").execute({}) as ToolReply;
+    expect(sealed.ok).toBe(true);
+    expect(ledger.finalize).toEqual({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] });
+  });
+
+  it("超出单条引用数或结论总数上限时拒绝", async () => {
+    const chunk = audioChunk("舰船线索：码头发现异常装载。");
+    const { find } = intelToolsFor(chunk);
+    const cite = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "码头有异常装载", quote: "码头发现异常装载" }) as ToolReply;
+    const citeId = (JSON.parse(cite.content) as { cite_id: string }).cite_id;
+
+    // 单条 > MAX_CITES_PER_CLAIM(8) → 拒绝。
+    const tooManyCites = await find("add_claim").execute({ text: "引用过多", cite_ids: Array.from({ length: 9 }, () => citeId) }) as ToolReply;
+    expect(tooManyCites.ok).toBe(false);
+
+    // 总数 > MAX_FINAL_CLAIMS(12) → 第 13 条拒绝。
+    for (let i = 0; i < 12; i += 1) {
+      const added = await find("add_claim").execute({ text: `结论 ${i + 1}`, cite_ids: [citeId] }) as ToolReply;
+      expect(added.ok).toBe(true);
+    }
+    const overflow = await find("add_claim").execute({ text: "第 13 条", cite_ids: [citeId] }) as ToolReply;
+    expect(overflow.ok).toBe(false);
+  });
+
+  it("带 claims 的 finalize_answer 维持一次性提交旧语义（向后兼容）", async () => {
+    const chunk = audioChunk("舰船线索：码头发现异常装载。");
+    const { ledger, find } = intelToolsFor(chunk);
+    const cite = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "码头有异常装载", quote: "码头发现异常装载" }) as ToolReply;
+    const citeId = (JSON.parse(cite.content) as { cite_id: string }).cite_id;
+
+    const result = await find("finalize_answer").execute({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] }) as ToolReply;
+
+    expect(result.ok).toBe(true);
+    expect(ledger.finalize).toEqual({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] });
+  });
+});

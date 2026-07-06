@@ -437,6 +437,7 @@ async function createRuntimeAgent(config: RuntimeConfig): Promise<RuntimeAgent> 
     explicitSkillDirs: config.explicitSkillDirs.map((skillDir) => path.resolve(config.workspaceRoot, skillDir)),
     globalSkillDirs: config.globalSkillDirs,
     maxTurns: config.maxTurns,
+    maxOutputTokens: config.maxOutputTokens,
     readOnly: config.readOnly,
     allowReadOutsideWorkspace: config.allowReadOutsideWorkspace,
     allowWriteOutsideWorkspace: config.allowWriteOutsideWorkspace,

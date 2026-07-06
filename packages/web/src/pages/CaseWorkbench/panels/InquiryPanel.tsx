@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  askInquiryDeep,
   askInquiryStream,
   clearInquiries,
   getSuggestedQuestions,
@@ -17,6 +16,7 @@ import {
 import { useSession } from "../../../state/session";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
+import { InquiryRunView } from "../components/inquiry/InquiryRunView";
 import { supportStatusLabel } from "../components/helpers";
 
 function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void; reviewedRefs: Set<string>; onReview: (ref: string) => void }) {
@@ -89,13 +89,6 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
     </div>
   );
 }
-
-interface ToolTraceEntry {
-  key: string;
-  name: string;
-  status: "running" | "ok" | "failed";
-}
-
 
 type SuggestionMode = "rule" | "llm";
 
@@ -188,8 +181,9 @@ export function InquiryPanel() {
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const [reviewedRefs, setReviewedRefs] = useState<Set<string>>(new Set());
   const [liveQuestion, setLiveQuestion] = useState<string | null>(null);
-  const [liveText, setLiveText] = useState("");
-  const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
+  const [liveEvents, setLiveEvents] = useState<ApiInquiryStreamEvent[]>([]);
+  /** 本会话内已封卷问答的研判过程（内存态，刷新丢失是预期，不做持久化）。 */
+  const [processByInquiry, setProcessByInquiry] = useState<Record<string, ApiInquiryStreamEvent[]>>({});
   const [questionSuggestions, setQuestionSuggestions] = useState<ApiQuestionSuggestion[]>([]);
   const [suggestionMode, setSuggestionMode] = useState<SuggestionMode>("rule");
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
@@ -197,7 +191,8 @@ export function InquiryPanel() {
   const streamControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
   const userStoppedRef = useRef(false);
-  const toolOrderRef = useRef(0);
+  /** liveEvents 的同步镜像：done 到达时用它捕获完整过程，规避 setState 闭包滞后。 */
+  const liveEventsRef = useRef<ApiInquiryStreamEvent[]>([]);
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -249,36 +244,17 @@ export function InquiryPanel() {
 
   const clearLiveState = () => {
     setLiveQuestion(null);
-    setLiveText("");
-    setToolTrace([]);
+    liveEventsRef.current = [];
+    setLiveEvents([]);
   };
 
   const handleStreamEvent = (event: ApiInquiryStreamEvent) => {
     if (!mountedRef.current || userStoppedRef.current) return;
-    if (event.type === "token") {
-      setLiveText((prev) => prev + event.text);
-      return;
-    }
-    if (event.type === "tool_start") {
-      const key = `${event.name}:${toolOrderRef.current}`;
-      toolOrderRef.current += 1;
-      setToolTrace((prev) => [...prev, { key, name: event.name, status: "running" }]);
-      return;
-    }
-    if (event.type === "tool_result") {
-      setToolTrace((prev) => {
-        const runningIndex = prev.findIndex((entry) => entry.name === event.name && entry.status === "running");
-        const status = event.ok ? "ok" : "failed";
-        if (runningIndex === -1) {
-          const key = `${event.name}:${toolOrderRef.current}`;
-          toolOrderRef.current += 1;
-          return [...prev, { key, name: event.name, status }];
-        }
-        return prev.map((entry, index) => (index === runningIndex ? { ...entry, status } : entry));
-      });
-      return;
-    }
     if (event.type === "done") {
+      const process = liveEventsRef.current;
+      if (process.length > 0) {
+        setProcessByInquiry((prev) => ({ ...prev, [event.inquiry.id]: process }));
+      }
       setHistory((prev) => [...prev, event.inquiry]);
       clearLiveState();
       return;
@@ -286,7 +262,12 @@ export function InquiryPanel() {
     if (event.type === "error") {
       setError(event.message);
       clearLiveState();
+      return;
     }
+    // token / thinking / tool_* / cite_added / claim_added / budget / finding_submitted / 未知类型
+    // 一律入流，由 InquiryRunView 按类型派生；未知类型不落任何派生结果，天然静默忽略。
+    liveEventsRef.current = [...liveEventsRef.current, event];
+    setLiveEvents(liveEventsRef.current);
   };
 
   const handleStop = () => {
@@ -307,37 +288,17 @@ export function InquiryPanel() {
   const runQuestion = async (q: string, deep = deepMode) => {
     if (!q || !user || !caseId || busy) return;
     userStoppedRef.current = false;
-    toolOrderRef.current = 0;
     setBusy(true);
     setError(null);
     setInput("");
     setLiveQuestion(q);
-    setLiveText("");
-    setToolTrace([]);
-    if (deep) {
-      setActiveDeep(true);
-      try {
-        const inquiry = await askInquiryDeep(caseId, q);
-        if (!mountedRef.current) return;
-        setHistory((prev) => [...prev, inquiry]);
-        clearLiveState();
-      } catch (err) {
-        if (mountedRef.current) {
-          setError((err as Error).message);
-          clearLiveState();
-        }
-      } finally {
-        if (mountedRef.current) {
-          setActiveDeep(false);
-          setBusy(false);
-        }
-      }
-      return;
-    }
+    liveEventsRef.current = [];
+    setLiveEvents([]);
+    if (deep) setActiveDeep(true);
     const controller = new AbortController();
     streamControllerRef.current = controller;
     try {
-      await askInquiryStream(caseId, q, handleStreamEvent, controller.signal);
+      await askInquiryStream(caseId, q, handleStreamEvent, controller.signal, deep);
     } catch (err) {
       if (!userStoppedRef.current && mountedRef.current) {
         setError((err as Error).message);
@@ -346,6 +307,7 @@ export function InquiryPanel() {
     } finally {
       if (mountedRef.current) {
         if (streamControllerRef.current === controller) streamControllerRef.current = null;
+        setActiveDeep(false);
         setBusy(false);
       }
     }
@@ -382,6 +344,7 @@ export function InquiryPanel() {
     try {
       await clearInquiries(caseId);
       setHistory([]);
+      setProcessByInquiry({});
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -429,6 +392,17 @@ export function InquiryPanel() {
               </div>
               <div className="chat-content">
                 <InquiryAnswer inquiry={inq} onFrame={setFrameCite} reviewedRefs={reviewedRefs} onReview={markReviewed} />
+                {processByInquiry[inq.id]?.length ? (
+                  <details className="run-process">
+                    <summary>
+                      <svg className="icon-svg rp-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                      研判过程
+                    </summary>
+                    <InquiryRunView events={processByInquiry[inq.id]} />
+                  </details>
+                ) : null}
               </div>
             </div>
           </div>
@@ -453,46 +427,10 @@ export function InquiryPanel() {
               </div>
               <div className="chat-content">
                 <div className="live-status-badge">草稿输出 · 等待引用校验</div>
-                <p className="live-narration">{liveText || (activeDeep ? "深度分析中…（已提高检索/读取预算，可能稍慢）" : "研判中…")}</p>
-                {toolTrace.length > 0 ? (
-                  <div className="tool-trace" aria-label="工具调用轨迹">
-                    {toolTrace.map((entry) => (
-                      <div key={entry.key} className={`tool-trace__item tool-trace__item--${entry.status}`}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                          {entry.status === "running" ? (
-                            <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                            </svg>
-                          ) : (
-                            <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                            </svg>
-                          )}
-                          调用 {entry.name}…
-                        </span>
-                        <span>
-                          {entry.status === "running" ? (
-                            "进行中"
-                          ) : entry.status === "ok" ? (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                              <svg className="icon-svg" style={{ color: "var(--ok-light)", width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="20 6 9 17 4 12"/>
-                              </svg>
-                              成功
-                            </span>
-                          ) : (
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                              <svg className="icon-svg" style={{ color: "var(--danger-light)", width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                              </svg>
-                              失败
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                {activeDeep ? (
+                  <p className="live-narration">深度分析中…（已提高检索/读取预算并开启思维链，可能稍慢）</p>
                 ) : null}
+                <InquiryRunView events={liveEvents} pending />
               </div>
             </div>
           </div>
@@ -551,7 +489,7 @@ export function InquiryPanel() {
               <span style={{ fontSize: "11px", fontWeight: 600 }}>深度分析</span>
             </label>
             <div style={{ flex: 1 }} />
-            {busy && !activeDeep ? (
+            {busy ? (
               <button type="button" className="btn-stop-search" onClick={handleStop}>
                 <svg className="icon-svg" style={{ width: "12px", height: "12px", marginRight: "4px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                   <rect x="4" y="4" width="16" height="16" rx="2" />

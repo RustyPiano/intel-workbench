@@ -64,13 +64,14 @@ function citedIds(input: GenerateInput): string[] {
     .filter((id): id is string => typeof id === "string");
 }
 
-type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "duplicate-cites" | "window";
+type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "mixed-claim" | "duplicate-cites" | "window" | "structured-finding" | "tool-args-error" | "add-claim";
 
 class DynamicInquiryAdapter implements ModelAdapter {
   readonly name = "scripted-agent";
   readonly inputs: GenerateInput[] = [];
   readonly supportInputs: GenerateInput[] = [];
   readonly readContents: string[] = [];
+  private toolArgsErrorThrown = false;
 
   constructor(private readonly mode: DynamicMode) {}
 
@@ -79,10 +80,19 @@ class DynamicInquiryAdapter implements ModelAdapter {
     if (input.tools.length === 0) {
       this.supportInputs.push(input);
       if (this.mode === "nli-failure") throw new Error("support verifier failed");
-      const label = this.mode === "context-only" ? "context-only" : "supports";
+      const label = this.mode === "context-only" || (this.mode === "mixed-claim" && this.supportInputs.length === 2)
+        ? "context-only"
+        : this.mode === "structured-finding" && this.supportInputs.length === 2
+          ? "contradicts"
+          : "supports";
       return final(JSON.stringify({ label, rationale: "test support label" }));
     }
     const has = (name: string) => toolResults(input, name).length > 0;
+
+    if (this.mode === "tool-args-error" && !this.toolArgsErrorThrown) {
+      this.toolArgsErrorThrown = true;
+      throw new Error("Provider returned invalid tool arguments for search_materials");
+    }
 
     const isRepair = input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿"));
     if (this.mode === "no-finalize" && !isRepair) {
@@ -138,6 +148,47 @@ class DynamicInquiryAdapter implements ModelAdapter {
           { text: "发现红色拖船", cite_ids: [ids[1] ?? "missing-cite-id-2"] },
         ] }, "final_two_spans");
       }
+      return final();
+    }
+
+    if (this.mode === "mixed-claim") {
+      if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, "read_mixed_claim");
+      const cites = toolResults(input, "cite").length;
+      if (cites === 0) return toolCall("cite", { chunk_id: chunkId, claim: "同时发现蓝色货轮和红色拖船", quote: "雷达记录到蓝色货轮" }, "cite_mixed_blue");
+      if (cites === 1) return toolCall("cite", { chunk_id: chunkId, claim: "同时发现蓝色货轮和红色拖船", quote: "港口日志显示红色拖船" }, "cite_mixed_red");
+      if (!has("finalize_answer")) {
+        return toolCall("finalize_answer", { claims: [{ text: "同时发现蓝色货轮和红色拖船", cite_ids: citedIds(input) }] }, "final_mixed_claim");
+      }
+      return final();
+    }
+
+    if (this.mode === "structured-finding") {
+      if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, "read_structured_finding");
+      const cites = toolResults(input, "cite").length;
+      if (cites === 0) return toolCall("cite", { chunk_id: chunkId, claim: "门岗登记与OCR识别车辆数不一致", quote: "门岗登记记录车辆 2 辆" }, "cite_structured_support");
+      if (cites === 1) return toolCall("cite", { chunk_id: chunkId, claim: "门岗登记与OCR识别车辆数不一致", quote: "OCR 识别记录车辆 4 辆" }, "cite_structured_oppose");
+      const ids = citedIds(input);
+      if (!has("submit_finding")) {
+        return toolCall("submit_finding", {
+          conclusion: "门岗登记与OCR识别车辆数不一致",
+          supporting_cite_ids: [ids[0] ?? "missing-cite-id-1"],
+          opposing_cite_ids: [ids[1] ?? "missing-cite-id-2"],
+          reasoning: "门岗登记 2 辆，OCR 识别 4 辆，需人工复核",
+          open_questions: ["是否有漏记车辆"],
+        }, "submit_finding_structured");
+      }
+      if (!has("finalize_answer")) {
+        return toolCall("finalize_answer", { claims: [{ text: "门岗登记与OCR识别车辆数不一致", cite_ids: ids }] }, "final_structured_finding");
+      }
+      return final();
+    }
+
+    if (this.mode === "add-claim") {
+      // 增量流程：read→cite→add_claim 逐条提交→finalize_answer 无参数封卷。
+      if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, "read_add_claim");
+      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, "cite_add_claim");
+      if (!has("add_claim")) return toolCall("add_claim", { text: "发现舰船线索", cite_ids: [citedIds(input)[0] ?? "missing-cite-id"] }, "add_claim_1");
+      if (!has("finalize_answer")) return toolCall("finalize_answer", {}, "final_add_claim");
       return final();
     }
 
@@ -264,7 +315,24 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
     expect(inquiry.claims[0]?.support_status).toBe("supported");
     expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("supported");
+    expect(adapter.supportInputs[0]?.systemPrompt).toContain("如果 quote 是 claim 所述对比或差异中的一方原始记录");
     expect(inquiry.answer).not.toContain("raw final text");
+  });
+
+  it("runs the incremental add_claim flow and seals draft claims on empty finalize", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 增量", [
+      { filename: "intel.txt", content: "舰船线索：南海周边发现可疑舰船活动，疑似军事演习。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("add-claim");
+
+    const inquiry = await createService(fixture, adapter).ask(OPERATOR, caseId, "有何舰船线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.answer).toContain("1. 发现舰船线索");
+    expect(inquiry.claims[0]?.status).toBe("verified");
+    expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
+    expect(inquiry.claims[0]?.support_status).toBe("supported");
+    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
   });
 
   it("keeps two claims on one chunk bound to their own quoted spans", async () => {
@@ -281,6 +349,32 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
     expect(inquiry.claims[1]?.citations[0]?.support_label).toBe("supports");
     expect(inquiry.claims[0]?.citations[0]?.quote_hash).not.toBe(inquiry.claims[1]?.citations[0]?.quote_hash);
+  });
+
+  it("marks a claim support-unverified when any citation is not fully supported", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent mixed support", [
+      { filename: "intel.txt", content: "雷达记录到蓝色货轮。港口日志显示红色拖船。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("mixed-claim")).ask(OPERATOR, caseId, "有哪些船只线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.claims).toHaveLength(1);
+    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
+    expect(inquiry.claims[0]?.citations.map((citation) => citation.support_status)).toEqual(["supported", "unsupported"]);
+  });
+
+  it("stores a structured submit_finding candidate with verified supporting/opposing citations", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 结构化研判", [
+      { filename: "gate.txt", content: "舰船线索：门岗登记记录车辆 2 辆。OCR 识别记录车辆 4 辆。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("structured-finding")).ask(OPERATOR, caseId, "门岗登记与OCR识别是否一致");
+
+    expect(inquiry.submitted_findings).toHaveLength(1);
+    expect(inquiry.submitted_findings?.[0]?.supporting_citations[0]?.support_status).toBe("supported");
+    expect(inquiry.submitted_findings?.[0]?.opposing_citations[0]?.support_label).toBe("contradicts");
   });
 
   it("does not count a finalized citation as grounded unless support verification says supports", async () => {
@@ -421,15 +515,19 @@ describe.sequential("InquiryService agent harness", () => {
 
     await createService(fixture, adapter).ask(OPERATOR, caseId, "舰船线索");
 
-    // 六个只读 intel 工具 + activate_skill（渐进式加载技能，只读）；精确匹配守住"不泄漏 bash/write"红线。
+    // 受控 intel 工具 + activate_skill（渐进式加载技能，只读）；精确匹配守住"不泄漏 bash/write"红线。
     expect(adapter.inputs[0]!.tools.map((tool) => tool.name).sort()).toEqual([
       "activate_skill",
+      "add_claim",
       "cite",
+      "expand_chunk",
       "finalize_answer",
       "list_materials",
       "read_chunk",
       "read_material_window",
       "search_chunks",
+      "search_materials",
+      "submit_finding",
     ]);
   });
 
@@ -448,6 +546,23 @@ describe.sequential("InquiryService agent harness", () => {
     expect(actions).toContain("tool.list_materials");
     expect(actions).toContain("tool.read_material_window");
     expect(actions).not.toContain("tool.search_chunks");
+  });
+
+  it("feeds provider tool-argument errors back to the agent before failing the inquiry", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 工具参数修复", [
+      { filename: "intel.txt", content: "舰船线索：岸台记录到异常通信。" },
+    ]);
+    const adapter = new DynamicInquiryAdapter("tool-args-error");
+
+    const inquiry = await createService(fixture, adapter).ask(OPERATOR, caseId, "舰船线索");
+
+    expect(inquiry.status).toBe("answered");
+    expect(inquiry.answer).toContain("发现舰船线索");
+    const repairInput = adapter.inputs.find((input) =>
+      input.messages.some((message) => message.role === "user" && message.content.includes("工具调用参数格式不合法")),
+    );
+    expect(repairInput).toBeDefined();
+    expect(repairInput?.messages.some((message) => message.role === "user" && message.content.includes("Provider returned invalid tool arguments for search_materials"))).toBe(true);
   });
 
   it("exposes explicit skills to the agent and honors skills.json disable on the next ask", async () => {

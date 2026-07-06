@@ -37,6 +37,10 @@ export interface GenerateResult {
 // so the assembled result's usage may diverge from generate() for such providers.
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
+  // Provider reasoning/thinking increment (e.g. DeepSeek `reasoning_content`).
+  // Streaming-only signal: it is NOT folded into the assembled message content,
+  // so the final `complete` result stays identical to generate() for the same response.
+  | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
   | { type: "complete"; result: GenerateResult };
 

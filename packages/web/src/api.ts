@@ -7,11 +7,20 @@ import type { Clearance, Role, SessionUser } from "./types";
 
 const BASE = "/api";
 
-/** 模块级会话令牌，由 SessionProvider 在登录/恢复/登出时设置。 */
-let sessionToken: string | null = null;
+/**
+ * 会话令牌持久化至 sessionStorage，页面刷新不丢失。
+ * 取舍：令牌可被 XSS 读取（不如内存变量安全），但内网演示系统接受该风险，换取刷新免重新登录。
+ */
+function getSessionToken(): string | null {
+  return sessionStorage.getItem("session_token");
+}
 
 export function setSessionToken(token: string | null): void {
-  sessionToken = token;
+  if (token) {
+    sessionStorage.setItem("session_token", token);
+  } else {
+    sessionStorage.removeItem("session_token");
+  }
 }
 
 /** 会话失效（任意鉴权请求返回 401）回调，由 SessionProvider 注册以自动登出回登录页。 */
@@ -182,12 +191,26 @@ export interface ApiInquiry {
   claims: ApiClaim[];
 }
 
+/** 工具结果明细（检索类命中列表 / 阅读类原文预览），随 tool_result 下发。 */
+export type ApiToolDetail =
+  | { kind: "hits"; hits: { material_name: string; snippet: string }[] }
+  | { kind: "text"; text: string };
+
+/**
+ * 补充核验流式事件（事件协议 v2，server 与 web 逐字一致）。
+ * 前向兼容：消费方须静默忽略未知 type；thinking 亦可整场缺失（模型不出思维链）。
+ */
 export type ApiInquiryStreamEvent =
   | { type: "token"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
-  | { type: "tool_start"; name: string; args: Record<string, unknown> }
-  | { type: "tool_result"; name: string; ok: boolean }
-  | { type: "done"; inquiry: ApiInquiry }
+  | { type: "tool_start"; call_id: string; name: string; title: string; args_summary: string }
+  | { type: "tool_result"; call_id: string; name: string; ok: boolean; summary: string; detail?: ApiToolDetail; elapsed_ms: number }
+  | { type: "cite_added"; cite_id: string; material_name: string; quote: string }
+  | { type: "claim_added"; claim_index: number; total: number; text: string; cite_ids: string[] }
+  | { type: "finding_submitted"; conclusion: string; severity?: "low" | "medium" | "high"; supporting: number; opposing: number }
+  | { type: "budget"; read_bytes: number; budget_bytes: number; turn?: number; max_turns?: number }
+  | { type: "done"; inquiry: ApiInquiry; run_id?: string }
   | { type: "error"; message: string };
 
 export type ElementType = "person" | "org" | "location" | "event" | "equipment" | "time";
@@ -295,8 +318,11 @@ export interface ApiReport {
   drafted_by: string;
   drafted_at: string;
   submitted_by?: string;
+  submitted_at?: string;
   reviewed_by?: string;
+  approved_at?: string;
   exported_by?: string;
+  exported_at?: string;
   rendered: boolean;
 }
 
@@ -420,7 +446,8 @@ export interface ApiPromptDetail {
 
 function headers(json = false): Record<string, string> {
   const h: Record<string, string> = {};
-  if (sessionToken) h.authorization = `Bearer ${sessionToken}`;
+  const token = getSessionToken();
+  if (token) h.authorization = `Bearer ${token}`;
   if (json) h["content-type"] = "application/json";
   return h;
 }
@@ -483,6 +510,15 @@ export function getCase(id: string): Promise<ApiCase> {
   return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, { headers: headers() }).then((r) => unwrap<ApiCase>(r, "case"));
 }
 
+/** 更新专题（当前用于归档/恢复，`PATCH /api/cases/:id`；仅创建者或 admin 可调）。 */
+export function updateCase(id: string, patch: { name?: string; status?: ApiCase["status"] }): Promise<ApiCase> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify(patch),
+  }).then((r) => unwrap<ApiCase>(r, "case"));
+}
+
 export function listMaterials(caseId: string): Promise<ApiMaterial[]> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, { headers: headers() }).then((r) =>
     unwrap<ApiMaterial[]>(r, "materials"),
@@ -497,7 +533,8 @@ export function uploadMaterial(caseId: string, file: File, onProgress?: (fractio
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${BASE}/cases/${encodeURIComponent(caseId)}/materials/upload`);
-    if (sessionToken) xhr.setRequestHeader("authorization", `Bearer ${sessionToken}`);
+    const token = getSessionToken();
+    if (token) xhr.setRequestHeader("authorization", `Bearer ${token}`);
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.setRequestHeader("x-upload-filename", encodeURIComponent(file.name));
     if (onProgress && xhr.upload) {
@@ -577,15 +614,6 @@ export async function clearInquiries(caseId: string): Promise<void> {
   }
 }
 
-/** 深度分析问答（非流式）：走 agent 证据台账路径 + 扩大检索/读取预算，返回完整带引用结论。 */
-export function askInquiryDeep(caseId: string, question: string): Promise<ApiInquiry> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries`, {
-    method: "POST",
-    headers: headers(true),
-    body: JSON.stringify({ question, deep: true }),
-  }).then((r) => unwrap<ApiInquiry>(r, "inquiry"));
-}
-
 function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
@@ -611,12 +639,13 @@ export async function askInquiryStream(
   question: string,
   onEvent: (e: ApiInquiryStreamEvent) => void,
   signal?: AbortSignal,
+  deep = false,
 ): Promise<void> {
   try {
     const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/inquiries/stream`, {
       method: "POST",
       headers: headers(true),
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, deep }),
       signal,
     });
     const contentType = res.headers.get("content-type") ?? "";
@@ -768,6 +797,82 @@ export function reviewFinding(caseId: string, findingId: string, review_status: 
   }).then((r) => unwrap<ApiFinding>(r, "finding"));
 }
 
+// ---- 建议引擎（阶段 1 规则驱动 + 阶段 2 LLM 增强） ----
+
+export type QuestionSuggestionCategory = "basic" | "timeline" | "relationship" | "contradiction" | "verification" | "analysis";
+
+export interface ApiQuestionSuggestion {
+  category: QuestionSuggestionCategory;
+  question: string;
+  rationale: string;
+  priority: number;
+}
+
+export type FindingSuggestionSource = "inquiry" | "contradiction" | "element-timeline" | "inquiry-structured";
+
+export interface ApiFindingSuggestion {
+  id: string;
+  source: FindingSuggestionSource;
+  conclusion: string;
+  supporting_citations: ApiCitation[];
+  opposing_citations: ApiCitation[];
+  confidence: number;
+  reasoning: string;
+  autoGenerated: boolean;
+}
+
+export interface ApiGenerateFindingSuggestionsResult {
+  suggestions: ApiFindingSuggestion[];
+  questions: string[];
+  inquiriesCreated: number;
+  skippedExisting: number;
+}
+
+export function getSuggestedQuestions(caseId: string): Promise<ApiQuestionSuggestion[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/suggestions/questions`, { headers: headers() }).then((r) =>
+    unwrap<ApiQuestionSuggestion[]>(r, "suggestions"),
+  );
+}
+
+/** LLM 增强问题推荐（决策文档 §阶段 2.3）：LLM 未配置/调用失败时服务端已静默降级为纯规则建议，本函数无需额外兜底。 */
+export function getSuggestedQuestionsLLM(caseId: string): Promise<ApiQuestionSuggestion[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/suggestions/questions-llm`, { headers: headers() }).then((r) =>
+    unwrap<ApiQuestionSuggestion[]>(r, "suggestions"),
+  );
+}
+
+export function getSuggestedFindings(caseId: string): Promise<ApiFindingSuggestion[]> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/suggestions/findings`, { headers: headers() }).then((r) =>
+    unwrap<ApiFindingSuggestion[]>(r, "suggestions"),
+  );
+}
+
+export function generateFindingSuggestions(caseId: string): Promise<ApiGenerateFindingSuggestionsResult> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/suggestions/findings/generate`, {
+    method: "POST",
+    headers: headers(),
+  }).then(async (r) => {
+    const body = (await r.json().catch(() => ({}))) as Record<string, unknown> & { message?: string };
+    if (!r.ok || body.ok === false) {
+      noteStatus(r);
+      throw new Error(body.message ?? `请求失败（HTTP ${r.status}）`);
+    }
+    return {
+      suggestions: body.suggestions as ApiFindingSuggestion[],
+      questions: body.questions as string[],
+      inquiriesCreated: body.inquiriesCreated as number,
+      skippedExisting: body.skippedExisting as number,
+    };
+  });
+}
+
+export function applySuggestedFinding(caseId: string, suggestionId: string): Promise<ApiFinding> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/suggestions/findings/${encodeURIComponent(suggestionId)}/apply`, {
+    method: "POST",
+    headers: headers(),
+  }).then((r) => unwrap<ApiFinding>(r, "finding"));
+}
+
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 
 export type JobKind = "elements" | "contradictions";
@@ -840,6 +945,13 @@ export function exportReport(caseId: string): Promise<{ filename: string; conten
     }
     return body.export!;
   });
+}
+
+export function generateAutoDraft(caseId: string): Promise<DraftReportInput> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/auto-draft`, {
+    method: "POST",
+    headers: headers(),
+  }).then((r) => unwrap<DraftReportInput>(r, "draft"));
 }
 
 // ---- 任务编排（Batch D） ----

@@ -27,6 +27,8 @@ export interface RuntimeAgentOptions {
   globalSkillDirs?: string[];
   disabledSkillNames?: string[];
   maxTurns?: number;
+  /** 每次模型请求的最大输出 token 数；留空则用供应商默认值。长 finalize 载荷被截断时应调大。 */
+  maxOutputTokens?: number;
   readOnly?: boolean;
   allowReadOutsideWorkspace?: boolean;
   allowWriteOutsideWorkspace?: boolean;
@@ -47,6 +49,8 @@ export interface RunOverrides {
   toolMiddleware?: ToolMiddleware;
   modelAdapter?: ModelAdapter;
   onModelStreamEvent?: (event: ModelStreamEvent) => void;
+  /** 本次运行的思考开关（DeepSeek thinking:{type}）：透传到模型请求；留空则不发送。 */
+  thinking?: { type: "enabled" | "disabled" };
 }
 
 export class RuntimeConversation {
@@ -112,9 +116,11 @@ export class RuntimeConversation {
       toolRegistry,
       toolMiddleware: overrides?.toolMiddleware,
       onModelStreamEvent: overrides?.onModelStreamEvent,
+      thinking: overrides?.thinking,
       sessionStore: this.agent.sessionStore,
       signal,
       maxTurns: this.agent.maxTurns,
+      maxOutputTokens: this.agent.maxOutputTokens,
       runManager,
       createBaseSystemPrompt: () => this.getBaseSystemPrompt(),
       createActiveSkillsBlock: () => buildActiveSkillsBlock(this.agent.skillRegistry.getActiveRecords()),
@@ -158,6 +164,7 @@ export class RuntimeAgent {
   readonly sessionStore: SessionStore;
   readonly runStore: RunStore;
   readonly maxTurns: number;
+  readonly maxOutputTokens?: number;
   readonly toolConfig: ToolRuntimeConfig;
   readonly toolRegistry: ToolRegistry;
   readonly fileMutationQueue = new FileMutationQueue();
@@ -185,6 +192,7 @@ export class RuntimeAgent {
       workspaceRoot: this.workspaceRoot,
     });
     this.maxTurns = options.maxTurns ?? 30;
+    this.maxOutputTokens = options.maxOutputTokens;
     this.toolRegistry = options.baseTools ? new ToolRegistry(options.baseTools) : createDefaultToolRegistry();
     this.toolConfig = options.toolConfig ?? {
       toolTimeoutMs: 60_000,

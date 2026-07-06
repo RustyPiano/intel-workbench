@@ -1,0 +1,141 @@
+{
+  "label": "after-fix",
+  "caseId": "港口异常分析",
+  "n": 1,
+  "ts": "2026-07-06T13:49:02.423Z",
+  "questions": 10,
+  "attempts": 10,
+  "summary": {
+    "total": 10,
+    "byStatus": {
+      "answered": 8,
+      "timeout": 2
+    },
+    "finalizeRate": 0.7,
+    "fallbackRate": 0.1,
+    "errorRate": 0,
+    "errorBreakdown": [
+      {
+        "errorClass": "timeout",
+        "count": 2
+      }
+    ]
+  },
+  "results": [
+    {
+      "qid": "berth-1",
+      "category": "靠泊时间矛盾",
+      "question": "蓝海星号 2026-07-01 晚间的靠泊时间，各材料记录是否一致？请指出具体冲突和涉及的材料。",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 8,
+      "used": 9,
+      "latencyMs": 53068
+    },
+    {
+      "qid": "berth-2",
+      "category": "靠泊时间矛盾",
+      "question": "港口值班简报中“蓝海星号22:30已完成靠泊”的说法是否可信？依据哪些材料判断？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 17,
+      "used": 8,
+      "latencyMs": 123872
+    },
+    {
+      "qid": "gate-1",
+      "category": "三号门车辆数量矛盾",
+      "question": "三号门当晚的车辆进出，人工登记记录与门岗OCR识别结果是否一致？请说明具体差异。",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": false,
+      "fallback": "structured",
+      "cited": 17,
+      "used": 12,
+      "latencyMs": 90642
+    },
+    {
+      "qid": "gate-2",
+      "category": "三号门车辆数量矛盾",
+      "question": "苏E6V03号货车在登记表中的状态与地磅称重记录是否吻合？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 5,
+      "used": 7,
+      "latencyMs": 56124
+    },
+    {
+      "qid": "seal-1",
+      "category": "LH-7712关封/拆封矛盾",
+      "question": "LH-7712集装箱当晚的封志状态，堆场清点、现场照片和封志巡检记录是否一致？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 9,
+      "used": 15,
+      "latencyMs": 89095
+    },
+    {
+      "qid": "transship-1",
+      "category": "夜间转运迹象",
+      "question": "结合仓储收发台账、堆场清点记录和海关查验预约单，LH-7712是否存在违规拆封或夜间转运的迹象？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 18,
+      "used": 11,
+      "latencyMs": 136699
+    },
+    {
+      "qid": "timeline-1",
+      "category": "时间线梳理",
+      "question": "请梳理蓝海星号从靠泊到LH-7712封志巡检期间的关键时间线，按时间先后列出。",
+      "attempt": 1,
+      "status": "timeout",
+      "finalized": false,
+      "cited": 0,
+      "used": 0,
+      "errorMessage": "单题超时（180000ms）",
+      "errorClass": "timeout",
+      "latencyMs": 180030
+    },
+    {
+      "qid": "entities-1",
+      "category": "关键人物/实体",
+      "question": "本案涉及的关键车辆、集装箱和人员/单位有哪些？请列出并说明各自在事件中的角色。",
+      "attempt": 1,
+      "status": "timeout",
+      "finalized": false,
+      "cited": 0,
+      "used": 0,
+      "errorMessage": "单题超时（180000ms）",
+      "errorClass": "timeout",
+      "latencyMs": 180003
+    },
+    {
+      "qid": "insufficient-1",
+      "category": "证据不足",
+      "question": "叉车F-19当晚的操作员姓名是什么？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 2,
+      "used": 22,
+      "latencyMs": 54558
+    },
+    {
+      "qid": "insufficient-2",
+      "category": "证据不足",
+      "question": "苏E2M77号货车的委托运输公司是哪一家？",
+      "attempt": 1,
+      "status": "answered",
+      "finalized": true,
+      "cited": 5,
+      "used": 20,
+      "latencyMs": 55037
+    }
+  ]
+}

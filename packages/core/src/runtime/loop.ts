@@ -28,6 +28,13 @@ export interface LoopDependencies {
   getActiveSkillNames: () => string[];
   createToolContext: (toolCall: ToolCall) => ToolContext;
   maxTurns: number;
+  /**
+   * 每次模型请求的最大输出 token 数（透传为供应商 max_tokens）。留空则由供应商默认值
+   * 决定——DeepSeek 默认 4096（上限 8192），长 finalize 载荷易被截断，可由上层显式配置。
+   */
+  maxOutputTokens?: number;
+  /** 供应商思考开关（DeepSeek thinking:{type}）：透传给每次模型请求；留空则不发送。 */
+  thinking?: { type: "enabled" | "disabled" };
 }
 
 export interface LoopResult {
@@ -81,6 +88,35 @@ export function formatToolMessageContent(result: ToolExecutionResult): string {
     ordered.artifacts = result.artifacts;
   }
   return JSON.stringify(ordered);
+}
+
+/**
+ * 供应商返回的 tool call 参数不是合法 JSON（适配器已救援失败并打上
+ * argumentsParseError 标记）时，合成一条失败的 tool result 反馈给模型，
+ * 指示它重新调用；不真实执行工具。走普通 ToolExecutionResult 通道，
+ * 序列化与会话回放路径和真实工具失败完全一致。
+ */
+function buildArgumentsParseErrorResult(toolCall: ToolCall): ToolExecutionResult {
+  const parseError = toolCall.argumentsParseError!;
+  const truncatedHint = parseError.truncated
+    ? " The output was truncated by the max output token limit (finish_reason=length)."
+    : "";
+  const message =
+    `Tool call arguments for ${toolCall.name} were not valid JSON, so the tool was NOT executed. ` +
+    `Parse error: ${parseError.message}. ` +
+    `Raw arguments (first ${parseError.rawArguments.length} chars): ${parseError.rawArguments}` +
+    `${truncatedHint} ` +
+    `Call ${toolCall.name} again with valid JSON arguments; ` +
+    `if the output was truncated, split the work into smaller calls.`;
+  return {
+    ok: false,
+    content: message,
+    error: {
+      code: "INVALID_ARGS",
+      message,
+      retriable: true,
+    },
+  };
 }
 
 function computeSkillSignature(names: string[]): string {
@@ -160,6 +196,8 @@ export async function runAgentLoop(
           messages,
           signal: dependencies.signal,
           tools,
+          maxTokens: dependencies.maxOutputTokens,
+          thinking: dependencies.thinking,
         })) {
           if (event.type === "complete") {
             completed = event.result;
@@ -185,6 +223,8 @@ export async function runAgentLoop(
           messages,
           signal: dependencies.signal,
           tools,
+          maxTokens: dependencies.maxOutputTokens,
+          thinking: dependencies.thinking,
         });
       }
       throwIfAborted(dependencies.signal);
@@ -232,7 +272,12 @@ export async function runAgentLoop(
           runId: dependencies.runManager.runId,
         });
 
-        const runTool = () => dependencies.toolRegistry.execute(toolCall, dependencies.createToolContext(toolCall));
+        // 参数解析失败的 tool call 跳过真实执行，直接把失败结果喂回模型让它重发；
+        // 仍走 toolMiddleware 与既有的 journaling，会话形态与真实工具失败一致。
+        const runTool = () =>
+          toolCall.argumentsParseError
+            ? Promise.resolve(buildArgumentsParseErrorResult(toolCall))
+            : dependencies.toolRegistry.execute(toolCall, dependencies.createToolContext(toolCall));
         let result: ToolExecutionResult;
         let invocationError: unknown = null;
         try {

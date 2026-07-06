@@ -45,7 +45,7 @@ export class StreamingInquiryAdapter implements ModelAdapter {
   readonly name = "streaming-agent";
   readonly inputs: GenerateInput[] = [];
 
-  constructor(private readonly mode: "valid" | "invalid-cite" | "no-finalize" = "valid") {}
+  constructor(private readonly mode: "valid" | "invalid-cite" | "no-finalize" | "add-claim" = "valid") {}
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     this.inputs.push(input);
@@ -53,6 +53,17 @@ export class StreamingInquiryAdapter implements ModelAdapter {
       return final(JSON.stringify({ label: "supports", rationale: "test support label" }));
     }
     const has = (name: string) => toolResults(input, name).length > 0;
+
+    // add-claim 模式：search→read→cite→add_claim→finalize_answer(空)，驱动逐条提交路径。
+    if (this.mode === "add-claim") {
+      if (!has("search_chunks")) return toolCall("search_chunks", { query: "舰船 线索", k: 6 }, `search_${this.inputs.length}`);
+      const chunkId = firstSearchChunkId(input);
+      if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, `read_${this.inputs.length}`);
+      if (!has("cite")) return toolCall("cite", { chunk_id: chunkId, claim: "发现舰船线索", quote: "舰船线索" }, `cite_${this.inputs.length}`);
+      if (!has("add_claim")) return toolCall("add_claim", { text: "发现舰船线索", cite_ids: [citedIds(input)[0] ?? "missing-cite-id"] }, `claim_${this.inputs.length}`);
+      if (!has("finalize_answer")) return toolCall("finalize_answer", {}, `final_${this.inputs.length}`);
+      return final("streamed narration");
+    }
 
     const isRepair = input.messages.some((message) => message.role === "user" && message.content.includes("上一轮自然语言结尾只是草稿"));
     if (this.mode === "no-finalize" && !isRepair) {
@@ -85,6 +96,10 @@ export class StreamingInquiryAdapter implements ModelAdapter {
   }
 
   async *stream(input: GenerateInput): AsyncIterable<ModelStreamEvent> {
+    // 深度分析开思考时透传一段 reasoning 增量（模拟 DeepSeek reasoning_content）。
+    if (input.thinking?.type === "enabled") {
+      yield { type: "reasoning_delta", text: "分析证据…" };
+    }
     const result = await this.generate(input);
     const toolCalls = result.message.toolCalls ?? [];
     for (const [index, call] of toolCalls.entries()) {

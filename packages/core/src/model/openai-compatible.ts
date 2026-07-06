@@ -121,7 +121,97 @@ function extractProviderError(error: unknown): RuntimeError {
   });
 }
 
-function mapToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
+// 供应商返回的 tool call 参数偶尔不是干净的 JSON（被 max_tokens 截断、夹带 markdown
+// 代码围栏或解释性尾巴）。抛致命错误会让整次运行报废、模型没有自我纠正机会，故改为：
+// 先做轻量修复救援，救不回则打上 argumentsParseError 标记，交由运行循环反馈给模型。
+const MAX_RAW_ARGUMENTS_PREVIEW = 200;
+
+// 剥离 ```json ... ``` / ``` ... ``` 代码围栏，返回围栏内部内容；无围栏时原样返回。
+function stripCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/iu);
+  return match ? match[1]! : text;
+}
+
+// 截取到第一个顶层结构（对象/数组）平衡闭合处的前缀，丢弃其后的杂质；正确跳过字符串
+// 字面量内的括号与转义。找不到平衡闭合（例如被截断）时返回 null。
+function balancedJsonPrefix(text: string): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let started = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{" || char === "[") {
+      depth += 1;
+      started = true;
+    } else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (started && depth === 0) {
+        return text.slice(0, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+// 轻量救援：剥离代码围栏后，依次尝试整体清洗结果与其平衡前缀；任一能解析为 JSON 对象
+// 即返回，否则返回 null（交由上层标记为解析失败）。
+function rescueToolArguments(rawArguments: string): Record<string, unknown> | null {
+  const cleaned = stripCodeFence(rawArguments).trim();
+  for (const candidate of [cleaned, balancedJsonPrefix(cleaned)]) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 继续尝试下一个候选
+    }
+  }
+  return null;
+}
+
+// 把（可能不干净的）字符串参数解析为 arguments；直接解析失败则先救援，救不回则返回带
+// parseError 标记的空对象。`truncated` 透传供应商是否报告输出被截断。
+function parseToolCallArguments(
+  rawArguments: string,
+  truncated: boolean,
+): { arguments: Record<string, unknown>; parseError?: NonNullable<ToolCall["argumentsParseError"]> } {
+  try {
+    return { arguments: JSON.parse(rawArguments) as Record<string, unknown> };
+  } catch (error) {
+    const rescued = rescueToolArguments(rawArguments);
+    if (rescued) {
+      return { arguments: rescued };
+    }
+    return {
+      arguments: {},
+      parseError: {
+        message: error instanceof Error ? error.message : String(error),
+        rawArguments: rawArguments.slice(0, MAX_RAW_ARGUMENTS_PREVIEW),
+        truncated,
+      },
+    };
+  }
+}
+
+function mapToolCall(toolCall: ChatCompletionMessageToolCall, truncated: boolean): ToolCall {
   if (toolCall.type !== "function") {
     throw new RuntimeError({
       code: "MODEL_ERROR",
@@ -132,24 +222,13 @@ function mapToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
   const rawArguments: unknown = toolCall.function.arguments;
 
   if (typeof rawArguments === "string") {
-    try {
-      return {
-        id: toolCall.id,
-        name: toolCall.function.name,
-        arguments: JSON.parse(rawArguments) as Record<string, unknown>,
-      };
-    } catch (error) {
-      throw new RuntimeError({
-        code: "MODEL_ERROR",
-        message: `Provider returned invalid tool arguments for ${toolCall.function.name}`,
-        details: {
-          category: "incompatible_response",
-          name: toolCall.function.name,
-          arguments: rawArguments,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-    }
+    const { arguments: parsedArguments, parseError } = parseToolCallArguments(rawArguments, truncated);
+    return {
+      id: toolCall.id,
+      name: toolCall.function.name,
+      arguments: parsedArguments,
+      ...(parseError ? { argumentsParseError: parseError } : {}),
+    };
   }
 
   if (rawArguments !== null && typeof rawArguments === "object") {
@@ -236,14 +315,17 @@ function mapTools(input: GenerateInput): ChatCompletionTool[] {
   }));
 }
 
-function mapAssistantMessage(message: {
-  content: string | null;
-  tool_calls?: ChatCompletionMessageToolCall[];
-}): AssistantMessage {
+function mapAssistantMessage(
+  message: {
+    content: string | null;
+    tool_calls?: ChatCompletionMessageToolCall[];
+  },
+  truncated: boolean,
+): AssistantMessage {
   return {
     role: "assistant",
     content: message.content ?? "",
-    toolCalls: message.tool_calls?.map(mapToolCall),
+    toolCalls: message.tool_calls?.map((toolCall) => mapToolCall(toolCall, truncated)),
   };
 }
 
@@ -381,7 +463,7 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
     const choice = getFirstChoice(response);
 
     return {
-      message: mapAssistantMessage(choice.message),
+      message: mapAssistantMessage(choice.message, choice.finish_reason === "length"),
       stopReason: mapStopReason(choice.finish_reason),
       usage: response.usage
         ? {
@@ -429,6 +511,13 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         if (typeof text === "string" && text.length > 0) {
           content += text;
           yield { type: "text_delta", text };
+        }
+
+        // DeepSeek 推理内容增量（reasoning_content）：仅作思维链信号透传，不并入 content，
+        // 故汇总出的 message 与 generate() 一致（generate() 同样只取 message.content）。
+        const reasoning = (choice?.delta as { reasoning_content?: unknown } | undefined)?.reasoning_content;
+        if (typeof reasoning === "string" && reasoning.length > 0) {
+          yield { type: "reasoning_delta", text: reasoning };
         }
 
         for (const toolCall of choice?.delta?.tool_calls ?? []) {
@@ -499,10 +588,13 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
         };
       });
 
-    const message = mapAssistantMessage({
-      content: content.length ? content : null,
-      tool_calls: assembledToolCalls.length ? assembledToolCalls : undefined,
-    });
+    const message = mapAssistantMessage(
+      {
+        content: content.length ? content : null,
+        tool_calls: assembledToolCalls.length ? assembledToolCalls : undefined,
+      },
+      finishReason === "length",
+    );
 
     yield {
       type: "complete",

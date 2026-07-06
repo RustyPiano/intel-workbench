@@ -24,7 +24,7 @@ export function createInquiriesRouter(inquiries: InquiryService): Router {
   });
 
   router.post("/:id/inquiries/stream", async (req, res) => {
-    const { question } = (req.body ?? {}) as { question?: string };
+    const { question, deep } = (req.body ?? {}) as { question?: string; deep?: boolean };
     const controller = new AbortController();
     // 仅当响应未正常结束时中止 agent run（客户端真正断连）。
     // 不能用 req 的 "close"：它在请求体读完即触发（早于流式响应、res 仍未结束），
@@ -51,7 +51,7 @@ export function createInquiriesRouter(inquiries: InquiryService): Router {
     };
 
     try {
-      await inquiries.askStream(req.identity, req.params.id, question ?? "", onEvent, controller.signal);
+      await inquiries.askStream(req.identity, req.params.id, question ?? "", onEvent, controller.signal, deep === true);
       if (!started) start(); // 兜底：askStream 总会 emit done，此处确保即便未 emit 也有响应头。
     } catch (e) {
       if (!started) {

@@ -12,10 +12,23 @@ import type { OfflineGuard } from "../security/offline-guard.js";
 import { sha256, sha256Bytes } from "../util/hash.js";
 import { chunkToCitation } from "./citation.js";
 
+export interface SubmittedFinding {
+  conclusion: string;
+  supporting_cite_ids: string[];
+  opposing_cite_ids: string[];
+  reasoning?: string;
+  confidence?: number;
+  severity?: "low" | "medium" | "high";
+  open_questions: string[];
+}
+
 export interface CitationLedger {
   retrieved: Map<string, Chunk>;
   cited: Map<string, Citation>;
+  /** add_claim 逐条累积的待封卷结论；finalize_answer 空参调用时封为 finalize。 */
+  draftClaims: { text: string; cite_ids: string[] }[];
   finalize: { claims: { text: string; cite_ids: string[] }[] } | null;
+  submittedFindings: SubmittedFinding[];
   readBytes: number;
   nextCiteSeq: number;
 }
@@ -27,11 +40,16 @@ interface LoadedMaterial {
 }
 
 export function createCitationLedger(): CitationLedger {
-  return { retrieved: new Map(), cited: new Map(), finalize: null, readBytes: 0, nextCiteSeq: 0 };
+  return { retrieved: new Map(), cited: new Map(), draftClaims: [], finalize: null, submittedFindings: [], readBytes: 0, nextCiteSeq: 0 };
 }
 
 const MAX_FINAL_CLAIMS = 12;
 const MAX_CITES_PER_CLAIM = 8;
+const MAX_SEARCH_MATERIAL_MATCHES = 50;
+const MAX_SEARCH_CONTEXT_CHARS = 200;
+const MAX_SEARCH_MATCH_CHARS = 80;
+const MAX_SEARCH_PREVIEW_CHARS = 240;
+const MAX_EXPAND_NEIGHBORS = 8;
 
 export interface IntelToolDeps {
   ledger: CitationLedger;
@@ -69,6 +87,58 @@ function sliceByUtf8Bytes(text: string, maxBytes: number): { text: string; bytes
   return { text: out, bytes };
 }
 
+// 引用模糊定位归一化（工程方案 §7.3 step 4）：仅折叠空白 + 统一全/半角标点与中英引号变体，
+// 用于 exact indexOf 失败后的保守回退匹配；命中后按 map 映射回原文逐字片段登记，内容哈希链不变。
+function foldChar(ch: string): string {
+  // 中英双引号/单引号变体统一（含 CJK 引号、书名号内引号）。
+  if ("“”„‟「」『』«»".includes(ch)) return '"';
+  if ("‘’‚‛".includes(ch)) return "'";
+  // 全角 ASCII（U+FF01–FF5E）→ 半角。
+  const code = ch.codePointAt(0)!;
+  if (code >= 0xff01 && code <= 0xff5e) return String.fromCodePoint(code - 0xfee0);
+  // 常用中文标点 → 对应半角。
+  if (ch === "。") return ".";
+  if (ch === "、") return ",";
+  return ch;
+}
+
+/** 归一化文本并记录每个归一字符对应的原文 UTF-16 下标（连续空白折叠为单个空格）。 */
+function normalizeForMatch(text: string): { norm: string; map: number[] } {
+  const chars: string[] = [];
+  const map: number[] = [];
+  let prevSpace = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (/\s/.test(ch)) {
+      if (!prevSpace) {
+        chars.push(" ");
+        map.push(i);
+        prevSpace = true;
+      }
+      continue;
+    }
+    prevSpace = false;
+    chars.push(foldChar(ch));
+    map.push(i);
+  }
+  return { norm: chars.join(""), map };
+}
+
+/**
+ * exact indexOf 失败后的保守归一化定位：在归一空间命中后映射回原文逐字片段。
+ * 命中返回原文片段与其起点（首次出现语义与 exact 一致，偏移消歧仍为 Batch F deferred）；未命中返回 null。
+ */
+function fuzzyLocate(text: string, quote: string): { quote: string; start: number } | null {
+  const { norm, map } = normalizeForMatch(text);
+  const normQuote = normalizeForMatch(quote).norm.trim();
+  if (normQuote.length === 0) return null;
+  const nStart = norm.indexOf(normQuote);
+  if (nStart < 0) return null;
+  const start = map[nStart]!;
+  const end = map[nStart + normQuote.length - 1]! + 1;
+  return { quote: text.slice(start, end), start };
+}
+
 function overlaps(segStart: number, segEnd: number, t0?: number, t1?: number): boolean {
   const start = t0 ?? Number.NEGATIVE_INFINITY;
   const end = t1 ?? Number.POSITIVE_INFINITY;
@@ -90,6 +160,61 @@ function errorMessage(error: unknown): string {
 function tempExt(format?: string): string {
   const ext = (format ?? "").toLowerCase();
   return /^[a-z0-9]+$/.test(ext) ? ext : "bin";
+}
+
+function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  const n = typeof parsed === "number" && Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean))]
+    : [];
+}
+
+function searchQuery(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean).join(" ");
+  return "";
+}
+
+function searchPreview(text: string, at: number, needleChars: number, contextChars: number) {
+  const visibleNeedleChars = Math.min(needleChars, MAX_SEARCH_MATCH_CHARS);
+  const sideContextChars = Math.min(contextChars, Math.floor(Math.max(0, MAX_SEARCH_PREVIEW_CHARS - visibleNeedleChars) / 2));
+  const beforeStart = Math.max(0, at - sideContextChars);
+  const matchEnd = Math.min(text.length, at + visibleNeedleChars);
+  const afterStart = Math.min(text.length, at + needleChars);
+  const afterEnd = Math.min(text.length, afterStart + sideContextChars);
+  let before = text.slice(beforeStart, at);
+  let match = text.slice(at, matchEnd);
+  let after = text.slice(afterStart, afterEnd);
+  let truncatedBefore = beforeStart > 0;
+  let matchTruncated = visibleNeedleChars < needleChars;
+  let truncatedAfter = afterEnd < text.length;
+
+  if (!truncatedBefore && !matchTruncated && !truncatedAfter && `${before}${match}${after}` === text && text.length > 1) {
+    if (after.length > 0) {
+      after = after.slice(0, -1);
+      truncatedAfter = true;
+    } else if (before.length > 0) {
+      before = before.slice(1);
+      truncatedBefore = true;
+    } else if (match.length > 1) {
+      match = match.slice(0, -1);
+      matchTruncated = true;
+    }
+  }
+
+  return {
+    before,
+    match,
+    after,
+    ...(truncatedBefore ? { truncated_before: true } : {}),
+    ...(matchTruncated ? { match_truncated: true } : {}),
+    ...(truncatedAfter ? { truncated_after: true } : {}),
+  };
 }
 
 async function withTempMaterialFile<T>(loaded: LoadedMaterial, fn: (file: string) => Promise<T>): Promise<T> {
@@ -180,6 +305,48 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
               };
             },
           },
+	          {
+	            name: "search_materials",
+	            description: "在本专题已加工切块中做大小写不敏感的确定性子串检索；返回短上下文，命中片段可继续 cite。",
+	            inputSchema: z.object({
+	              query: z.union([z.string(), z.array(z.string())]).optional(),
+	              material_id: z.union([z.string(), z.null()]).optional(),
+	              max_matches: z.union([z.number(), z.string()]).optional(),
+	              context_chars: z.union([z.number(), z.string()]).optional(),
+	            }),
+	            async execute(args: unknown) {
+	              const { material_id } = args as { material_id?: unknown };
+	              const needle = searchQuery((args as { query?: unknown }).query);
+	              if (!needle) return { ok: false, content: "query 不能为空" };
+	              const materialId = typeof material_id === "string" && material_id.trim() ? material_id.trim() : undefined;
+	              if (materialId && !deps.nameById.has(materialId)) return unavailable();
+	              const maxMatches = boundedInt((args as { max_matches?: unknown }).max_matches, 20, 1, MAX_SEARCH_MATERIAL_MATCHES);
+	              const contextChars = boundedInt((args as { context_chars?: unknown }).context_chars, 40, 0, MAX_SEARCH_CONTEXT_CHARS);
+	              const foldedNeedle = needle.toLocaleLowerCase();
+              const indexes = new Map<string, number>();
+              const matches: unknown[] = [];
+              for (const chunk of await deps.navigation!.loadChunks()) {
+                const chunkIndex = indexes.get(chunk.material_id) ?? 0;
+                indexes.set(chunk.material_id, chunkIndex + 1);
+	                if (materialId && chunk.material_id !== materialId) continue;
+                const foldedText = chunk.text.toLocaleLowerCase();
+                for (let at = foldedText.indexOf(foldedNeedle); at >= 0 && matches.length < maxMatches; at = foldedText.indexOf(foldedNeedle, at + needle.length)) {
+                  deps.ledger.retrieved.set(chunk.chunk_id, chunk);
+                  matches.push({
+                    material_id: chunk.material_id,
+                    material_name: deps.nameById.get(chunk.material_id) ?? chunk.material_id,
+                    modality: chunk.modality,
+                    chunk_id: chunk.chunk_id,
+                    chunk_index: chunkIndex,
+                    ...searchPreview(chunk.text, at, needle.length, contextChars),
+                    locator: chunk.locator,
+                  });
+                }
+                if (matches.length >= maxMatches) break;
+              }
+              return { ok: true, content: JSON.stringify(matches) };
+            },
+          },
           {
             name: "read_material_window",
             description: "按素材内 chunk 顺序读取一个窗口；start_chunk 从 0 开始。读到的 chunk 可继续 cite，受本次问答读取预算限制。",
@@ -220,20 +387,62 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
               return { ok: true, content: JSON.stringify({ material_id, start_chunk, chunks: read, note }) };
             },
           },
+          {
+            name: "expand_chunk",
+            description: "围绕已进入本轮证据集的 chunk 读取同素材相邻切块；受读取预算限制，扩展片段可继续 cite。",
+            inputSchema: z.object({
+              chunk_id: z.string(),
+              before: z.number().int().optional(),
+              after: z.number().int().optional(),
+            }),
+            async execute(args: unknown) {
+              const { chunk_id } = args as { chunk_id?: string };
+              const base = typeof chunk_id === "string" ? deps.ledger.retrieved.get(chunk_id) : undefined;
+              if (!base) return { ok: false, content: "未检索到该片段，请先 search_chunks/search_materials/read_material_window" };
+              const before = boundedInt((args as { before?: unknown }).before, 1, 0, MAX_EXPAND_NEIGHBORS);
+              const after = boundedInt((args as { after?: unknown }).after, 1, 0, MAX_EXPAND_NEIGHBORS);
+              const chunks = (await deps.navigation!.loadChunks()).filter((chunk) => chunk.material_id === base.material_id);
+              const center = chunks.findIndex((chunk) => chunk.chunk_id === base.chunk_id);
+              if (center < 0) return { ok: false, content: "该片段不在当前专题可读切块中。" };
+              const read: unknown[] = [];
+              let note: string | undefined;
+              for (let i = Math.max(0, center - before); i <= Math.min(chunks.length - 1, center + after); i++) {
+                if (deps.ledger.readBytes >= deps.readBudgetBytes) {
+                  note = `读取预算已用尽（已读 ${deps.ledger.readBytes} 字节）。`;
+                  break;
+                }
+                const chunk = chunks[i]!;
+                const remaining = Math.max(0, deps.readBudgetBytes - deps.ledger.readBytes);
+                const capped = sliceByUtf8Bytes(chunk.text, Math.min(deps.perReadCapBytes, remaining));
+                deps.ledger.readBytes += capped.bytes;
+                deps.ledger.retrieved.set(chunk.chunk_id, chunk);
+                read.push({
+                  chunk_index: i,
+                  chunk_id: chunk.chunk_id,
+                  text: capped.text,
+                  truncated: capped.bytes < Buffer.byteLength(chunk.text, "utf8"),
+                  locator: chunk.locator,
+                  material_name: deps.nameById.get(chunk.material_id) ?? chunk.material_id,
+                  modality: chunk.modality,
+                });
+              }
+              return { ok: true, content: JSON.stringify({ chunk_id: base.chunk_id, chunks: read, note }) };
+            },
+          },
         ]
       : []),
     {
       name: "read_chunk",
-      description: "读取已由 search_chunks 检索到的片段全文；受本次问答读取预算限制，不能读取未进入本轮证据集的片段。",
+      description: "读取已进入本轮证据集的片段全文；受本次问答读取预算限制，不能读取未进入本轮证据集的片段。",
       inputSchema: z.object({ chunk_id: z.string() }),
       async execute(args) {
         const { chunk_id } = args as { chunk_id: string };
         const chunk = deps.ledger.retrieved.get(chunk_id);
-        if (!chunk) return { ok: false, content: "未检索到该片段，请先 search_chunks" };
+        if (!chunk) return { ok: false, content: "未检索到该片段，请先 search_chunks/search_materials/read_material_window" };
         if (deps.ledger.readBytes >= deps.readBudgetBytes) {
           return {
             ok: true,
-            content: `读取预算已用尽（已读 ${deps.ledger.readBytes} 字节）。请基于已读内容调用 finalize_answer。`,
+            content: `读取预算已用尽（已读 ${deps.ledger.readBytes} 字节）。请基于已读内容 cite→add_claim 提交结论，并调用 finalize_answer 封卷。`,
           };
         }
         const remaining = Math.max(0, deps.readBudgetBytes - deps.ledger.readBytes);
@@ -256,30 +465,117 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
           };
         }
         // indexOf resolves repeated text to the first occurrence; offset disambiguation is deferred to Batch F's 引用定位准确率 metric.
-        const quoteStart = typeof quote === "string" ? chunk.text.indexOf(quote) : -1;
+        let quoteStart = typeof quote === "string" ? chunk.text.indexOf(quote) : -1;
+        let effectiveQuote = quote;
+        // exact 失败时做保守归一化回退（空白/全半角/引号变体），命中后映射回原文逐字片段登记（哈希链不变）。
+        if (typeof quote === "string" && quote.length > 0 && quoteStart < 0) {
+          const located = fuzzyLocate(chunk.text, quote);
+          if (located) {
+            quoteStart = located.start;
+            effectiveQuote = located.quote;
+          }
+        }
         if (typeof quote !== "string" || quote.length === 0 || quoteStart < 0) {
           return {
             ok: false,
-            content: "引用无效：quote 必须是该片段原文中的逐字子串，请复制原文支撑句。",
+            content: "引用无效：quote 在该片段原文中（含空白/全半角/引号归一化）仍无法逐字定位，请从 read_chunk 返回的原文中原样复制支撑句。",
           };
         }
         deps.ledger.nextCiteSeq += 1;
         const cite_id = `cite-${deps.ledger.nextCiteSeq}`;
-        deps.ledger.cited.set(cite_id, chunkToCitation(chunk, deps.nameById.get(chunk.material_id) ?? chunk.material_id, 0.6, quote, quoteStart));
+        deps.ledger.cited.set(cite_id, chunkToCitation(chunk, deps.nameById.get(chunk.material_id) ?? chunk.material_id, 0.6, effectiveQuote, quoteStart));
         return { ok: true, content: JSON.stringify({ cite_id, chunk_id }) };
+      },
+    },
+    {
+      name: "submit_finding",
+      description: "把本轮已 cite 的引用组织成结构化候选结论；随问答保存并进入结论核验候选来源，不会直接进入核验池或报告。",
+      inputSchema: z.object({
+        conclusion: z.string(),
+        supporting_cite_ids: z.array(z.string()),
+        opposing_cite_ids: z.array(z.string()).optional(),
+        reasoning: z.string().optional(),
+        confidence: z.number().min(0).max(1).optional(),
+        severity: z.enum(["low", "medium", "high"]).optional(),
+        open_questions: z.array(z.string()).optional(),
+      }),
+      async execute(args: unknown) {
+        const input = args as {
+          conclusion?: unknown;
+          supporting_cite_ids?: unknown;
+          opposing_cite_ids?: unknown;
+          reasoning?: unknown;
+          confidence?: unknown;
+          severity?: unknown;
+          open_questions?: unknown;
+        };
+        const conclusion = typeof input.conclusion === "string" ? input.conclusion.trim() : "";
+        if (!conclusion) return { ok: false, content: "conclusion 不能为空" };
+        const supporting = stringList(input.supporting_cite_ids);
+        const opposing = stringList(input.opposing_cite_ids);
+        if (supporting.length === 0) return { ok: false, content: "supporting_cite_ids 至少需要 1 个 cite_id" };
+        const missing = [...supporting, ...opposing].filter((citeId) => !deps.ledger.cited.has(citeId));
+        if (missing.length > 0) return { ok: false, content: `未知 cite_id：${missing.join(", ")}` };
+        const confidence = typeof input.confidence === "number" && Number.isFinite(input.confidence) ? input.confidence : undefined;
+        if (confidence !== undefined && (confidence < 0 || confidence > 1)) return { ok: false, content: "confidence 必须在 0 到 1 之间" };
+        const severity = input.severity === "low" || input.severity === "medium" || input.severity === "high" ? input.severity : undefined;
+        if (input.severity !== undefined && severity === undefined) return { ok: false, content: "severity 必须是 low/medium/high" };
+        const reasoning = typeof input.reasoning === "string" && input.reasoning.trim() ? input.reasoning.trim() : undefined;
+        const finding: SubmittedFinding = {
+          conclusion,
+          supporting_cite_ids: supporting,
+          opposing_cite_ids: opposing,
+          ...(reasoning ? { reasoning } : {}),
+          ...(confidence !== undefined ? { confidence } : {}),
+          ...(severity ? { severity } : {}),
+          open_questions: stringList(input.open_questions),
+        };
+        deps.ledger.submittedFindings.push(finding);
+        return { ok: true, content: JSON.stringify({ finding_index: deps.ledger.submittedFindings.length - 1 }) };
+      },
+    },
+    {
+      name: "add_claim",
+      description:
+        "每次提交一条结论，代替 finalize_answer 一次性提交所有结论的大 JSON。text 是结论文本，cite_ids 必须是 cite 工具返回的 cite_id（不是 chunk_id）。逐条提交后再调用 finalize_answer（无参数）封卷。",
+      inputSchema: z.object({ text: z.string().min(1), cite_ids: z.array(z.string()) }),
+      async execute(args) {
+        const { text, cite_ids } = args as { text: string; cite_ids: string[] };
+        if (cite_ids.length > MAX_CITES_PER_CLAIM) {
+          return { ok: false, content: `一条结论最多绑定 ${MAX_CITES_PER_CLAIM} 条引用，请精简 cite_ids。` };
+        }
+        const missing = cite_ids.filter((id) => !deps.ledger.cited.has(id));
+        if (missing.length > 0) {
+          return { ok: false, content: `以下 cite_id 未登记（须先 cite 成功获取）：${missing.join("、")}` };
+        }
+        if (deps.ledger.draftClaims.length >= MAX_FINAL_CLAIMS) {
+          return { ok: false, content: `结论数量已达上限 ${MAX_FINAL_CLAIMS}，请 finalize_answer 封卷。` };
+        }
+        deps.ledger.draftClaims.push({ text, cite_ids });
+        return { ok: true, content: JSON.stringify({ claim_index: deps.ledger.draftClaims.length, total: deps.ledger.draftClaims.length }) };
       },
     },
     {
       name: "finalize_answer",
       description:
-        "最终结论唯一入口，整次问答只调一次；每条 claim 的 cite_ids 必须是 cite 工具返回的 cite_id。最终答案只从这里 + 已接地引用生成，未在此处的内容一律丢弃。",
+        "封卷结论、结束问答，整次只调一次；无参数调用即封存已用 add_claim 逐条提交的结论（推荐）。也兼容一次性传 claims（每条 cite_ids 须是 cite 返回的 cite_id）。最终答案只从封卷结论 + 已接地引用生成，其余一律丢弃；即使证据不足也要调用以封卷结束。",
       inputSchema: z.object({
-        claims: z.array(z.object({ text: z.string(), cite_ids: z.array(z.string()).max(MAX_CITES_PER_CLAIM) }).strict()).max(MAX_FINAL_CLAIMS),
+        claims: z.array(z.object({ text: z.string(), cite_ids: z.array(z.string()).max(MAX_CITES_PER_CLAIM) }).strict()).max(MAX_FINAL_CLAIMS).optional(),
       }),
       async execute(args) {
-        const { claims } = args as { claims: { text: string; cite_ids: string[] }[] };
-        deps.ledger.finalize = { claims };
-        return { ok: true, content: "已提交最终结论。" };
+        const { claims } = args as { claims?: { text: string; cite_ids: string[] }[] };
+        // 带 claims（非空）→ 维持一次性提交的旧语义（向后兼容）。
+        if (claims && claims.length > 0) {
+          deps.ledger.finalize = { claims };
+          return { ok: true, content: "已提交最终结论。" };
+        }
+        // 空参 → 封存 add_claim 逐条累积的 draftClaims。
+        if (deps.ledger.draftClaims.length > 0) {
+          deps.ledger.finalize = { claims: deps.ledger.draftClaims };
+          return { ok: true, content: `已封卷 ${deps.ledger.draftClaims.length} 条结论。` };
+        }
+        // draftClaims 与 claims 皆空 → 提示先 add_claim。
+        return { ok: false, content: "尚无可封卷的结论：请先用 add_claim 逐条提交结论，再调用 finalize_answer 封卷。" };
       },
     },
   ];

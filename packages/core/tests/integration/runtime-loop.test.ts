@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { RuntimeAgent } from "../../src/runtime/agent.js";
 import { SessionStore } from "../../src/runtime/session.js";
 import { ScriptedModelAdapter } from "../../src/model/mock.js";
+import { OpenAICompatibleModelAdapter } from "../../src/model/openai-compatible.js";
 
 const tempRoots: string[] = [];
 
@@ -578,5 +579,196 @@ describe("RuntimeAgent", () => {
     expect(secondSystem).not.toContain("MARKER_SECOND");
 
     await rm(agentsPath);
+  });
+
+  test("rescues tool arguments with trailing junk end-to-end and executes the tool normally", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "README.md"), "RESCUE_OK\n", "utf8");
+
+    // 走真实适配器（注入假 client），验证救援后的 tool call 与干净参数一样正常执行。
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    const responses = [
+      {
+        id: "chatcmpl_1",
+        object: "chat.completion",
+        choices: [
+          {
+            message: {
+              content: "Reading the file.",
+              tool_calls: [
+                {
+                  id: "call_dirty_read",
+                  type: "function",
+                  function: {
+                    name: "read",
+                    // 平衡对象之后夹带解释性尾巴——应被救援为 {"path":"README.md"}
+                    arguments: '{"path":"README.md"} Sorry, here is some extra text.',
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+      {
+        id: "chatcmpl_2",
+        object: "chat.completion",
+        choices: [{ message: { content: "Done after rescue." }, finish_reason: "stop" }],
+      },
+    ];
+    let callIndex = 0;
+    (adapter as unknown as { client: unknown }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return responses[callIndex++];
+          },
+        },
+      },
+    };
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: adapter,
+    });
+
+    const result = await agent.run("Read the file.");
+
+    expect(result.finalMessage.content).toBe("Done after rescue.");
+    const session = await agent.sessionStore.loadSession(result.sessionId);
+    const readResult = session.entries.find(
+      (entry) => entry.type === "tool_result" && entry.toolCallId === "call_dirty_read",
+    );
+    expect(readResult).toMatchObject({ type: "tool_result", ok: true });
+    expect((readResult as { content: string }).content).toContain("RESCUE_OK");
+  });
+
+  test("feeds unparseable tool arguments back to the model and completes when it retries", async () => {
+    const workspaceRoot = await createWorkspace();
+    await writeFile(path.join(workspaceRoot, "README.md"), "RETRY_OK\n", "utf8");
+
+    const model = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Calling read with broken arguments.",
+          toolCalls: [
+            {
+              id: "call_bad_args",
+              name: "read",
+              arguments: {},
+              argumentsParseError: {
+                message: "Unexpected end of JSON input",
+                rawArguments: '{"path":"README',
+                truncated: true,
+              },
+            },
+          ],
+        },
+        stopReason: "max_tokens",
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Retrying with valid arguments.",
+          toolCalls: [{ id: "call_retry", name: "read", arguments: { path: "README.md" } }],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: { role: "assistant", content: "Recovered." },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: model,
+    });
+
+    const result = await agent.run("Read the file.");
+
+    expect(result.finalMessage.content).toBe("Recovered.");
+
+    // 解析失败的调用不真实执行，合成失败结果并写入会话。
+    const session = await agent.sessionStore.loadSession(result.sessionId);
+    const failedResult = session.entries.find(
+      (entry) => entry.type === "tool_result" && entry.toolCallId === "call_bad_args",
+    );
+    expect(failedResult).toMatchObject({
+      type: "tool_result",
+      ok: false,
+      error: { code: "INVALID_ARGS" },
+    });
+
+    // 反馈内容进入下一轮模型上下文：说明不是合法 JSON、带原始参数预览与截断提示。
+    const feedback = model.inputs[1]?.messages.find(
+      (message) => message.role === "tool" && message.toolCallId === "call_bad_args",
+    );
+    expect(feedback?.content).toContain("not valid JSON");
+    // tool 消息内容是 JSON 序列化后的结果，原始参数预览以转义形式出现。
+    expect(feedback?.content).toContain('{\\"path\\":\\"README');
+    expect(feedback?.content).toContain("truncated by the max output token limit");
+
+    // 重试的调用真实执行成功。
+    const retryResult = session.entries.find(
+      (entry) => entry.type === "tool_result" && entry.toolCallId === "call_retry",
+    );
+    expect(retryResult).toMatchObject({ type: "tool_result", ok: true });
+  });
+
+  test("feeds unparseable tool arguments back on the streaming path as well", async () => {
+    const workspaceRoot = await createWorkspace();
+
+    const model = new ScriptedModelAdapter([
+      {
+        message: {
+          role: "assistant",
+          content: "Calling read with broken arguments.",
+          toolCalls: [
+            {
+              id: "call_bad_stream",
+              name: "read",
+              arguments: {},
+              argumentsParseError: {
+                message: "Unexpected token n in JSON",
+                rawArguments: "{not json",
+                truncated: false,
+              },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+      {
+        message: { role: "assistant", content: "Recovered from stream." },
+        stopReason: "end_turn",
+      },
+    ]);
+
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: model,
+    });
+
+    const conversation = await agent.createConversation();
+    // 传入 onModelStreamEvent 使循环走 stream() 路径。
+    const result = await conversation.send("Read the file.", undefined, {
+      onModelStreamEvent: () => {},
+    });
+
+    expect(result.finalMessage.content).toBe("Recovered from stream.");
+    const feedback = model.inputs[1]?.messages.find(
+      (message) => message.role === "tool" && message.toolCallId === "call_bad_stream",
+    );
+    expect(feedback?.content).toContain("not valid JSON");
+    expect(feedback?.content).not.toContain("truncated by the max output token limit");
   });
 });

@@ -262,7 +262,7 @@ describe.sequential("InquiryService on-demand media tools", () => {
     await rm(fixture.root, { recursive: true, force: true });
   });
 
-  it("keeps createIntelTools defaulted to the four existing read-only tools", () => {
+  it("keeps createIntelTools defaulted to base non-navigation tools", () => {
     const tools = createIntelTools({
       ledger: createCitationLedger(),
       actor: OPERATOR,
@@ -274,10 +274,12 @@ describe.sequential("InquiryService on-demand media tools", () => {
     });
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "add_claim",
       "cite",
       "finalize_answer",
       "read_chunk",
       "search_chunks",
+      "submit_finding",
     ]);
   });
 

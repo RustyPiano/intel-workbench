@@ -116,11 +116,61 @@ describe.sequential("InquiryService askStream", () => {
     ]);
     expect(events.some((event) => event.type === "tool_call_delta" && event.name === "search_chunks")).toBe(true);
     expect(events.filter((event) => event.type === "token").map((event) => event.text).join("")).toBe("streamed narration");
-    expect(events.at(-1)).toEqual({ type: "done", inquiry });
+
+    // v2：tool_start 带本地化 title/args_summary/call_id。
+    const searchStart = events.find(
+      (event): event is Extract<InquiryStreamEvent, { type: "tool_start" }> => event.type === "tool_start" && event.name === "search_chunks",
+    );
+    expect(searchStart?.title).toBe("检索素材片段");
+    expect(searchStart?.args_summary).toContain("k=");
+    expect(searchStart?.call_id).toMatch(/^t\d+$/);
+    // v2：tool_result 带 summary/detail/elapsed_ms，call_id 与 tool_start 配对。
+    const searchResult = events.find(
+      (event): event is Extract<InquiryStreamEvent, { type: "tool_result" }> => event.type === "tool_result" && event.name === "search_chunks",
+    );
+    expect(searchResult?.summary).toMatch(/个命中/);
+    expect(searchResult?.detail?.kind).toBe("hits");
+    expect(typeof searchResult?.elapsed_ms).toBe("number");
+    expect(searchResult?.call_id).toBe(searchStart?.call_id);
+    // v2：cite 成功后另发 cite_added。
+    const cite = events.find((event): event is Extract<InquiryStreamEvent, { type: "cite_added" }> => event.type === "cite_added");
+    expect(cite?.material_name).toBe("intel.txt");
+    expect(cite?.quote).toBe("舰船线索");
+    // v2：每个 tool_result 后跟一条 budget。
+    expect(events.filter((event) => event.type === "budget").length).toBe(events.filter((event) => event.type === "tool_result").length);
+    // v2：done 携带 run_id。
+    const done = events.at(-1);
+    expect(done).toMatchObject({ type: "done", inquiry });
+    expect((done as Extract<InquiryStreamEvent, { type: "done" }>).run_id).toEqual(expect.any(String));
     expect(stableInquiry(inquiry)).toEqual(stableInquiry(viaAgent));
     expect(inquiry.status).toBe("answered");
     expect(inquiry.claims[0]?.status).toBe("verified");
     expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
+  });
+
+  it("emits claim_added on add_claim and bridges reasoning to thinking in deep mode", async () => {
+    const caseId = await createCaseWithDocs(fixture, "stream 逐条提交", [
+      { filename: "12-理货区照片说明.txt", content: "舰船线索：南海周边发现可疑舰船活动，疑似军事演习。" },
+    ]);
+    const events: InquiryStreamEvent[] = [];
+
+    const inquiry = await createService(fixture, new StreamingInquiryAdapter("add-claim"))
+      .askStream(OPERATOR, caseId, "有何舰船线索", (event) => events.push(event), undefined, true);
+
+    // add_claim 成功后另发 claim_added，携带文本与 cite_ids。
+    const claim = events.find((event): event is Extract<InquiryStreamEvent, { type: "claim_added" }> => event.type === "claim_added");
+    expect(claim).toMatchObject({ type: "claim_added", claim_index: 1, total: 1, text: "发现舰船线索" });
+    expect(claim?.cite_ids[0]).toMatch(/^cite-\d+$/);
+    // finalize_answer 空参封卷：summary 反映封卷结论数。
+    const finalize = events.find((event): event is Extract<InquiryStreamEvent, { type: "tool_result" }> => event.type === "tool_result" && event.name === "finalize_answer");
+    expect(finalize?.summary).toBe("1 条结论封卷");
+    // 深度分析开思考：core 透传 reasoning 增量 → thinking 事件。
+    expect(events.some((event) => event.type === "thinking" && event.text.length > 0)).toBe(true);
+    // budget 携带正预算，且每个 tool_result 各一条。
+    const budget = events.find((event): event is Extract<InquiryStreamEvent, { type: "budget" }> => event.type === "budget");
+    expect(budget?.budget_bytes).toBeGreaterThan(0);
+    expect(events.filter((event) => event.type === "budget").length).toBe(events.filter((event) => event.type === "tool_result").length);
+    expect(inquiry.status).toBe("answered");
   });
 
   it("keeps finalized claims without valid cites unverified despite raw streamed text", async () => {
@@ -241,13 +291,13 @@ describe.sequential("InquiryService askStream", () => {
 
     // 首次问答：创建缓存 agent，写入默认方法论。
     await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
-    expect(await readFile(agentsMd, "utf8")).toContain("最终答案唯一入口是 finalize_answer");
+    expect(await readFile(agentsMd, "utf8")).toContain("全部结论提交完后调用一次 finalize_answer（无参数）封卷");
 
     // 后台改方法论 → 下次问答应作废缓存、按新方法论重写 AGENTS.md（即时生效）。
     await promptStore.update(OPERATOR, "inquiry-methodology", "【已改写】只用最精炼的语言回答。");
     await service.askStream(OPERATOR, caseId, "舰船线索", () => {});
     const after = await readFile(agentsMd, "utf8");
     expect(after).toContain("【已改写】只用最精炼的语言回答。");
-    expect(after).not.toContain("最终答案唯一入口是 finalize_answer");
+    expect(after).not.toContain("全部结论提交完后调用一次 finalize_answer（无参数）封卷");
   });
 });

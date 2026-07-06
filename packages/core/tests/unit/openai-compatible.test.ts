@@ -278,18 +278,13 @@ describe("OpenAICompatibleModelAdapter", () => {
     });
   });
 
-  test("marks tool arguments JSON parse failures as incompatible_response", async () => {
-    const adapter = new OpenAICompatibleModelAdapter({
-      model: "any-model",
-      apiKey: "test-key",
-    });
-
-    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<unknown> } } } }).client = {
+  function stubToolCallResponse(rawArguments: string, finishReason = "tool_calls") {
+    return {
       chat: {
         completions: {
           async create() {
             return {
-              id: "chatcmpl_badjson",
+              id: "chatcmpl_args",
               object: "chat.completion",
               choices: [
                 {
@@ -301,12 +296,12 @@ describe("OpenAICompatibleModelAdapter", () => {
                         type: "function",
                         function: {
                           name: "edit",
-                          arguments: "{not json",
+                          arguments: rawArguments,
                         },
                       },
                     ],
                   },
-                  finish_reason: "tool_calls",
+                  finish_reason: finishReason,
                 },
               ],
             };
@@ -314,18 +309,66 @@ describe("OpenAICompatibleModelAdapter", () => {
         },
       },
     };
+  }
 
-    await expect(
-      adapter.generate({
-        systemPrompt: "You are a test.",
-        messages: [],
-        tools: [],
-      }),
-    ).rejects.toMatchObject({
-      code: "MODEL_ERROR",
-      details: {
-        category: "incompatible_response",
-        name: "edit",
+  test("rescues tool arguments with trailing junk after the balanced JSON object", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: unknown }).client = stubToolCallResponse(
+      '{"path":"notes.md"} Here is my reasoning about the edit.',
+    );
+
+    const result = await adapter.generate({ systemPrompt: "You are a test.", messages: [], tools: [] });
+
+    expect(result.message.toolCalls).toEqual([
+      { id: "call_3", name: "edit", arguments: { path: "notes.md" } },
+    ]);
+  });
+
+  test("rescues tool arguments wrapped in a markdown code fence", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: unknown }).client = stubToolCallResponse(
+      '```json\n{"path":"notes.md"}\n```',
+    );
+
+    const result = await adapter.generate({ systemPrompt: "You are a test.", messages: [], tools: [] });
+
+    expect(result.message.toolCalls).toEqual([
+      { id: "call_3", name: "edit", arguments: { path: "notes.md" } },
+    ]);
+  });
+
+  test("marks unrescuable tool arguments with argumentsParseError instead of throwing", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: unknown }).client = stubToolCallResponse("{not json");
+
+    const result = await adapter.generate({ systemPrompt: "You are a test.", messages: [], tools: [] });
+
+    expect(result.message.toolCalls).toHaveLength(1);
+    expect(result.message.toolCalls?.[0]).toMatchObject({
+      id: "call_3",
+      name: "edit",
+      arguments: {},
+      argumentsParseError: {
+        rawArguments: "{not json",
+        truncated: false,
+      },
+    });
+    expect(result.message.toolCalls?.[0]?.argumentsParseError?.message).toBeTruthy();
+  });
+
+  test("flags truncated output in argumentsParseError when finish_reason is length", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    const truncatedArguments = `{"answer":"${"long ".repeat(60)}`;
+    (adapter as unknown as { client: unknown }).client = stubToolCallResponse(truncatedArguments, "length");
+
+    const result = await adapter.generate({ systemPrompt: "You are a test.", messages: [], tools: [] });
+
+    expect(result.stopReason).toBe("max_tokens");
+    expect(result.message.toolCalls?.[0]).toMatchObject({
+      arguments: {},
+      argumentsParseError: {
+        rawArguments: truncatedArguments.slice(0, 200),
+        truncated: true,
       },
     });
   });
@@ -657,7 +700,7 @@ describe("OpenAICompatibleModelAdapter", () => {
     });
   });
 
-  test("rejects streamed tool calls whose accumulated arguments are invalid JSON", async () => {
+  test("marks streamed tool calls whose accumulated arguments are invalid JSON, matching generate()", async () => {
     const adapter = new OpenAICompatibleModelAdapter({
       model: "any-model",
       apiKey: "test-key",
@@ -689,17 +732,88 @@ describe("OpenAICompatibleModelAdapter", () => {
       },
     };
 
-    await expect(
-      collectStreamEvents(adapter.stream({
-        systemPrompt: "You are a test.",
-        messages: [],
-        tools: [],
-      })),
-    ).rejects.toMatchObject({
-      code: "MODEL_ERROR",
-      details: {
-        category: "incompatible_response",
-        name: "edit",
+    const events = await collectStreamEvents(adapter.stream({
+      systemPrompt: "You are a test.",
+      messages: [],
+      tools: [],
+    }));
+
+    expect(events.at(-1)).toMatchObject({
+      type: "complete",
+      result: {
+        message: {
+          toolCalls: [
+            {
+              id: "call_bad_json",
+              name: "edit",
+              arguments: {},
+              argumentsParseError: {
+                rawArguments: "{not json",
+                truncated: false,
+              },
+            },
+          ],
+        },
+        stopReason: "tool_use",
+      },
+    });
+  });
+
+  test("flags truncated streamed tool arguments when the stream finishes with length", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({
+      model: "any-model",
+      apiKey: "test-key",
+    });
+
+    (adapter as unknown as { client: { chat: { completions: { create: () => Promise<AsyncIterable<unknown>> } } } }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return chunks(
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "call_truncated",
+                          type: "function",
+                          function: { name: "edit", arguments: '{"path":"notes.md","content":"unfinis' },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              },
+              { choices: [{ delta: {}, finish_reason: "length" }] },
+            );
+          },
+        },
+      },
+    };
+
+    const events = await collectStreamEvents(adapter.stream({
+      systemPrompt: "You are a test.",
+      messages: [],
+      tools: [],
+    }));
+
+    expect(events.at(-1)).toMatchObject({
+      type: "complete",
+      result: {
+        message: {
+          toolCalls: [
+            {
+              id: "call_truncated",
+              name: "edit",
+              arguments: {},
+              argumentsParseError: { truncated: true },
+            },
+          ],
+        },
+        stopReason: "max_tokens",
       },
     });
   });

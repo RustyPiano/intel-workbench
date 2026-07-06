@@ -39,6 +39,9 @@ export interface RuntimeConfig {
   workspaceRoot: string;
   sessionDir: string;
   maxTurns: number;
+  // 每次模型请求的最大输出 token 数（透传为供应商 max_tokens）。留空则用供应商
+  // 默认值；长 finalize 载荷被截断（finish_reason=length）时应调大。
+  maxOutputTokens?: number;
   toolTimeoutMs: number;
   mmTimeoutMs?: number;
   asrTimeoutMs?: number;
@@ -207,6 +210,7 @@ function readEnvConfig(): Partial<RuntimeConfig> {
     tosSignedUrlExpires: parsePositiveInteger(process.env.MINI_AGENT_TOS_SIGNED_URL_EXPIRES),
     sessionDir: process.env.MINI_AGENT_SESSION_DIR,
     maxTurns: parseNumber(process.env.MINI_AGENT_MAX_TURNS),
+    maxOutputTokens: parsePositiveInteger(process.env.MINI_AGENT_MAX_OUTPUT_TOKENS),
     toolTimeoutMs: parseNumber(process.env.MINI_AGENT_TOOL_TIMEOUT_MS),
     mmTimeoutMs: parsePositiveInteger(process.env.MINI_AGENT_MM_TIMEOUT_MS),
     asrTimeoutMs: parsePositiveInteger(process.env.MINI_AGENT_ASR_TIMEOUT_MS),

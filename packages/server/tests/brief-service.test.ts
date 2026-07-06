@@ -167,7 +167,9 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
     expect(brief.openQuestions).toHaveLength(1);
 
     expect(brief.autopilot).toBe(true);
-    expect(brief.coverage).toBeNull();
+    // 覆盖度点亮（阶段三 M4）：本 fixture 满足背景+结论 2 节，时间线/矛盾/未决事项 3 节缺口。
+    expect(brief.coverage).toMatchObject({ satisfiedCount: 2, totalSections: 5 });
+    expect(brief.coverage.sections.map((s) => s.satisfied)).toEqual([true, false, false, true, false]);
     expect(brief.task).toBeNull();
   });
 

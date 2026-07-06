@@ -942,6 +942,21 @@ export interface ApiAutoInquiryProgress {
   finishedAt?: string;
 }
 
+/** 报告五节覆盖度（阶段三 M4 / D4）：固定五节，每节满足与否 + 人话明细 + 前端引导。 */
+export type CoverageSectionKey = "background" | "timeline" | "contradiction" | "conclusion" | "open-items";
+export interface ApiCoverageSection {
+  key: CoverageSectionKey;
+  title: string;
+  satisfied: boolean;
+  detail: string;
+  action: { tab: string; label: string };
+}
+export interface ApiReportCoverage {
+  satisfiedCount: number;
+  totalSections: number;
+  sections: ApiCoverageSection[];
+}
+
 export interface ApiBrief {
   caseId: string;
   generatedAt: string;
@@ -958,8 +973,8 @@ export interface ApiBrief {
   autopilot: boolean;
   /** 自动研判批处理进度（阶段三 M3，未跑过则 null）。 */
   autoInquiry: ApiAutoInquiryProgress | null;
-  /** 报告覆盖度（M4 前占位 null）。 */
-  coverage: null;
+  /** 报告五节覆盖度（阶段三 M4，现算）。 */
+  coverage: ApiReportCoverage;
 }
 
 /** 取研判简报（命中新鲜缓存则直接返回；`refresh` 强制重算）。 */
@@ -1011,6 +1026,13 @@ export function cancelJob(caseId: string, kind: JobKind): Promise<boolean> {
 export function getReport(caseId: string): Promise<ApiReport | null> {
   return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report`, { headers: headers() }).then((r) =>
     unwrap<ApiReport | null>(r, "report"),
+  );
+}
+
+/** 报告五节覆盖度（阶段三 M4，只读引导；报告尚未起草也可查）。 */
+export function getReportCoverage(caseId: string): Promise<ApiReportCoverage> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/report/coverage`, { headers: headers() }).then((r) =>
+    unwrap<ApiReportCoverage>(r, "coverage"),
   );
 }
 

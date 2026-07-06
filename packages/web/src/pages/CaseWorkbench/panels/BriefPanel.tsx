@@ -15,6 +15,7 @@ import {
 } from "../../../api";
 import { useSession } from "../../../state/session";
 import { CitationChips } from "../components/CitationChips";
+import { CoverageMeter } from "../components/CoverageMeter";
 import { FrameCiteView } from "../components/FrameCiteView";
 import { TaskOverview } from "../components/TaskOverview";
 import {
@@ -448,7 +449,7 @@ export function BriefPanel() {
           </BriefSection>
 
           <BriefSection title="报告覆盖度" caseId={caseId} tab="report" tabLabel="去报告复核">
-            <div className="brief-empty brief-coverage-placeholder">覆盖度仪表待后续里程碑（M4）点亮：将按报告五节展示每节证据是否齐备与缺口明细。</div>
+            <CoverageMeter coverage={brief.coverage} caseId={caseId} />
           </BriefSection>
         </>
       ) : (

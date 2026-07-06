@@ -24,6 +24,7 @@ import { chunkToCitation } from "../inquiry/citation.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
+import { computeCoverage, type ReportCoverage } from "../report/coverage.js";
 import type { QuestionSuggestion, SuggestionService } from "../suggestion/suggestion-service.js";
 import type { TaskRunSnapshot, TaskService } from "../task/task-service.js";
 import { writeFileAtomic } from "../util/atomic.js";
@@ -132,8 +133,8 @@ export interface CaseBrief extends BriefSnapshot {
   autopilot: boolean;
   /** 自动研判批处理进度（阶段三 M3，实时读 auto-inquiry.json，不进指纹）。未跑过则 null。 */
   autoInquiry: AutoInquiryProgress | null;
-  /** 报告覆盖度（M4 前占位 null）。 */
-  coverage: null;
+  /** 报告五节覆盖度（阶段三 M4，现算，不进指纹）。 */
+  coverage: ReportCoverage;
 }
 
 interface RawOverviewSentence {
@@ -191,10 +192,11 @@ export class BriefService {
       ? cached
       : await this.recompute(actor, caseId, manifest, fingerprint);
 
-    // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、自动研判进度、覆盖度占位。
-    const [task, autoInquiry] = await Promise.all([
+    // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、自动研判进度、报告覆盖度。
+    const [task, autoInquiry, coverage] = await Promise.all([
       this.tasks.getCurrentRun(actor, caseId),
       this.autoInquiry.getProgress(caseId),
+      computeCoverage(this.paths, caseId, manifest),
     ]);
     return {
       ...snapshot,
@@ -202,7 +204,7 @@ export class BriefService {
       task,
       autopilot: manifest.autopilot !== false,
       autoInquiry,
-      coverage: null,
+      coverage,
     };
   }
 

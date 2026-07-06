@@ -102,4 +102,19 @@
 
 - **自动研判用 deep 模式问答**：批处理 `ask({ deep: true, signal })`，与既有「自动发现候选结论」`generateFindingSuggestions` 一致（更宽检索/读取预算 + 开思考，利于自动研判的彻底性）；代价是单题更慢，但属后台批处理、可取消，可接受。
 - **取消中途的当前题**：`ask` 在 abort 时会持久化一条 error 问答记录（与手动流式取消同行为）；批处理据 `ctx.signal.aborted` 把该题还原为 `pending` 并标批次 `cancelled`、停止后续题。该 error 记录是既有 `ask` 的副作用，无害（重跑时按已问题去重跳过）。
+
+### 阶段三 M4（报告覆盖率仪表，2026-07-07）
+
+- **纯只读函数 `report/coverage.ts::computeCoverage(paths, caseId, manifest)`，两处消费同一代码路径（对任务「选侵入更小者」的落地）**：覆盖度属「每请求现算」侧，不写盘、不调 LLM、不记审计。做成独立纯函数直接读专题目录既有产物（elements.json / contradictions.result.json+contradiction-acks.json / findings.json / auto-inquiry.json + manifest.materials），而非塞进 ReportService 或给 BriefService 加构造依赖。`BriefService.getBrief` 在实时字段段（与 task/autoInquiry 并列）调用它点亮 `coverage`；`ReportService.getCoverage` 经 `cases.get` 密级闸门后委派它。两处消费同一实现，杜绝口径漂移。BriefService 会二次读它已加载的 elements/contradictions/findings（几个小 JSON），换取单一实现与「现算独立于快照缓存」的正确性，代价可忽略。
+- **五节判定口径（D4 落地，均以现有落盘产物即可判定）**：① 背景与素材概况——`materials` 中 status=done ≥1；② 关键时间线——`buildElementGraph(elements).timeline` 中 `sortKey!==null`（锚定到绝对时间轴）的点 ≥3；③ 矛盾核验——无「confidence≥0.75 且处置状态为 open」的矛盾（阈值取导出闸 `hasHighSeverityContradiction` 既有 0.75 口径，非新阈值）；④ 研判结论——review_status=approved 的 Finding ≥1；⑤ 未决事项——自动研判批次已跑完（status≠running）且每题闭环（candidate/done），pending/running/failed 视为悬空。覆盖度 = 满足节数 / 5；每节返回 `{ key, title, satisfied, detail(人话缺口/满足明细), action(目标 Tab + 动词短语) }`。
+- **矛盾「高置信」阈值复用导出闸的 0.75（非任务缺省的 0.7）**：任务允许「若无既有口径用 0.7」，但 report-service 的导出闸 `hasHighSeverityContradiction` 已用 `confidence < 0.75` 判高置信。为让仪表与导出门禁对同一批矛盾口径一致（引导缺口 = 会阻断导出的同一批未处置高置信矛盾），覆盖度沿用 0.75，不引入第二个阈值。
+- **「未决事项」口径选自动研判批次（D4 给的两个可选口径中取更可判定者）**：D4 允许「自动研判批次已跑完每题闭环」或「findings 的 open_questions 已列入报告草稿」。选前者——`auto-inquiry.json` 有明确的 `status` 与逐题 `status` 字段，判定确定、且在简报（无报告时）与报告页两处口径一致；后者需报告 spec + finding open_questions 交叉，报告未起草时无从判。**副作用（引导性，符合 D6/M3 叙事）**：批次从未运行（auto-inquiry.json 缺失）→ 该节判为未满足，明细「自动研判尚未运行，待核问题未闭环」，行动深链到补充核验 Tab——即用「跑自动研判以闭合待核问题」的引导，与 M3 自动研判主线一致。
+- **暴露通道：brief.coverage 点亮 + 新增只读子路径 `GET /cases/:id/report/coverage`（最小改面，不动导出门禁）**：BriefService 的 `coverage` 字段类型从占位 `null` 改为 `ReportCoverage`（现算，不进指纹，与 M2 缓存边界一致）。报告页另加只读子路径 `GET /report/coverage`（挂 reports 路由，`{ok, coverage}`），不改既有 `GET /report` 契约、不碰 `evaluateExportGate` 任何行为——覆盖率是引导（软），导出门禁是强制（硬），UI 上两回事。ReportPanel 的覆盖度获取失败静默降级（不阻塞报告编辑）。
+- **web 复用单一 `CoverageMeter` 组件（简报 + 报告页共用，勿复制粘贴）**：新增 `components/CoverageMeter.tsx`——总览「满足/总数」+ 分节进度条 + 五节清单（满足打勾给明细；缺口给明细 + 深链跳对应 Tab 补证据，复用 `scrollWorkbenchBodyIntoView`）。BriefPanel「报告覆盖度」板块由占位换成该组件；ReportPanel 报告编辑区顶部加同一组件。满足/缺口用现有语义色 token（满足 `--ok/--ok-light`、缺口 `--warn/--warn-light`），克制，全部进 styles.css，无内联 style。旧占位 `.brief-coverage-placeholder`（因换组件而闲置）随本次移除（仅移除自身改动产生的孤儿）。
+- **验证数字（2026-07-07，脚本化模型 / 无真端点）**：新增 `tests/report-coverage.test.ts` 8 例（五节结构+行动引导完整 / 无数据不抛错且矛盾节空满足 / 背景 done-total 与空专题文案 / 时间线锚定阈值 / 矛盾未处置阻断+处置后满足+低置信不计 / 结论候选计数 / 未决事项 running·悬空·全闭环三态 / 全满足 satisfiedCount=5 / ReportService.getCoverage 委派+密级闸门）；更新 `brief-service.test.ts` 一处断言（`coverage` 从 `null` 改为断言 `{satisfiedCount:2,totalSections:5}` 与五节满足序列）。`pnpm vitest run packages/server` 全绿（530 passed / 1 skipped，61 文件）；`pnpm vitest run packages/web` 3 passed；server typecheck（含 eval tsconfig）+ web typecheck 全绿。真端点端到端演练留待 M5 收尾统一跑。
+
+### 阶段三 M4 Deviations
+
+- **「未决事项」批次未运行即判未满足**：如上，选可判定的 auto-inquiry 口径带来的后果是——从未跑自动研判的专题该节恒为缺口。这是有意的引导（点缺口 → 去跑自动研判/补充核验），不是硬门禁，不影响导出；与 M3「autopilot 闭合待核问题」叙事一致。若后续希望「无任何待核问题时也算满足」，需引入 suggestion 现算判空（会多打一次规则引擎/图谱），本里程碑不做。
+- **无数据专题「矛盾核验」节空满足（非字面「全不满足」）**：任务描述「无数据专题（全不满足）不抛错」。实测无数据时矛盾节因「无高置信未处置矛盾」而空满足（satisfiedCount=1），其余四节缺口。这是语义正确的（该节要求是「无未处置高置信矛盾」，零矛盾即真空满足），测试按实际断言并注明；核心要求「不抛错」满足。
 - **cancelled/partial 批次仍算「已跑」**：`auto-inquiry.json` 存在即幂等跳过（含被取消的批次），与 M1 「产物存在即跳过」一致；需重跑走手动 jobs 路由（始终覆盖重跑）。

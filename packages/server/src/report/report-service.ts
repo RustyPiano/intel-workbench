@@ -22,6 +22,7 @@ import {
 } from "../domain/types.js";
 import { readContradictionAcknowledgements, readFindings } from "../finding/finding-store.js";
 import { validateCitationIntegrity, type CitationIntegrity } from "../inquiry/citation.js";
+import { computeCoverage, type ReportCoverage } from "./coverage.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -132,6 +133,15 @@ export class ReportService {
   async get(actor: Identity, caseId: string): Promise<ReportRecord | null> {
     await this.cases.get(actor, caseId);
     return this.read(caseId);
+  }
+
+  /**
+   * 报告五节覆盖度（阶段三 M4 / 计划 D4）。只做展示与引导，独立于 evaluateExportGate 的导出硬门禁。
+   * 密级由 cases.get 收口；覆盖度就现有落盘产物现算，报告尚未起草也可返回（各节不依赖报告存在）。
+   */
+  async getCoverage(actor: Identity, caseId: string): Promise<ReportCoverage> {
+    const manifest = await this.cases.get(actor, caseId);
+    return computeCoverage(this.paths, caseId, manifest);
   }
 
   async submit(actor: Identity, caseId: string): Promise<ReportRecord> {

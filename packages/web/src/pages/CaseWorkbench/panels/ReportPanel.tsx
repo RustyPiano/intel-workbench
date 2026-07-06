@@ -7,14 +7,17 @@ import {
   generateFindingSuggestions,
   generateAutoDraft,
   getReport,
+  getReportCoverage,
   listFindings,
   submitReport,
   type ApiFinding,
   type ApiReport,
+  type ApiReportCoverage,
   type DraftReportInput,
 } from "../../../api";
 import { useSession } from "../../../state/session";
 import { CLEARANCE_LABELS } from "../../../types";
+import { CoverageMeter } from "../components/CoverageMeter";
 import {
   gateReasonGloss,
   REPORT_STEPS,
@@ -28,6 +31,7 @@ export function ReportPanel() {
   const canReview = user?.role === "security" || user?.role === "admin";
 
   const [report, setReport] = useState<ApiReport | null>(null);
+  const [coverage, setCoverage] = useState<ApiReportCoverage | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [approvedFindings, setApprovedFindings] = useState<ApiFinding[]>([]);
@@ -44,10 +48,12 @@ export function ReportPanel() {
     if (!user || !caseId) return;
     let alive = true;
     setLoaded(false);
-    Promise.all([getReport(caseId), listFindings(caseId)])
-      .then(([r, fs]) => {
+    // 覆盖度获取失败不阻塞报告编辑（引导性信息，缺失即不展示仪表）。
+    Promise.all([getReport(caseId), listFindings(caseId), getReportCoverage(caseId).catch(() => null)])
+      .then(([r, fs, cov]) => {
         if (!alive) return;
         setApprovedFindings(fs.filter((finding) => finding.review_status === "approved"));
+        setCoverage(cov);
         setReport(r);
         if (r) {
           setTitle(r.spec.title);
@@ -200,6 +206,7 @@ export function ReportPanel() {
   return (
     <div className="report-layout">
       <div className="report-editor">
+        {coverage ? <CoverageMeter coverage={coverage} caseId={caseId!} /> : null}
         <div className="report-toolbar">
           <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>
             状态：<strong style={{ color: "var(--accent-light)" }}>{REPORT_STEPS[stepIndex]?.label ?? "草稿起草"}</strong>

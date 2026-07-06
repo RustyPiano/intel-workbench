@@ -1590,10 +1590,97 @@ a {
   font-size: 12px;
   line-height: 1.6;
 }
-.brief-coverage-placeholder {
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  padding: 12px;
+/* 报告覆盖率仪表（阶段三 M4）：简报与报告页共用，满足/缺口用语义色 token，克制。 */
+.coverage-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.coverage-meter__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.coverage-meter__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.coverage-meter__score {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.coverage-meter__bar {
+  display: flex;
+  gap: 4px;
+}
+.coverage-meter__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.coverage-meter__seg--ok {
+  background: var(--ok);
+}
+.coverage-meter__seg--gap {
+  background: var(--warn);
+}
+.coverage-meter__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.coverage-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.coverage-item__icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+.coverage-item--ok .coverage-item__icon {
+  color: var(--ok-light);
+}
+.coverage-item--gap .coverage-item__icon {
+  color: var(--warn-light);
+}
+.coverage-item__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.coverage-item__title {
+  color: var(--text);
+  font-weight: 600;
+}
+.coverage-item__detail {
+  color: var(--text-muted);
+}
+.coverage-item__action {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.coverage-item__action:hover {
+  color: var(--accent-light);
 }
 .brief-overview__caveat {
   color: var(--warn-light);

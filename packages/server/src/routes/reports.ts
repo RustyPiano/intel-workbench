@@ -13,6 +13,11 @@ export function createReportsRouter(reports: ReportService): Router {
     res.json({ ok: true, report: await reports.get(req.identity, req.params.id) });
   });
 
+  // 报告五节覆盖度（阶段三 M4 / D4）：只读引导通道，与导出门禁无关；报告尚未起草也可查。
+  router.get("/:id/report/coverage", async (req, res) => {
+    res.json({ ok: true, coverage: await reports.getCoverage(req.identity, req.params.id) });
+  });
+
   router.post("/:id/report/draft", async (req, res) => {
     const report = await reports.draft(req.identity, req.params.id, (req.body ?? {}) as DraftInput);
     res.status(201).json({ ok: true, report });

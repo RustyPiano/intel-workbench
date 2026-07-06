@@ -109,6 +109,7 @@ export function createApiRouter(services: ApiServices): Router {
         "POST /api/cases/:id/suggestions/findings/:suggestionId/apply",
         "POST /api/cases/:id/review",
         "GET /api/cases/:id/report",
+        "GET /api/cases/:id/report/coverage",
         "POST /api/cases/:id/report/{draft,submit,approve,export}",
         "POST /api/cases/:id/report/auto-draft",
         "GET /api/admin/{skills,models,users,prompts}",

@@ -80,6 +80,24 @@ describe("FindingService", () => {
     expect(actions).toContain("finding.review");
   });
 
+  it("filters unsupported citations when promoting a mixed inquiry claim", async () => {
+    const cite = await validCitation();
+    const claim: InquiryClaim = {
+      text: "目标甲在码头出现。",
+      type: "fact",
+      status: "verified",
+      support_status: "supported",
+      citations: [
+        cite,
+        { ...cite, material_id: "missing-material", support_status: "unsupported" },
+      ],
+    };
+
+    const created = await findings.create(OPERATOR, caseId, { claim });
+
+    expect(created.supporting_citations).toEqual([cite]);
+  });
+
   it("stores findings and contradiction acknowledgements in per-case JSON files", async () => {
     const cite = await validCitation();
     const created = await findings.create(OPERATOR, caseId, {

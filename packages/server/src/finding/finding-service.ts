@@ -52,7 +52,10 @@ export class FindingService {
       throw new AppError(400, "Finding 结论不能为空");
     }
 
-    const supporting = fromClaim ? fromClaim.citations : (input.supporting_citations ?? []);
+    const chunks = await this.loadCaseChunks(manifest);
+    const supporting = fromClaim
+      ? this.promotableCitations(fromClaim).filter((citation) => this.citationStillValid(citation, chunks))
+      : (input.supporting_citations ?? []);
     const opposing = input.opposing_citations ?? [];
     if (supporting.length === 0) {
       await this.auditCreateDeny(actor, caseId, "missing-supporting-citation");
@@ -63,7 +66,6 @@ export class FindingService {
       await this.auditCreateDeny(actor, caseId, "confidence");
       throw new AppError(400, "Finding 置信度必须在 0 到 1 之间");
     }
-    const chunks = await this.loadCaseChunks(manifest);
     if (![...supporting, ...opposing].every((citation) => this.citationStillValid(citation, chunks))) {
       await this.auditCreateDeny(actor, caseId, "citation:invalid");
       throw new AppError(400, "Finding 引用必须匹配当前素材 span");
@@ -95,6 +97,12 @@ export class FindingService {
   async list(actor: Identity, caseId: string): Promise<Finding[]> {
     await this.cases.get(actor, caseId);
     return readFindings(this.paths, caseId);
+  }
+
+  async filterValidCitations(actor: Identity, caseId: string, citations: Citation[]): Promise<Citation[]> {
+    const manifest = await this.cases.get(actor, caseId);
+    const chunks = await this.loadCaseChunks(manifest);
+    return citations.filter((citation) => this.citationStillValid(citation, chunks));
   }
 
   async review(actor: Identity, caseId: string, findingId: string, input: ReviewFindingInput): Promise<Finding> {
@@ -135,8 +143,12 @@ export class FindingService {
 
   private canPromoteClaim(claim: InquiryClaim): boolean {
     if (claim.support_status === "unsupported") return false;
-    if (claim.support_status === "supported" || claim.support_status === "support-unverified") return claim.citations.length > 0;
-    return claim.status === "verified" && claim.citations.length > 0;
+    if (claim.support_status === "supported" || claim.support_status === "support-unverified") return this.promotableCitations(claim).length > 0;
+    return claim.status === "verified" && this.promotableCitations(claim).length > 0;
+  }
+
+  private promotableCitations(claim: InquiryClaim): Citation[] {
+    return claim.citations.filter((citation) => citation.support_status !== "unsupported");
   }
 
   private defaultConfidence(citations: Citation[]): number {

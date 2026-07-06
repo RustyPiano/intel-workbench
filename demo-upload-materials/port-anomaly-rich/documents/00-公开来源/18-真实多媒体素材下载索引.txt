@@ -1,21 +1,31 @@
 真实多媒体素材下载索引（演示材料）
 
+索引编号：MEDIA-PUBLIC-PORT-20260702
+整理时间：2026-07-02 09:10
+用途：列出 `media/` 目录里的多模态加工能力测试素材及其真实来源。这 4 个文件和前面 19 份案卷文本没有事实关联，不构成本案证据，只用来验证图片/视频/音频的上传、加工和许可留存能力。
+
+一、图片上传与 OCR/视觉加工测试素材
 DVIDS 港口集装箱检查图片：Coast Guard leads multi-agency security operation in Port Honolulu，页面标注 PUBLIC DOMAIN。
-
 图片 URL：https://www.dvidshub.net/image/8969502/coast-guard-leads-multi-agency-security-operation-port-honolulu。
+用途：验证图片上传、OCR/视觉说明、引用定位和素材许可留存这套能力本身，图片内容（时间、地点、人员）与本案无关，不要用它来对照 LH-7712 或三号门的具体案情细节。
 
+二、视频上传与帧级加工测试素材
 DVIDS 港口安保训练视频：US Coast Guard Port Security Unit 312 simulated training exercises San Francisco Bay，页面标注 PUBLIC DOMAIN，约 1 分钟。
-
 视频 URL：https://www.dvidshub.net/video/1010679/us-coast-guard-port-security-unit-312-conducts-simulated-training-exercises-san-francisco-bay。
+用途：验证视频上传、分镜、帧级线索和人工复核这套能力，画面内容不对应本案任何时间点或人员。
 
+三、音频上传与 ASR 加工测试素材
 NOAA Fisheries 船舶噪声音频：Large Vessel 或 Small Vessel 音频可用于 ASR/声纹演示。
-
 音频入口：https://www.fisheries.noaa.gov/national/science-data/sounds-ocean-environmental-and-anthropogenic。
+用途：验证音频上传、转写失败/成功状态、媒体加工状态这套能力，不是本案 VTS 通话录音。
 
+四、夜间场景图片加工测试素材
 Wikimedia Commons Colombo Express in Altenwerder at night-799096.jpeg：CC0 1.0 夜间集装箱船/码头图片。
-
 图片 URL：https://commons.wikimedia.org/wiki/File:Colombo_Express_in_Altenwerder_at_night-799096.jpeg。
+用途：验证夜间场景图片的加工和许可记录管理，画面取自汉堡阿尔滕韦尔德港区，不代表东三泊位或北侧堆放区实景。
 
-访问日期：2026-07-02。
-
+五、使用说明
+演示时建议把这 4 个文件作为单独一批“多模态能力测试素材”上传和讲解，不要和前面 19 份案卷文本一起讲，避免误让人以为图片/视频画面对应案情细节。
+下载后应保留原始文件名、来源 URL、访问日期、许可说明和文件哈希。
 建议下载后作为外部演示附件导入，不随 seed 打包大体积二进制。
+访问日期：2026-07-02。

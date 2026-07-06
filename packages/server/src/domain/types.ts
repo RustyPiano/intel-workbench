@@ -140,6 +140,17 @@ export interface Finding {
   open_questions: string[];
 }
 
+/** agent submit_finding 提交的结构化候选：随 Inquiry 落盘，供建议引擎生成带对立证据的候选。 */
+export interface InquirySubmittedFinding {
+  conclusion: string;
+  supporting_citations: Citation[];
+  opposing_citations: Citation[];
+  reasoning?: string;
+  confidence?: number;
+  severity?: "low" | "medium" | "high";
+  open_questions: string[];
+}
+
 /** 问答记录（落 `cases/<id>/inquiries.jsonl`，§7.3 step 5）。 */
 export interface Inquiry {
   id: string;
@@ -150,6 +161,8 @@ export interface Inquiry {
   status: "answered" | "insufficient" | "error";
   answer: string;
   claims: InquiryClaim[];
+  /** agent submit_finding 提交的结构化候选（可选，老记录无此字段）。 */
+  submitted_findings?: InquirySubmittedFinding[];
 }
 
 /** 要素类型（产品 spec §5.2）。 */

@@ -125,9 +125,9 @@ describe("TaskService（Batch D 任务编排层）", () => {
       "加工质量检查",
       "证据单元",
       "实体归并",
-      "命题抽取",
+      "补充核验取证",
       "矛盾检测",
-      "研判结论",
+      "结论核验",
       "报告生成",
       "复核导出",
     ]);
@@ -148,7 +148,7 @@ describe("TaskService（Batch D 任务编排层）", () => {
     ]);
   });
 
-  it("getRun 只从真实产物派生阶段，不用证据单元伪造命题抽取完成", async () => {
+  it("getRun 只从真实产物派生阶段，不用证据单元伪造补充核验取证完成", async () => {
     await cases.attachMaterial(caseId, material(caseId, { status: "done", chunk_count: 1, processed_at: new Date().toISOString() }));
     await writeCaseJson("elements.json", [element()]);
     await writeCaseJson("contradictions.result.json", {
@@ -371,7 +371,7 @@ describe("TaskService（Batch D 任务编排层）", () => {
     expect(overview.reportStatus).toBe("exported");
   });
 
-  it("至少一个已审核 Finding 会派生研判结论阶段完成", async () => {
+  it("至少一个已审核 Finding 会派生结论核验阶段完成", async () => {
     await cases.attachMaterial(caseId, material(caseId, { status: "done", chunk_count: 1, processed_at: new Date().toISOString() }));
     await writeCaseJson("elements.json", [element()]);
     await writeCaseJson("contradictions.result.json", {

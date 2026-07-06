@@ -14,6 +14,7 @@ import type { MaterialService } from "../materials/material-service.js";
 import type { OverviewService } from "../overview/overview-service.js";
 import type { ReportService } from "../report/report-service.js";
 import type { ReviewService } from "../review/review-service.js";
+import type { SuggestionService } from "../suggestion/suggestion-service.js";
 import type { TaskService } from "../task/task-service.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
@@ -29,6 +30,7 @@ import { createMaterialsRouter } from "./materials.js";
 import { createOverviewRouter } from "./overview.js";
 import { createReviewRouter } from "./review.js";
 import { createReportsRouter } from "./reports.js";
+import { createSuggestionsRouter } from "./suggestions.js";
 import { createTaskRouter } from "./tasks.js";
 
 /**
@@ -53,6 +55,7 @@ export interface ApiServices {
   review: ReviewService;
   tasks: TaskService;
   admin: AdminService;
+  suggestions: SuggestionService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -93,9 +96,15 @@ export function createApiRouter(services: ApiServices): Router {
         "GET /api/cases/:id/jobs/:kind/status",
         "POST /api/cases/:id/jobs/:kind/cancel",
         "GET /api/cases/:id/element-graph",
+        "GET /api/cases/:id/suggestions/questions",
+        "GET /api/cases/:id/suggestions/questions-llm",
+        "GET /api/cases/:id/suggestions/findings",
+        "POST /api/cases/:id/suggestions/findings/generate",
+        "POST /api/cases/:id/suggestions/findings/:suggestionId/apply",
         "POST /api/cases/:id/review",
         "GET /api/cases/:id/report",
         "POST /api/cases/:id/report/{draft,submit,approve,export}",
+        "POST /api/cases/:id/report/auto-draft",
         "GET /api/admin/{skills,models,users,prompts}",
         "POST /api/admin/skills/:name",
         "GET /api/audit",
@@ -116,6 +125,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createFindingsRouter(services.findings));
   router.use("/cases", createElementGraphRouter(services.elementGraph));
   router.use("/cases", createContradictionsRouter(services.contradictions));
+  router.use("/cases", createSuggestionsRouter(services.suggestions));
   router.use("/cases", createReportsRouter(services.reports));
   router.use("/cases", createReviewRouter(services.review));
   router.use("/materials", createMaterialsRouter(services.materials));

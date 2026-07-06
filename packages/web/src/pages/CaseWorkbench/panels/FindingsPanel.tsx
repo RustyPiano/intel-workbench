@@ -3,6 +3,7 @@ import { NavLink, useParams } from "react-router-dom";
 import {
   applySuggestedFinding,
   createFinding,
+  generateFindingSuggestions,
   getCase,
   getSuggestedFindings,
   listFindings,
@@ -31,6 +32,7 @@ const SUGGESTION_SOURCE_LABELS: Record<FindingSuggestionSource, string> = {
   inquiry: "问答答案",
   contradiction: "矛盾线索",
   "element-timeline": "时间线锚点",
+  "inquiry-structured": "结构化研判",
 };
 
 function isPromotableClaim(claim: ApiClaim): boolean {
@@ -54,6 +56,7 @@ export function FindingsPanel() {
   const [findingSuggestions, setFindingSuggestions] = useState<ApiFindingSuggestion[]>([]);
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [generationNote, setGenerationNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -144,7 +147,7 @@ export function FindingsPanel() {
     setBusy(`adopt:${suggestion.id}`);
     setError(null);
     try {
-      await applySuggestedFinding(caseId, suggestion);
+      await applySuggestedFinding(caseId, suggestion.id);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -160,7 +163,7 @@ export function FindingsPanel() {
     const failures: string[] = [];
     for (const suggestion of visibleSuggestions) {
       try {
-        await applySuggestedFinding(caseId, suggestion);
+        await applySuggestedFinding(caseId, suggestion.id);
       } catch (e) {
         failures.push((e as Error).message);
       }
@@ -168,6 +171,29 @@ export function FindingsPanel() {
     if (failures.length > 0) setError(`部分候选加入失败：${failures[0]}`);
     await load();
     setBusy(null);
+  };
+
+  const handleGenerateSuggestions = async () => {
+    if (!caseId || busy) return;
+    setBusy("generate-suggestions");
+    setError(null);
+    setGenerationNote(null);
+    try {
+      const result = await generateFindingSuggestions(caseId);
+      await load();
+      setDismissedSuggestionIds(new Set());
+      if (result.inquiriesCreated > 0) {
+        setGenerationNote(`已自动运行 ${result.inquiriesCreated} 个核验问题，生成 ${result.suggestions.length} 条待入池候选。`);
+      } else if (result.skippedExisting > 0) {
+        setGenerationNote(`关键核验问题已运行过，当前有 ${result.suggestions.length} 条待入池候选。`);
+      } else {
+        setGenerationNote(result.suggestions.length > 0 ? `当前有 ${result.suggestions.length} 条待入池候选。` : "暂未生成候选。请确认已完成素材加工，并已配置文本模型。");
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const handleDismissSuggestion = (suggestionId: string) => {
@@ -183,13 +209,15 @@ export function FindingsPanel() {
             <span className="badge" style={{ padding: "3px 8px", fontSize: "11px" }}>报告前置步骤</span>
           </div>
           <div style={{ color: "var(--text-dim)", fontSize: "13px", lineHeight: "1.7" }}>
-            核验并筛选系统抽取的问答、冲突与时间线结论。人工核准后的结论可作为报告起草素材。
+            系统可先自动提出并执行核验问题，生成待入池候选；候选加入核验池并经人工核准后，才可作为报告起草素材。
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", color: "var(--text-muted)", fontSize: "12px" }}>
             <span>待入池候选：系统生成推荐</span>
             <span>核验池：待人工核准</span>
             <span>已核准：报告可引用</span>
           </div>
+          {generationNote ? <div style={{ color: "var(--accent-light)", fontSize: "12px", lineHeight: "1.6" }}>{generationNote}</div> : null}
+          {error ? <div style={{ color: "var(--danger-light)", fontSize: "12px", lineHeight: "1.6" }}>自动发现失败：{error}</div> : null}
         </div>
 
         {loaded && visibleSuggestions.length > 0 ? (
@@ -252,11 +280,16 @@ export function FindingsPanel() {
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center" }}>加载结论…</div>
         ) : findings.length === 0 ? (
           <div style={{ color: "var(--text-muted)", padding: "40px", textAlign: "center", lineHeight: "1.8" }}>
-            <div>{visibleSuggestions.length > 0 ? "还没有加入核验池。请先从上方待入池候选点“加入核验池”。" : "暂无核验池条目。先去补充核验生成带引用答案，再转入核验池。"}</div>
+            <div>{visibleSuggestions.length > 0 ? "还没有加入核验池。请先从上方待入池候选点“加入核验池”。" : "暂无候选结论或核验池条目。可以先让系统自动发现候选结论；系统会运行带引用的核验问题，不会直接写入报告。"}</div>
             {visibleSuggestions.length === 0 ? (
-              <NavLink to={inquiryPath} className="btn" style={{ marginTop: "12px", padding: "6px 12px", fontSize: "12px" }}>
-                去补充核验
-              </NavLink>
+              <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px", alignItems: "center" }}>
+                <button type="button" className="btn btn--primary" style={{ padding: "6px 12px", fontSize: "12px" }} disabled={Boolean(busy)} onClick={handleGenerateSuggestions}>
+                  {busy === "generate-suggestions" ? "发现中…" : "自动发现候选结论"}
+                </button>
+                <NavLink to={inquiryPath} style={{ color: "var(--text-muted)", fontSize: "12px", textDecoration: "underline", textUnderlineOffset: "3px" }}>
+                  手动补充核验
+                </NavLink>
+              </div>
             ) : null}
           </div>
         ) : (
@@ -310,12 +343,7 @@ export function FindingsPanel() {
           <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>加载问答答案…</div>
         ) : availableClaimRows.length === 0 ? (
           <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7" }}>
-            {claimRows.length > 0 ? "可用问答答案已在左侧待入池候选或核验池中。" : "先去补充核验生成带引用答案，再转入核验池。"}
-            {claimRows.length === 0 ? (
-              <NavLink to={inquiryPath} className="btn" style={{ marginTop: "10px", padding: "5px 10px", fontSize: "12px" }}>
-                去补充核验
-              </NavLink>
-            ) : null}
+            {claimRows.length > 0 ? "可用问答答案已在左侧待入池候选或核验池中。" : "左侧可自动发现候选结论；也可以手动补充核验生成带引用答案。"}
           </div>
         ) : (
           availableClaimRows.map(({ claim, ref }) => (

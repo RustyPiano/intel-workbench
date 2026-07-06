@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getOverview, listCases, type ApiCase, type OverviewCaseRow } from "../api";
+import { getOverview, listCases, updateCase, type ApiCase, type OverviewCaseRow } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS, ROLE_LABELS } from "../types";
 
@@ -38,6 +38,8 @@ export function CaseListPage() {
   const [overviewRows, setOverviewRows] = useState<Map<string, OverviewCaseRow>>(new Map());
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -54,12 +56,80 @@ export function CaseListPage() {
     };
   }, [user]);
 
+  // 归档/恢复（仅创建者或 admin 可见按钮，与后端 requireWriteAccess 一致）；成功后就地更新本地 state。
+  async function handleArchiveToggle(c: ApiCase) {
+    const next: ApiCase["status"] = c.status === "archived" ? "active" : "archived";
+    const label = next === "archived" ? "归档" : "恢复";
+    if (!window.confirm(`确认${label}专题「${c.name}」？`)) return;
+    setArchivingId(c.id);
+    setError(null);
+    try {
+      const updated = await updateCase(c.id, { status: next });
+      setCases((prev) => prev?.map((x) => (x.id === updated.id ? updated : x)) ?? prev);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setArchivingId(null);
+    }
+  }
+
   const normalizedQuery = query.trim().toLowerCase();
   const filtered =
     cases?.filter((c) => {
       if (!normalizedQuery) return true;
       return c.name.toLowerCase().includes(normalizedQuery) || c.owner.toLowerCase().includes(normalizedQuery);
     }) ?? [];
+  const activeCases = filtered.filter((c) => c.status !== "archived");
+  const archivedCases = filtered.filter((c) => c.status === "archived");
+
+  function renderCard(c: ApiCase) {
+    const s = statusLabel(c.status);
+    const row = overviewRows.get(c.id);
+    const canManage = user != null && (user.id === c.owner || user.role === "admin");
+    return (
+      <div key={c.id} className="case-card">
+        <div className="case-card__header">
+          <span className={`badge badge--clearance tone-${c.clearance} case-list__badge`}>
+            {CLEARANCE_LABELS[c.clearance]}
+          </span>
+          <span className={`case-card__status ${s.cls}`}>{s.text}</span>
+        </div>
+
+        <h3 className="case-card__title">{c.name}</h3>
+        <p className="case-card__desc">
+          负责人：{c.owner} · 素材 {c.materials.length} 份
+        </p>
+
+        <div className="case-card__stats">
+          <span>{row ? materialProgressText(row) : "素材统计 —"}</span>
+          <span>矛盾 {row?.contradictionCount ?? 0}</span>
+          <span>报告 {row?.reportStatus ? REPORT_LABELS[row.reportStatus] : "未生成"}</span>
+        </div>
+
+        <div className="case-card__meta">
+          <span>更新时间：{c.updated_at.slice(0, 10)}</span>
+          <div className="case-card__actions">
+            {canManage ? (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={archivingId === c.id}
+                onClick={() => void handleArchiveToggle(c)}
+              >
+                {c.status === "archived" ? "恢复" : "归档"}
+              </button>
+            ) : null}
+            <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost case-list__card-link">
+              进入工作台
+              <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
@@ -108,51 +178,36 @@ export function CaseListPage() {
       ) : (
         <>
           <h2 className="case-list__heading">
-            活动专题（{filtered.length}）
+            活动专题（{activeCases.length}）
           </h2>
           {filtered.length === 0 ? (
             <div className="case-list__empty-panel">
               无匹配的专题
             </div>
-          ) : (
-            <div className="dashboard-grid">
-              {filtered.map((c) => {
-                const s = statusLabel(c.status);
-                const row = overviewRows.get(c.id);
-                return (
-                  <div key={c.id} className="case-card">
-                    <div className="case-card__header">
-                      <span className={`badge badge--clearance tone-${c.clearance} case-list__badge`}>
-                        {CLEARANCE_LABELS[c.clearance]}
-                      </span>
-                      <span className={`case-card__status ${s.cls}`}>{s.text}</span>
-                    </div>
-
-                    <h3 className="case-card__title">{c.name}</h3>
-                    <p className="case-card__desc">
-                      负责人：{c.owner} · 素材 {c.materials.length} 份
-                    </p>
-
-                    <div className="case-card__stats">
-                      <span>{row ? materialProgressText(row) : "素材统计 —"}</span>
-                      <span>矛盾 {row?.contradictionCount ?? 0}</span>
-                      <span>报告 {row?.reportStatus ? REPORT_LABELS[row.reportStatus] : "未生成"}</span>
-                    </div>
-
-                    <div className="case-card__meta">
-                      <span>更新时间：{c.updated_at.slice(0, 10)}</span>
-                      <Link to={`/cases/${encodeURIComponent(c.id)}`} className="btn btn--ghost case-list__card-link">
-                        进入工作台
-                        <svg className="icon-svg" style={{ width: "12px", height: "12px" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="9 18 15 12 9 6"/>
-                        </svg>
-                      </Link>
-                    </div>
-                  </div>
-                );
-              })}
+          ) : activeCases.length === 0 ? (
+            <div className="case-list__empty-panel">
+              当前无进行中的专题
             </div>
+          ) : (
+            <div className="dashboard-grid">{activeCases.map(renderCard)}</div>
           )}
+          {archivedCases.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm case-list__archive-toggle"
+              onClick={() => setShowArchived((visible) => !visible)}
+            >
+              {showArchived ? "隐藏已归档" : `显示已归档（${archivedCases.length}）`}
+            </button>
+          ) : null}
+          {showArchived && archivedCases.length > 0 ? (
+            <>
+              <h2 className="case-list__heading case-list__heading--archived">
+                已归档（{archivedCases.length}）
+              </h2>
+              <div className="dashboard-grid">{archivedCases.map(renderCard)}</div>
+            </>
+          ) : null}
         </>
       )}
     </div>

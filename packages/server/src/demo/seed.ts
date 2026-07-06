@@ -5,6 +5,7 @@ import type { AuditService } from "../audit/audit-service.js";
 import { UserStore } from "../auth/user-store.js";
 import type { DataPaths } from "../data/paths.js";
 import type { AuditEvent, CaseManifest, Chunk, Citation, Contradiction, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
+import { DEMO_MATERIALS, type DemoMaterialInput } from "./port-anomaly-materials.js";
 import { chunkToCitation } from "../inquiry/citation.js";
 import { chunkText, normalize } from "../materials/material-service.js";
 import { citationId } from "../report/report-service.js";
@@ -12,231 +13,9 @@ import { citationId } from "../report/report-service.js";
 export const DEMO_CASE_ID = "port-anomaly-verification";
 const RESTRICTED_CASE_ID = "restricted-review-sample";
 const SEED_MARKER = ".demo-seed-complete.json";
-
-interface DemoMaterialInput {
-  id: string;
-  filename: string;
-  text: string;
-}
-
+// 演示专题 seed 内容版本；提升该值会让 seedDemoWorkspace 重新执行完整 seed 写入。
+const SEED_VERSION = 4;
 const now = "2026-07-02T09:00:00.000Z";
-
-const MATERIALS: DemoMaterialInput[] = [
-  {
-    id: "m-source-register",
-    filename: "00-公开来源与素材使用清单.txt",
-    text: [
-      "公开来源与素材使用清单（演示材料）",
-      "MarineCadastre AccessAIS：NOAA、BOEM 与美国海岸警卫队合作提供，可按地理范围和时间范围下载美国 AIS 历史点位与航迹。",
-      "AccessAIS 入口：https://marinecadastre.gov/accessais/；NOAA 工具页：https://coast.noaa.gov/digitalcoast/tools/ais.html。",
-      "MarineCadastre AIS FAQ：历史 AIS 通常可视作公有领域，但应保留数据来源和用途限制说明。",
-      "AIS FAQ：https://coast.noaa.gov/data/marinecadastre/ais/faq.pdf。",
-      "DVIDS 港口安保图片、港口安保训练视频：页面标注 PUBLIC DOMAIN，用于演示时仍需避免暗示机构背书。",
-      "NOAA Fisheries 船舶噪声音频、NOAA Photo Library 港口图片：适合作为船舶声纹和港口背景多媒体素材。",
-      "访问日期：2026-07-02。",
-      "种子数据仅保存来源索引和派生摘要，不随仓库打包大型图片、视频、音频二进制。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-port-brief",
-    filename: "01-港口值班简报.txt",
-    text: [
-      "港口值班简报（演示案卷）",
-      "2026-07-01 22:30，蓝海星号已完成靠泊，泊位为东三泊位。",
-      "值班员记录称码头照明正常，现场未见异常聚集。",
-      "22:52，外勤巡查称三号门车流平稳，仅有两辆预约车辆待进场。",
-      "备注：简报由当班班组 7 月 2 日 00:10 补录。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-ais-export",
-    filename: "02-AccessAIS字段样式合成记录.txt",
-    text: [
-      "AccessAIS 字段样式合成记录（演示化小样）",
-      "字段参考：NOAA/BOEM/USCG MarineCadastre AccessAIS；真实 AccessAIS 为历史数据，存在发布滞后，本案 2026-07-01 夜间窗口使用同字段合成小样。",
-      "23:10，蓝海星号 AIS 位置仍在外锚地，航速 0.2 节，航向 081，未进入港池。",
-      "23:18，AIS 仍未出现靠东三泊位的低速靠泊轨迹。",
-      "23:27，蓝海星号 AIS 首次进入东三泊位附近缓速区。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-vts-radio",
-    filename: "03-VTS甚高频通话摘录.txt",
-    text: [
-      "VTS 甚高频通话摘录（演示转写）",
-      "23:12 VTS 调度：蓝海星号保持外锚地等待，等 23:20 引航确认后再靠东三泊位。",
-      "23:21 引航员：预计 23:30 进入港池，靠泊东三泊位。",
-      "23:35 船方：正在靠泊，岸吊和装卸作业请等待确认。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-security-sop",
-    filename: "04-港口安保值守要求摘编.txt",
-    text: [
-      "港口安保值守要求摘编（公开资料派生）",
-      "参考来源：USCG Maritime Security Advisory 与港口设施安全演练材料。",
-      "夜间异常车辆进入限制区时，门岗应同步保存登记表、OCR 截图、放行口令和补录审批。",
-      "MARSEC 值守要求强调巡逻、筛查、通信协调和监控留存，不能只用事后口头说明替代原始记录。",
-      "7 月 1 日夜间三号门未见补录审批单。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-gate-log",
-    filename: "05-三号门车辆进出记录.txt",
-    text: [
-      "三号门车辆进出记录（演示案卷）",
-      "22:45，苏E7K31 进入三号门，登记去向为东三泊位，承运单位海桥物流。",
-      "22:48，苏E9P82 进入三号门，登记去向为东三泊位，承运单位海桥物流。",
-      "23:28，苏E7K31 空车从三号门离开。",
-      "23:33，苏E9P82 空车从三号门离开。",
-      "当班门岗汇总称当晚仅两辆货车进入三号门。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-gate-ocr",
-    filename: "06-门岗OCR异常清单.txt",
-    text: [
-      "门岗 OCR 异常清单（演示案卷）",
-      "22:41，OCR 识别苏E7K31 进入三号门。",
-      "22:48，OCR 识别苏E9P82 进入三号门。",
-      "22:56，OCR 识别苏E6V03 进入三号门，门岗登记表无对应记录。",
-      "23:06，OCR 识别苏E2M77 进入三号门，门岗登记表无对应记录。",
-      "OCR 复核结论：22:41-23:06 共识别四辆货车进入三号门。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-yard-log",
-    filename: "07-堆场清点记录.txt",
-    text: [
-      "堆场清点记录（演示案卷）",
-      "夜间复核显示，当晚共有四辆货车进入三号门，其中两辆未在门岗登记表中出现。",
-      "23:16，东三泊位北侧临时堆放区出现箱号 LH-7712。",
-      "23:22，叉车 F-19 在 LH-7712 西侧短暂停留约 6 分钟。",
-      "00:05，堆场系统仍显示 LH-7712 未正式入位。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-weighbridge",
-    filename: "08-地磅称重记录.txt",
-    text: [
-      "地磅称重记录（演示案卷）",
-      "苏E7K31 22:44 入场毛重 16.2 吨，23:28 出场毛重 15.9 吨，备注空车。",
-      "苏E9P82 22:47 入场毛重 17.0 吨，23:33 出场毛重 16.8 吨，备注空车。",
-      "苏E6V03 22:55 入场毛重 35.4 吨，23:41 出场毛重 16.8 吨，净重变化 18.6 吨。",
-      "苏E6V03 出场登记仍填写为空车。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-warehouse",
-    filename: "09-北岸仓储收发台账.txt",
-    text: [
-      "北岸仓储收发台账（演示案卷）",
-      "北岸仓储 7 月 1 日 20:00-24:00 无新增入库记录。",
-      "LH-7712 在仓储系统状态为未到仓，计划到仓时间为 7 月 2 日 10:30。",
-      "海桥物流未提交 LH-7712 夜间转运申请。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-driver-chat",
-    filename: "10-司机微信群聊天摘录.txt",
-    text: [
-      "司机微信群聊天摘录（演示案卷）",
-      "22:38 司机A：23 点前卸完，走三号门，票先别补。",
-      "22:54 调度员：两台车走登记，另外两台跟车牌识别口令。",
-      "23:07 司机B：LH-7712 放东三北侧，叉车在等。",
-      "23:40 司机C：空车出门，别在门口停太久。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-dispatch-phone",
-    filename: "11-调度电话转写.txt",
-    text: [
-      "调度电话转写（演示案卷）",
-      "22:51 调度员甲：卸货已于 23 点前完成，不要让车在门口停太久。",
-      "22:52 司机乙：我们已经按三号门路线进场，等码头口令。",
-      "22:58 调度员甲：未登记的两台车按临时保障车处理，票据明早补。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-customs",
-    filename: "12-海关查验预约单.txt",
-    text: [
-      "海关查验预约单（演示案卷）",
-      "LH-7712 预约查验时间为 2026-07-02 09:30，查验场地为北岸仓储 A 区。",
-      "预约单备注：查验前不得拆封、移箱或换装，确需调整须有书面审批。",
-      "截至 2026-07-02 02:00，系统未见 LH-7712 改约或夜间查验审批。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-seal-patrol",
-    filename: "13-封志巡检记录.txt",
-    text: [
-      "封志巡检记录（演示案卷）",
-      "2026-07-02 00:20，巡检员记录 LH-7712 封志完好，封号 S-44019。",
-      "巡检照片未附原始 EXIF，系统仅保留人工录入结果。",
-      "巡检路线显示 00:18-00:24 停留点位为东三泊位北侧。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-field-photo",
-    filename: "14-现场照片OCR与视觉说明.txt",
-    text: [
-      "现场照片 OCR 与视觉说明（演示案卷）",
-      "23:18，东三泊位北侧照片显示 LH-7712 左侧封志缺失，箱门边缘有新鲜擦痕。",
-      "照片 OCR 识别到箱号 LH-7712、叉车编号 F-19、临时照明车编号 L-07。",
-      "画面右下角时间戳为 2026-07-01 23:18:42，与手机取证时间相差 11 秒。",
-      "照片来源建议替换为 DVIDS 港口安保或 NOAA 港口公开图片；当前 seed 仅保留演示化 OCR 结果。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-weather-tide",
-    filename: "15-NOAA潮汐与能见度背景摘录.txt",
-    text: [
-      "NOAA 潮汐与能见度背景摘录（公开资料派生）",
-      "参考来源：NOAA CO-OPS 水位/潮汐服务与 NOAA 天气公开资料。",
-      "2026-07-01 22:00-2026-07-02 02:00，港区夜间能见度记录为良好至中等，未达到停止靠泊作业阈值。",
-      "23:00-23:40 潮位变化平稳，不构成 AIS 与靠泊日志冲突的主要解释。",
-      "安保值守仍应保留原始气象和潮位截图。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-berth-plan",
-    filename: "16-泊位作业计划.txt",
-    text: [
-      "泊位作业计划（演示案卷）",
-      "7 月 1 日 21:00 发布的泊位计划显示，蓝海星号预计 23:30 靠东三泊位。",
-      "装卸窗口为 7 月 2 日 00:30-04:30，箱号 LH-7712 未列入 7 月 1 日夜间卸载清单。",
-      "计划员备注：如需提前作业，须由 VTS、引航、海关和堆场四方确认。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-followup",
-    filename: "17-后续情况简报.txt",
-    text: [
-      "后续情况简报（演示案卷）",
-      "截至 2026-07-02 02:00，现场未发现异常卸货，东三泊位账面无新增货物。",
-      "简报承认三号门 OCR 与人工登记存在差异，建议继续核对三号门车辆记录与外锚地监控。",
-      "对 LH-7712，简报仅记录系统未到仓，未解释 23:18 现场照片与 00:20 封志巡检冲突。",
-    ].join("\n\n"),
-  },
-  {
-    id: "m-media-index",
-    filename: "18-真实多媒体素材下载索引.txt",
-    text: [
-      "真实多媒体素材下载索引（演示材料）",
-      "DVIDS 港口集装箱检查图片：Coast Guard leads multi-agency security operation in Port Honolulu，页面标注 PUBLIC DOMAIN。",
-      "图片 URL：https://www.dvidshub.net/image/8969502/coast-guard-leads-multi-agency-security-operation-port-honolulu。",
-      "DVIDS 港口安保训练视频：US Coast Guard Port Security Unit 312 simulated training exercises San Francisco Bay，页面标注 PUBLIC DOMAIN，约 1 分钟。",
-      "视频 URL：https://www.dvidshub.net/video/1010679/us-coast-guard-port-security-unit-312-conducts-simulated-training-exercises-san-francisco-bay。",
-      "NOAA Fisheries 船舶噪声音频：Large Vessel 或 Small Vessel 音频可用于 ASR/声纹演示。",
-      "音频入口：https://www.fisheries.noaa.gov/national/science-data/sounds-ocean-environmental-and-anthropogenic。",
-      "Wikimedia Commons Colombo Express in Altenwerder at night-799096.jpeg：CC0 1.0 夜间集装箱船/码头图片。",
-      "图片 URL：https://commons.wikimedia.org/wiki/File:Colombo_Express_in_Altenwerder_at_night-799096.jpeg。",
-      "访问日期：2026-07-02。",
-      "建议下载后作为外部演示附件导入，不随 seed 打包大体积二进制。",
-    ].join("\n\n"),
-  },
-];
 
 interface BuiltMaterial {
   material: Material;
@@ -275,6 +54,7 @@ function buildMaterial(input: DemoMaterialInput): BuiltMaterial {
       processed_at: now,
       engine: "demo-seed",
       chunk_version: 1,
+      ...(input.note ? { note: input.note } : {}),
     },
     chunks,
     text,
@@ -302,8 +82,17 @@ function seedMarker(paths: DataPaths, caseId: string): string {
   return path.join(paths.caseDir(caseId), SEED_MARKER);
 }
 
-async function writeSeedMarker(paths: DataPaths, caseId: string): Promise<void> {
-  await writeJson(seedMarker(paths, caseId), { version: 2, completed_at: now });
+async function writeSeedMarker(paths: DataPaths, caseId: string, version: number): Promise<void> {
+  await writeJson(seedMarker(paths, caseId), { version, completed_at: now });
+}
+
+async function readSeedMarkerVersion(paths: DataPaths, caseId: string): Promise<number> {
+  try {
+    const raw = JSON.parse(await readFile(seedMarker(paths, caseId), "utf8")) as { version?: unknown };
+    return typeof raw.version === "number" ? raw.version : 0;
+  } catch {
+    return 0;
+  }
 }
 
 async function readManifest(paths: DataPaths, caseId: string): Promise<CaseManifest | null> {
@@ -368,16 +157,18 @@ async function seedRestrictedCase(paths: DataPaths, audit: AuditService): Promis
       detail: { caseId: RESTRICTED_CASE_ID, reason: "clearance", actorClearance: "confidential", caseClearance: "topsecret", seeded: true },
     },
   ]);
-  await writeSeedMarker(paths, RESTRICTED_CASE_ID);
+  await writeSeedMarker(paths, RESTRICTED_CASE_ID, 2);
 }
 
 export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): Promise<{ seeded: boolean; caseId: string }> {
   await new UserStore(paths).ensureDemoUsers();
   await seedRestrictedCase(paths, audit);
-  if (await exists(seedMarker(paths, DEMO_CASE_ID))) return { seeded: false, caseId: DEMO_CASE_ID };
+  // 版本升级会把演示专题（DEMO_CASE_ID）的 findings/inquiries/report 重置回 seed 状态，这是演示专题的预期行为；
+  // 用户自行上传的材料经 mergeMaterials 保留，不会被清空。
+  if ((await readSeedMarkerVersion(paths, DEMO_CASE_ID)) >= SEED_VERSION) return { seeded: false, caseId: DEMO_CASE_ID };
 
   const caseDir = paths.caseDir(DEMO_CASE_ID);
-  const built = MATERIALS.map(buildMaterial);
+  const built = DEMO_MATERIALS.map(buildMaterial);
   const previousManifest = await readManifest(paths, DEMO_CASE_ID);
   const manifest: CaseManifest = {
     id: DEMO_CASE_ID,
@@ -401,7 +192,6 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     await writeJsonl(path.join(caseDir, "processed", `${item.material.id}.chunks.jsonl`), item.chunks);
   }
 
-  const cSourceAis = citation(built, "m-source-register", "MarineCadastre AccessAIS：NOAA、BOEM 与美国海岸警卫队合作提供", 0.86);
   const cSourceMedia = citation(built, "m-source-register", "种子数据仅保存来源索引和派生摘要", 0.86);
   const cBrief = citation(built, "m-port-brief", "22:30，蓝海星号已完成靠泊");
   const cBriefTwo = citation(built, "m-port-brief", "仅有两辆预约车辆待进场", 0.9);
@@ -622,7 +412,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       id: "f-berth-timeline",
       caseId: DEMO_CASE_ID,
       conclusion: "靠泊时间线存在高可信冲突：值班简报称蓝海星号 22:30 已靠东三泊位，但 AIS/VTS/泊位计划均指向 23:10 仍在外锚地、23:30 左右才具备靠泊条件。",
-      supporting_citations: [cBrief, cAis, cVts, cBerthPlan, cSourceAis],
+      supporting_citations: [cBrief, cAis, cVts, cBerthPlan],
       opposing_citations: [],
       confidence: 0.92,
       review_status: "approved",
@@ -687,7 +477,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       title: "关于港口异常活动线索核验的情况通报",
       classification: "机密",
       sections: findings.map((finding, index) => ({
-        heading: `研判结论${index + 1}`,
+        heading: `已核准结论${index + 1}`,
         body: finding.conclusion,
         finding_ids: [finding.id],
         citation_ids: finding.supporting_citations.map(citationId),
@@ -704,17 +494,24 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   };
   await writeJson(path.join(caseDir, "report", "report.json"), report);
   await writeJson(path.join(caseDir, "report", "bulletin.spec.json"), report.spec);
+  const demoSectionNumbers = ["一", "二", "三", "四", "五", "六"];
   await writeFile(
     path.join(caseDir, "report", "bulletin.md"),
     [
       `# ${report.spec.title}`,
       "",
-      `密级：${report.spec.classification}`,
+      ...report.spec.sections.flatMap((section, index) => [
+        `${demoSectionNumbers[index] ?? index + 1}、${section.heading}`,
+        `　　${section.body}`,
+        "",
+      ]),
+      `${demoSectionNumbers[report.spec.sections.length] ?? report.spec.sections.length + 1}、综合结论`,
       "",
-      ...report.spec.sections.flatMap((section) => [`## ${section.heading}`, "", section.body, ""]),
-      "## 综合结论",
+      ...(report.spec.conclusion ?? "").split("\n\n").map((paragraph) => `　　${paragraph}`),
       "",
-      report.spec.conclusion ?? "",
+      "",
+      `　　　　${report.spec.issuer}`,
+      "　　　　2026 年 07 月 02 日",
       "",
     ].join("\n"),
     "utf8",
@@ -738,7 +535,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     ]),
     { user: "operator", action: "report.draft", object: `report:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, rendered: true, seeded: true } },
   ]);
-  await writeSeedMarker(paths, DEMO_CASE_ID);
+  await writeSeedMarker(paths, DEMO_CASE_ID, SEED_VERSION);
 
   return { seeded: true, caseId: DEMO_CASE_ID };
 }

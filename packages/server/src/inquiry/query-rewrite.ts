@@ -2,6 +2,10 @@ import type { LlmDeps } from "../model/structured.js";
 
 export type RewriteMode = "rewrite" | "hyde";
 
+function assertExhaustive(_mode: never): never {
+  throw new Error(`Unhandled RewriteMode: ${_mode}`);
+}
+
 export async function rewriteForRetrieval(
   deps: LlmDeps,
   user: string,
@@ -12,10 +16,18 @@ export async function rewriteForRetrieval(
   await deps.guard.authorize(deps.modelEndpoint, { user, purpose: mode === "hyde" ? "query-hyde" : "query-rewrite" });
   if (!deps.adapter) throw new Error("文本 LLM 未配置：查询改写不可用");
 
-  const userContent =
-    mode === "hyde"
-      ? `用户问题：\n${query}\n\n请输出用于检索的假设性理想答案段落。`
-      : `用户问题：\n${query}\n\n请输出改写后的检索查询。`;
+  let userContent: string;
+  switch (mode) {
+    case "hyde":
+      userContent = `用户问题：\n${query}\n\n请输出用于检索的假设性理想答案段落。`;
+      break;
+    case "rewrite":
+      userContent = `用户问题：\n${query}\n\n请输出改写后的检索查询。`;
+      break;
+    default:
+      assertExhaustive(mode);
+  }
+
   const result = await deps.adapter.generate({
     systemPrompt,
     messages: [{ role: "user", content: userContent }],

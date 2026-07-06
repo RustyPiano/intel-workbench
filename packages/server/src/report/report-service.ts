@@ -228,13 +228,43 @@ export class ReportService {
     return { filename: `${caseId}-bulletin.md`, content, status: record.status };
   }
 
+  async generateAutoDraft(actor: Identity, caseId: string): Promise<DraftInput> {
+    const manifest = await this.cases.get(actor, caseId);
+    const approvedFindings = (await readFindings(this.paths, caseId)).filter((finding) => finding.review_status === "approved");
+    const sections = this.sectionsFromFindings(approvedFindings);
+
+    const draft: DraftInput = {
+      title: `${manifest.name} 情报分析报告`,
+      classification: CLEARANCE_LABELS[manifest.clearance],
+      sections,
+      finding_ids: approvedFindings.map((finding) => finding.id),
+      date: new Date().toISOString().split("T")[0],
+    };
+
+    await this.audit.append({
+      user: actor.id,
+      action: "report.auto-draft",
+      object: `report:${caseId}`,
+      caseId,
+      detail: {
+        caseId,
+        sectionsGenerated: sections.length,
+        findingsCount: approvedFindings.length,
+      },
+    });
+
+    return draft;
+  }
+
   private async buildSpec(input: DraftInput, manifest: CaseManifest, caseId: string): Promise<BulletinSpec> {
     const title = input.title?.trim();
     if (!title) throw new AppError(400, "报告标题为必填项");
     const approvedFindings = (await readFindings(this.paths, caseId)).filter((finding) => finding.review_status === "approved");
-    const sections = input.finding_ids !== undefined
-      ? this.sectionsFromFindings(this.selectApprovedFindings(approvedFindings, input.finding_ids))
-      : (input.sections ?? []).map((s) => this.normalizeSection(s)).filter((s) => s.heading || s.body || s.finding_ids.length > 0 || s.citation_ids.length > 0);
+    const sections = input.sections !== undefined
+      ? input.sections.map((s) => this.normalizeSection(s)).filter((s) => s.heading || s.body || s.finding_ids.length > 0 || s.citation_ids.length > 0)
+      : input.finding_ids !== undefined
+        ? this.sectionsFromFindings(this.selectApprovedFindings(approvedFindings, input.finding_ids))
+        : [];
     if (sections.length === 0 && input.body?.trim()) {
       sections.push(this.normalizeSection({ heading: "正文", body: input.body.trim() }));
     }
@@ -277,7 +307,7 @@ export class ReportService {
     return findings.map((finding, index) => {
       const citationIds = finding.supporting_citations.map(citationId);
       return {
-        heading: `研判结论${index + 1}`,
+        heading: `已核准结论${index + 1}`,
         body: finding.conclusion,
         finding_ids: [finding.id],
         citation_ids: citationIds,

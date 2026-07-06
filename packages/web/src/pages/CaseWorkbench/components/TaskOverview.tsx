@@ -18,6 +18,7 @@ import {
   MANUAL_STAGE_KEYS,
   REPORT_STATUS_LABELS,
   TASK_RUN_STORAGE_PREFIX,
+  taskStageName,
   TASK_STAGE_TAB_PATHS,
   TASK_STATUS_LABELS,
 } from "./helpers";
@@ -127,12 +128,17 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
   const reportText = overview?.reportStatus ? REPORT_STATUS_LABELS[overview.reportStatus] : "未生成";
   const currentText = snapshot
     ? snapshot.run.status === "active"
-      ? currentStage?.name ?? "进行中"
+      ? taskStageName(currentStage) || "进行中"
       : snapshot.run.status === "done"
         ? "流程完成"
         : "流程失败"
     : "尚未开始";
   const actionText = nextTaskAction(snapshot, creating, confirming);
+  const actionHint = snapshot?.run.status === "done"
+    ? "所有阶段已完成，后续可在报告复核页查看或重新导出。"
+    : snapshot?.run.status === "failed"
+      ? "处理失败阶段后可以重新启动核验任务。"
+      : stageHint(currentStage);
   const currentStagePath = currentStage ? TASK_STAGE_TAB_PATHS[currentStage.key] : null;
 
   return (
@@ -161,7 +167,7 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
         <div>
           <span className="task-next__label">现在要做</span>
           <strong>{actionText}</strong>
-          <small>{stageHint(currentStage)}</small>
+          <small>{actionHint}</small>
         </div>
         <div className="task-next__actions">
           {currentStagePath ? (
@@ -184,12 +190,12 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
 
       <div className="task-stage-strip" aria-label="任务阶段进度">
         {stages.map((stage, index) => (
-          <div key={stage.key} className={`task-stage task-stage--${stage.status}`} title={`${index + 1}. ${stage.name} · ${TASK_STATUS_LABELS[stage.status]}`}>
+          <div key={stage.key} className={`task-stage task-stage--${stage.status}`} title={`${index + 1}. ${taskStageName(stage)} · ${TASK_STATUS_LABELS[stage.status]}`}>
             <div className="task-stage__top">
               <span className="task-stage__index">{index + 1}</span>
               <span className="task-stage__status">{TASK_STATUS_LABELS[stage.status]}</span>
             </div>
-            <span className="task-stage__name">{stage.name}</span>
+            <span className="task-stage__name">{taskStageName(stage)}</span>
             <span className="task-stage__hint">{stageHint(stage)}</span>
             {stage.checkpoint ? <span className="task-stage__checkpoint">需人工确认</span> : null}
             {stage.status === "active" && MANUAL_STAGE_KEYS.has(stage.key) ? (

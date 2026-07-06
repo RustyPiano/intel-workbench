@@ -126,7 +126,7 @@ describe("demo delivery seed", () => {
     const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
     expect(manifest.materials).toHaveLength(19);
     await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), "report", "report.json"), "utf8")).resolves.toContain("\"status\": \"draft\"");
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 2");
+    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 4");
     await expect(readFile(path.join(paths.caseDir("restricted-review-sample"), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 2");
   });
 
@@ -143,7 +143,7 @@ describe("demo delivery seed", () => {
     expect(events.some((event) => event.action === "case.create" && event.detail?.caseId === DEMO_CASE_ID)).toBe(true);
     expect(events.some((event) => event.action === "case.access" && event.detail?.caseId === "restricted-review-sample" && event.result === "deny")).toBe(true);
     expect(events.filter((event) => event.action === "material.ingest" && event.detail?.caseId === DEMO_CASE_ID)).toHaveLength(19);
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 2");
+    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 4");
   });
 
   it("preserves user-added demo materials when repairing an old unmarked seed", async () => {
@@ -170,6 +170,24 @@ describe("demo delivery seed", () => {
     const repaired = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
     expect(repaired.materials.map((material) => material.id)).toContain("m-user-added");
     await expect(readFile(path.join(caseDir, "materials", "m-user-added-用户追加材料.txt"), "utf8")).resolves.toBe("用户追加材料");
+  });
+
+  it("re-seeds the demo case when the marker version is stale, and keeps user materials", async () => {
+    await seedDemoWorkspace(paths, audit);
+    const caseDir = paths.caseDir(DEMO_CASE_ID);
+    const markerFile = path.join(caseDir, ".demo-seed-complete.json");
+
+    await writeFile(markerFile, `${JSON.stringify({ version: 2 })}\n`, "utf8");
+
+    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
+    await expect(readFile(markerFile, "utf8")).resolves.toContain("\"version\": 4");
+
+    const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
+    expect(manifest.materials.find((material) => material.id === "m-source-register")?.note).toContain("不能作为案情事实主依据");
+
+    const before = (await audit.readAll()).length;
+    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: false, caseId: DEMO_CASE_ID });
+    expect((await audit.readAll())).toHaveLength(before);
   });
 
   it("seeds the port verification case, restricted sample, and deny audit idempotently", async () => {
@@ -203,6 +221,8 @@ describe("demo delivery seed", () => {
       "m-followup",
       "m-media-index",
     ]);
+    expect(demoCase.materials.find((material) => material.id === "m-source-register")?.note).toContain("不能作为案情事实主依据");
+    expect(demoCase.materials.find((material) => material.id === "m-media-index")?.note).toContain("不能作为案情事实主依据");
     await expect(cases.get(INTERNAL_OPERATOR, "restricted-review-sample")).rejects.toMatchObject({ status: 403 });
 
     const securityCases = await cases.list(SECURITY);

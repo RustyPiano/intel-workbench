@@ -50,50 +50,64 @@ export function LoginPage() {
         <h1 className="login__brand">情报分析工作台</h1>
         <p className="login__sub">离线智能情报处理与多模态分析系统</p>
 
-        <form className="login__roles" onSubmit={handleSubmit}>
-          <div className="form-label">用户名</div>
-          <input
-            type="text"
-            className="input-text login__input"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => {
-              setUsername(e.target.value);
-              setMustChange(false);
-            }}
-            placeholder="用户名"
-            disabled={mustChange}
-          />
-          <div className="form-label login__label">口令</div>
-          <input
-            type="password"
-            className="input-text login__input"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="口令"
-            disabled={mustChange}
-          />
+        <form className="login__form" onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="username-input">用户名</label>
+            <input
+              id="username-input"
+              type="text"
+              className="input-text login__input"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setMustChange(false);
+              }}
+              placeholder="请输入用户名"
+              disabled={mustChange}
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="password-input">口令</label>
+            <input
+              id="password-input"
+              type="password"
+              className="input-text login__input"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="请输入口令"
+              disabled={mustChange}
+            />
+          </div>
+
           {mustChange ? (
             <>
-              <div className="form-label login__label">新口令</div>
-              <input
-                type="password"
-                className="input-text login__input"
-                autoComplete="new-password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="至少 12 位"
-              />
-              <div className="form-label login__label">确认新口令</div>
-              <input
-                type="password"
-                className="input-text login__input"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="再次输入新口令"
-              />
+              <div className="form-group">
+                <label className="form-label" htmlFor="new-password-input">新口令</label>
+                <input
+                  id="new-password-input"
+                  type="password"
+                  className="input-text login__input"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="至少 12 位"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="confirm-password-input">确认新口令</label>
+                <input
+                  id="confirm-password-input"
+                  type="password"
+                  className="input-text login__input"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="再次输入新口令"
+                />
+              </div>
             </>
           ) : null}
 

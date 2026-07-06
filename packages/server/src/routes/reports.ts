@@ -30,5 +30,10 @@ export function createReportsRouter(reports: ReportService): Router {
     res.json({ ok: true, export: await reports.export(req.identity, req.params.id) });
   });
 
+  router.post("/:id/report/auto-draft", async (req, res) => {
+    const draft = await reports.generateAutoDraft(req.identity, req.params.id);
+    res.json({ ok: true, draft });
+  });
+
   return router;
 }

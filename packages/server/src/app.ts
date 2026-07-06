@@ -13,6 +13,7 @@ import { UserStore } from "./auth/user-store.js";
 import { CaseService } from "./cases/case-service.js";
 import { ContradictionService } from "./analysis/contradiction-service.js";
 import { ElementGraphService } from "./analysis/element-graph-service.js";
+import { ContextService } from "./context/context-service.js";
 import { defaultDataDir, resolveDataPaths, type DataPaths } from "./data/paths.js";
 import { AppError, authMiddleware } from "./domain/identity.js";
 import { ElementService } from "./elements/element-service.js";
@@ -26,10 +27,12 @@ import type { ModelSlots } from "./model/slots.js";
 import type { LlmDeps } from "./model/structured.js";
 import { readModelConfig } from "./model/model-config.js";
 import { OverviewService } from "./overview/overview-service.js";
+import { PromptService } from "./prompt/prompt-service.js";
 import { ReportService } from "./report/report-service.js";
 import { ReviewService } from "./review/review-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
 import { createApiRouter } from "./routes/api.js";
+import { SuggestionService } from "./suggestion/suggestion-service.js";
 import { TaskService } from "./task/task-service.js";
 
 export interface CreateAppOptions {
@@ -67,6 +70,7 @@ export interface AppServices {
   review: ReviewService;
   tasks: TaskService;
   admin: AdminService;
+  suggestions: SuggestionService;
   /** 模型槽适配器（二期 P2.2；mock-first，供媒体管线/稠密检索消费）。 */
   slots: ModelSlots;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
@@ -173,10 +177,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const findings = new FindingService(paths, audit, cases);
   const elementGraph = new ElementGraphService(elements);
   const contradictions = new ContradictionService(paths, audit, cases, materials, llm, promptStore);
+  const promptService = new PromptService(promptStore, audit);
+  const context = new ContextService(cases, materials, elements, contradictions, inquiries, findings);
   const reports = new ReportService(paths, audit, cases);
   const review = new ReviewService(cases, audit);
   const tasks = new TaskService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
+  const suggestions = new SuggestionService(audit, inquiries, findings, contradictions, elementGraph, context, promptService, llm);
 
   const services: AppServices = {
     paths,
@@ -194,6 +201,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     review,
     tasks,
     admin,
+    suggestions,
     slots,
     modelConfigured,
     egressAllowlist: guard.allowlist,
@@ -201,7 +209,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

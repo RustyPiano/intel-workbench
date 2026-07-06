@@ -6,11 +6,14 @@ export interface BBox {
   label?: string;
 }
 
-export function BboxImage({ materialId, frameT, boxes }: { materialId: string; frameT?: number; boxes: BBox[] }) {
+export function BboxImage({ materialId, frameT, boxes }: { materialId: string; frameT?: number | string; boxes: BBox[] }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
     let u: string | null = null;
+    setUrl(null);
+    setError(null);
     const p = frameT !== undefined ? fetchFrameUrl(materialId, frameT) : fetchMaterialRawUrl(materialId);
     p.then((x) => {
       if (alive) {
@@ -19,7 +22,7 @@ export function BboxImage({ materialId, frameT, boxes }: { materialId: string; f
       } else {
         URL.revokeObjectURL(x);
       }
-    }).catch(() => alive && setUrl(null));
+    }).catch((e: Error) => alive && setError(e.message));
     return () => {
       alive = false;
       if (u) URL.revokeObjectURL(u);
@@ -27,7 +30,7 @@ export function BboxImage({ materialId, frameT, boxes }: { materialId: string; f
     };
   }, [materialId, frameT]);
 
-  if (!url) return <div style={{ padding: "16px", fontSize: "12px", color: "var(--text-dim)", background: "rgba(16,24,40,0.4)", borderRadius: "var(--radius)" }}>加载帧…</div>;
+  if (!url) return <div style={{ padding: "16px", fontSize: "12px", color: "var(--text-dim)", background: "rgba(16,24,40,0.4)", borderRadius: "var(--radius)" }}>{error ?? "加载帧…"}</div>;
   return (
     <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", lineHeight: 0 }}>
       <img src={url} alt="frame" style={{ maxWidth: "100%", display: "block", borderRadius: "var(--radius)" }} />

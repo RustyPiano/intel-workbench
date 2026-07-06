@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { NavLink, useParams } from "react-router-dom";
+import { NavLink, useNavigate, useParams } from "react-router-dom";
 import {
   approveReport,
   draftReport,
   exportReport,
+  generateFindingSuggestions,
   generateAutoDraft,
   getReport,
   listFindings,
@@ -22,6 +23,7 @@ import {
 
 export function ReportPanel() {
   const { id: caseId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { user } = useSession();
   const canReview = user?.role === "security" || user?.role === "admin";
 
@@ -36,6 +38,7 @@ export function ReportPanel() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [preparingFindings, setPreparingFindings] = useState(false);
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -145,8 +148,33 @@ export function ReportPanel() {
     }
   };
 
+  const handlePrepareFindings = async () => {
+    if (!user || !caseId || preparingFindings) return;
+    setPreparingFindings(true);
+    setError(null);
+    try {
+      await generateFindingSuggestions(caseId);
+      navigate(`/cases/${encodeURIComponent(caseId)}/findings`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPreparingFindings(false);
+    }
+  };
+
   const status = report?.status ?? "draft";
   const stepIndex = REPORT_STEPS.findIndex((s) => s.status === status);
+  const reportFindingIds = new Set(report?.spec.sections.flatMap((section) => section.finding_ids ?? []) ?? []);
+  const coveredApprovedCount = approvedFindings.filter((finding) => reportFindingIds.has(finding.id)).length;
+  const freshnessAt = status === "exported" ? report?.exported_at ?? report?.approved_at : report?.approved_at;
+  const freshnessAtMs = freshnessAt ? Date.parse(freshnessAt) : NaN;
+  const hasNewApprovedFindings = Boolean(
+    report
+      && (status === "approved" || status === "exported")
+      && Number.isFinite(freshnessAtMs)
+      && approvedFindings.some((finding) => finding.reviewed_at && Date.parse(finding.reviewed_at) > freshnessAtMs),
+  );
+  const hasCoverageGap = Boolean(report && approvedFindings.length > 0 && coveredApprovedCount < approvedFindings.length);
   const classificationLabel = report?.spec.classification
     ? CLEARANCE_LABELS[report.spec.classification as keyof typeof CLEARANCE_LABELS] ?? report.spec.classification
     : "";
@@ -189,7 +217,18 @@ export function ReportPanel() {
           </button>
         </div>
 
+        <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "10px 12px", color: "var(--text-dim)", fontSize: "12px", lineHeight: "1.6", marginBottom: "12px", background: "rgba(255, 255, 255, 0.02)" }}>
+          <strong style={{ color: "var(--text)" }}>报告草稿</strong>：主题取自当前专题；正文只使用右侧勾选的已核准结论。<strong style={{ color: "var(--text)" }}>结论</strong> 是核验池中带引用、经复核的事实判断。
+        </div>
+
         <input type="text" className="report-title-input" placeholder="报告标题，例如：关于某网络入侵事件的情况通报" value={title} onChange={(e) => setTitle(e.target.value)} />
+
+        {(hasNewApprovedFindings || hasCoverageGap) && (
+          <div style={{ border: "1px solid rgba(245,158,11,0.45)", background: "rgba(120,53,15,0.18)", borderRadius: "var(--radius)", padding: "10px 12px", color: "var(--warn-light)", fontSize: "12px", lineHeight: "1.6", marginBottom: "12px" }}>
+            {hasNewApprovedFindings ? <div>报告核准/导出后又出现新的已核准结论，请重新生成或保存草稿后再复核。</div> : null}
+            {hasCoverageGap ? <div>当前报告覆盖 {coveredApprovedCount}/{approvedFindings.length} 条已核准结论，请重新生成或保存草稿以纳入遗漏结论。</div> : null}
+          </div>
+        )}
 
         {!report && loaded && (
           <div className="report-auto-draft" style={{
@@ -262,9 +301,12 @@ export function ReportPanel() {
           <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>已核准结论</div>
           {approvedFindings.length === 0 ? (
             <div style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.7", display: "flex", flexDirection: "column", gap: "8px" }}>
-              <span>暂无已核准结论。请先去结论核验，核准后再提交报告。</span>
-              <NavLink to={findingsPath} className="btn" style={{ width: "fit-content", padding: "5px 10px", fontSize: "12px" }}>
-                去结论核验
+              <span>暂无已核准结论。先自动发现候选结论，加入核验池并核准后，才能生成报告。</span>
+              <button type="button" className="btn btn--primary" style={{ width: "fit-content", padding: "5px 10px", fontSize: "12px" }} disabled={preparingFindings} onClick={handlePrepareFindings}>
+                {preparingFindings ? "发现中…" : "自动发现候选结论"}
+              </button>
+              <NavLink to={findingsPath} style={{ width: "fit-content", color: "var(--text-muted)", fontSize: "12px", textDecoration: "underline", textUnderlineOffset: "3px" }}>
+                打开结论核验
               </NavLink>
             </div>
           ) : approvedFindings.map((finding) => (

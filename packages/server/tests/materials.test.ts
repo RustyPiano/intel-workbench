@@ -478,6 +478,14 @@ describe("MaterialService 视频/图像加工（二期 P2.3b）", () => {
     await expect(s.getFrameFile(OPERATOR, mid, "../etc")).rejects.toMatchObject({ status: 400 });
   });
 
+  it("getFrameFile：秒数映射到对应镜头帧", async () => {
+    const s = svc();
+    const mid = await ingest(s, "clip.mp4");
+    await s.process(OPERATOR, caseId, mid);
+    const frame = await s.getFrameFile(OPERATOR, mid, "10.5");
+    expect(frame.path).toContain("1.svg");
+  });
+
   it("getFrameFile：png 帧按 .png 落盘并返回 image/png", async () => {
     const s = svc();
     const mid = await ingest(s, "clip.mp4");

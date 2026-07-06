@@ -177,7 +177,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
     await reports.draft(OPERATOR, caseId, {
       title: "通报",
       sections: [{
-        heading: "研判结论",
+        heading: "已核准结论",
         body: finding.conclusion,
         finding_ids: [finding.id],
         citation_ids: [],

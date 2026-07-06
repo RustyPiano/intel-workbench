@@ -679,27 +679,38 @@ export class MaterialService {
     return { material, note: material.note ?? "该素材尚未加工完成" };
   }
 
-  /** 取视频/图像关键帧文件（bbox 引用回放，二期 §4.3）。t = 镜头序号（数字）。 */
+  /** 取视频/图像关键帧文件（bbox 引用回放，二期 §4.3）。t 可为镜头序号或秒数。 */
   async getFrameFile(actor: Identity, materialId: string, t: string): Promise<{ path: string; contentType: string }> {
     const located = await this.locate(materialId);
     if (!located) throw new AppError(404, "素材不存在");
     await this.cases.get(actor, located.caseId);
-    if (!/^\d+$/.test(t)) throw new AppError(400, "非法时间码");
+    if (!/^\d+(?:\.\d+)?$/.test(t)) throw new AppError(400, "非法时间码");
+    const seconds = Number(t);
     const processedDir = path.join(this.paths.caseDir(located.caseId), "processed");
+    let key = t;
     let format: MediaFrame["format"] | null = null;
     try {
       const media = JSON.parse(await readFile(path.join(processedDir, `${materialId}.media.json`), "utf8")) as {
-        shots?: Array<{ frameKey?: unknown; frameFormat?: unknown }>;
+        shots?: Array<{ frameKey?: unknown; frameFormat?: unknown; t1?: unknown; t2?: unknown }>;
       };
-      const shot = Array.isArray(media.shots) ? media.shots.find((s) => s.frameKey === t) : undefined;
-      if (shot && isFrameFormat(shot.frameFormat)) format = shot.frameFormat;
-      else throw new AppError(404, "帧不存在");
+      const shots = Array.isArray(media.shots) ? media.shots : [];
+      const shot = shots.find((s) => s.frameKey === t) ?? shots.find((s, i) => {
+        const t1 = typeof s.t1 === "number" ? s.t1 : Number(s.t1);
+        const t2 = typeof s.t2 === "number" ? s.t2 : Number(s.t2);
+        return Number.isFinite(t1) && Number.isFinite(t2) && seconds >= t1 && (seconds < t2 || (i === shots.length - 1 && seconds <= t2));
+      });
+      if (shot && typeof shot.frameKey === "string" && isFrameFormat(shot.frameFormat)) {
+        key = shot.frameKey;
+        format = shot.frameFormat;
+      } else {
+        throw new AppError(404, "帧不存在");
+      }
     } catch (e) {
       if (e instanceof AppError) throw e;
     }
     const candidates: MediaFrame["format"][] = format ? [format] : ["svg", "png"];
     for (const candidate of candidates) {
-      const file = path.join(processedDir, `${materialId}.frames`, `${t}.${candidate}`);
+      const file = path.join(processedDir, `${materialId}.frames`, `${key}.${candidate}`);
       try {
         await stat(file);
         return { path: file, contentType: frameContentType(candidate) };

@@ -11,8 +11,8 @@ const TABS: { to: string; label: string }[] = [
   { to: "materials", label: "素材" },
   { to: "elements", label: "要素 / 时间线" },
   { to: "contradictions", label: "矛盾核验" },
-  { to: "inquiry", label: "溯源问答" },
-  { to: "findings", label: "研判结论" },
+  { to: "inquiry", label: "补充核验" },
+  { to: "findings", label: "结论核验" },
   { to: "report", label: "报告复核" },
   { to: "audit", label: "审计" },
 ];
@@ -37,7 +37,7 @@ export function CaseWorkbench() {
     <div className="workbench">
       <div className="workbench__head">
         <div className="workbench__title-area">
-          <h1 className="workbench__title">专题工作台: {caseInfo?.name ?? id}</h1>
+          <h1 className="workbench__title">专题（本次核验主题）: {caseInfo?.name ?? id}</h1>
           <span className="workbench__status-dot" title="活跃研判中" />
           {caseInfo ? (
             <span className={`badge badge--clearance tone-${caseInfo.clearance}`} style={{ padding: "2px 8px", fontSize: "11px" }}>
@@ -48,7 +48,7 @@ export function CaseWorkbench() {
         <span className="workbench__hint">
           {caseInfo?.description?.trim()
             ? caseInfo.description
-            : "覆盖素材解析、要素抽取、溯源问答与报告复核全流程，所有研判结论均可回溯至素材原文出处。"}
+            : "专题是本次核验任务；结论是带原文引用并经人工核准的事实判断；报告是基于已核准结论生成的通报草稿。"}
         </span>
       </div>
 

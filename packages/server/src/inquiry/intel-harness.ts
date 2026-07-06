@@ -106,18 +106,11 @@ function foldChar(ch: string): string {
 function normalizeForMatch(text: string): { norm: string; map: number[] } {
   const chars: string[] = [];
   const map: number[] = [];
-  let prevSpace = false;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]!;
-    if (/\s/.test(ch)) {
-      if (!prevSpace) {
-        chars.push(" ");
-        map.push(i);
-        prevSpace = true;
-      }
-      continue;
-    }
-    prevSpace = false;
+    // 空白整体剔除而非折叠为单空格：CJK 语料空白不承载语义，且模型引文常在原文换行处
+    // 直接丢失空白（"。\n登记" 被引成 "。登记"），折叠式归一无法命中。
+    if (/\s/.test(ch)) continue;
     chars.push(foldChar(ch));
     map.push(i);
   }
@@ -128,9 +121,9 @@ function normalizeForMatch(text: string): { norm: string; map: number[] } {
  * exact indexOf 失败后的保守归一化定位：在归一空间命中后映射回原文逐字片段。
  * 命中返回原文片段与其起点（首次出现语义与 exact 一致，偏移消歧仍为 Batch F deferred）；未命中返回 null。
  */
-function fuzzyLocate(text: string, quote: string): { quote: string; start: number } | null {
+export function fuzzyLocate(text: string, quote: string): { quote: string; start: number } | null {
   const { norm, map } = normalizeForMatch(text);
-  const normQuote = normalizeForMatch(quote).norm.trim();
+  const normQuote = normalizeForMatch(quote).norm;
   if (normQuote.length === 0) return null;
   const nStart = norm.indexOf(normQuote);
   if (nStart < 0) return null;
@@ -318,7 +311,9 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
 	              const { material_id } = args as { material_id?: unknown };
 	              const needle = searchQuery((args as { query?: unknown }).query);
 	              if (!needle) return { ok: false, content: "query 不能为空" };
-	              const materialId = typeof material_id === "string" && material_id.trim() ? material_id.trim() : undefined;
+	              // 模型常把 JSON null 写成字符串 "null"/"undefined"，一律按"未指定素材"处理。
+              const rawMaterialId = typeof material_id === "string" ? material_id.trim() : "";
+              const materialId = rawMaterialId && !["null", "undefined"].includes(rawMaterialId.toLowerCase()) ? rawMaterialId : undefined;
 	              if (materialId && !deps.nameById.has(materialId)) return unavailable();
 	              const maxMatches = boundedInt((args as { max_matches?: unknown }).max_matches, 20, 1, MAX_SEARCH_MATERIAL_MATCHES);
 	              const contextChars = boundedInt((args as { context_chars?: unknown }).context_chars, 40, 0, MAX_SEARCH_CONTEXT_CHARS);

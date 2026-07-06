@@ -1,4 +1,22 @@
-# Implementation Notes — Agent 成功率修复（阶段一）+ 透明化（阶段二）
+# Implementation Notes — Agent 成功率修复（阶段一）+ 透明化（阶段二）+ 目标驱动工作台（阶段三）
+
+## 阶段三 M5 全链路彩排（2026-07-07，真模型，8 份港口案卷子集）
+
+主线验收通过：新建专题 → 批量上传（8 份全 done）→ 自动流水线零点击推进（要素 → 矛盾 → 自动研判 4/4，取消路径实测有效）→ 简报 5 句带引用概览 → 候选 apply → security 核准 2 条 → 矛盾处置 → 覆盖率 2/5 → 4/5（时间线缺口为子集真实状态）→ 报告 draft→submit→approve→export 出 bulletin.md。演练数据保留在 cases/演练2-夜间转运线索核验，可在界面直接查看。
+
+彩排发现并当场修复（每一条在演示现场都可能爆）：
+
+1. cite 模糊匹配的空白折叠 bug：模型引文跨原文换行处不带空白（"。\n登记"→"。登记"）时无法命中；归一化从"折叠为单空格"改为"整体剔除空白"（intel-harness normalizeForMatch），带回归测试
+2. search_materials 把字符串 "null" 当真实素材 ID：按未指定处理（模型常见 quirk），带回归测试
+3. 矛盾抽取批次失败原因被吞：ClaimBatchResult 携带 error，warnings 透出原因——正是靠这条当场定位了下一条
+4. structured.ts 的 generateJson 默认 maxTokens=1500 硬上限：改为尊重 MINI_AGENT_MAX_OUTPUT_TOKENS（所有直调受益）
+5. 模型温度 0 下稳定产出漏逗号 JSON（第 248 行）导致矛盾批次整批失败：parseJsonOutput 增加保守修复回退（补元素间漏逗号 + 平衡前缀截取，tests/structured-parse.test.ts），矛盾检测从 degraded/0 条变为 succeeded/11-11 全覆盖并命中预埋的靠泊时间矛盾（0.75）
+6. 简报概览句校验用严格子串导致整段被拒（degraded 且无原因）：复用 cite 的 fuzzyLocate（哈希保证不变），0 句 → 5 句全过；降级原因补齐观测（overview-sentences-rejected / unknown-error 兜底）
+7. 概览引用显示素材 ID 而非文件名：generateOverview 接入 manifest 文件名映射
+
+流程注意事项（写给演示脚本）：素材必须**批量**上传（单个流式逐传会在第一份完成时触发自动流水线，后续素材因产物幂等跳过不被分析——M1 已知限制的现场表现）；auto-draft 是"生成建议稿"，落盘需再 POST /report/draft（人先过目再保存，语义如此）。
+
+全量回归：typecheck 全绿，877 测试通过。
 
 ## 阶段二：事件协议 v2 + 方向 B 工作台（2026-07-06）
 

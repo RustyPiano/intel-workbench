@@ -21,6 +21,7 @@ import { findingsFilePath } from "../finding/finding-store.js";
 import type { FindingService } from "../finding/finding-service.js";
 import type { AutoInquiryProgress, AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import { chunkToCitation } from "../inquiry/citation.js";
+import { fuzzyLocate } from "../inquiry/intel-harness.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-config.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
@@ -215,7 +216,7 @@ export class BriefService {
       this.contradictions.getResult(actor, caseId),
       this.findings.list(actor, caseId),
       this.suggestions.suggestQuestions(actor, caseId),
-      this.generateOverview(actor, caseId),
+      this.generateOverview(actor, caseId, new Map(manifest.materials.map((m) => [m.id, m.filename]))),
     ]);
 
     const ackByContradiction = new Map(
@@ -281,7 +282,7 @@ export class BriefService {
    * 生成案情概览段：喂编号素材片段，要求逐句携带 chunk_id + 逐字 quote，服务端逐句校验后
    * 丢弃不过关句。LLM 未配置 / 无已加工素材 / 出站被拒 / 生成失败 → 降级为空（纯统计简报）。
    */
-  private async generateOverview(actor: Identity, caseId: string): Promise<OverviewResult> {
+  private async generateOverview(actor: Identity, caseId: string, materialNames: Map<string, string>): Promise<OverviewResult> {
     const chunks = await this.materials.loadCaseChunks(caseId);
     if (!this.llm.adapter || !this.llm.modelEndpoint) return { sentences: [], degraded: true, reason: "llm-unconfigured" };
     if (chunks.length === 0) return { sentences: [], degraded: true, reason: "no-chunks" };
@@ -294,26 +295,32 @@ export class BriefService {
         maxTokens: 1500,
       });
       const retrievedById = new Map(chunks.map((chunk) => [chunk.chunk_id, chunk]));
-      const nameById = new Map(chunks.map((chunk) => [chunk.material_id, chunk.material_id]));
-      return { sentences: this.validateSentences(raw.sentences, retrievedById, nameById), degraded: false };
+      const nameById = new Map(chunks.map((chunk) => [chunk.material_id, materialNames.get(chunk.material_id) ?? chunk.material_id]));
+      const sentences = this.validateSentences(raw.sentences, retrievedById, nameById);
+      // 一句都没通过校验也按降级处理并留痕，否则界面只见空概览、无从定位原因。
+      if (sentences.length === 0) return { sentences, degraded: true, reason: "overview-sentences-rejected" };
+      return { sentences, degraded: false };
     } catch (e) {
-      return { sentences: [], degraded: true, reason: e instanceof Error ? e.message : String(e) };
+      const message = e instanceof Error ? e.message : String(e);
+      return { sentences: [], degraded: true, reason: message || "unknown-error" };
     }
   }
 
-  /** 逐句校验：chunk 存在、内容哈希一致、quote 是原文子串；不过关整句丢弃（防编造）。 */
+  /** 逐句校验：chunk 存在、内容哈希一致、quote 可逐字定位（与 cite 工具同一模糊回退）；不过关整句丢弃（防编造）。 */
   private validateSentences(raw: unknown, retrievedById: Map<string, Chunk>, nameById: Map<string, string>): BriefOverviewSentence[] {
     const list = Array.isArray(raw) ? (raw as RawOverviewSentence[]) : [];
     const sentences: BriefOverviewSentence[] = [];
     for (const item of list) {
       const text = typeof item?.text === "string" ? item.text.trim() : "";
       const chunkId = typeof item?.chunk_id === "string" ? item.chunk_id : "";
-      const quote = typeof item?.quote === "string" ? item.quote.trim() : "";
-      if (!text || !chunkId || !quote) continue;
+      const rawQuote = typeof item?.quote === "string" ? item.quote.trim() : "";
+      if (!text || !chunkId || !rawQuote) continue;
       const chunk = retrievedById.get(chunkId);
       if (!chunk) continue; // chunk_id 不在本次上下文 → 丢弃（凭空捏造）
       if (sha256(chunk.text) !== chunk.content_hash) continue; // 素材变更后失效
-      if (!chunk.text.includes(quote)) continue; // quote 非原文子串 → 丢弃
+      // 严格子串失败后走与 cite 相同的归一化模糊定位，命中则登记原文逐字片段（哈希保证不变）。
+      const quote = chunk.text.includes(rawQuote) ? rawQuote : fuzzyLocate(chunk.text, rawQuote)?.quote;
+      if (!quote) continue; // 归一化仍无法定位 → 丢弃
       let citation: Citation;
       try {
         citation = chunkToCitation(chunk, nameById.get(chunk.material_id) ?? chunk.material_id, 0.6, quote);

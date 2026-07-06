@@ -147,6 +147,47 @@ describe("cite 模糊定位（exact 失败后的归一化回退）", () => {
     expect(result.content).toContain("无法逐字定位");
     expect(ledger.cited.size).toBe(0);
   });
+
+  it("引文跨原文换行且未带空白时仍命中（全链路彩排回归：空白剔除而非折叠）", async () => {
+    const chunk = audioChunk("22:45，苏E7K31 进入三号门。\n登记备注：空箱转场保障。");
+    const { ledger, find } = intelToolsFor(chunk);
+
+    // 模型把跨行文本引成连续句，换行处不留任何空白。
+    const result = await find("cite").execute({ chunk_id: chunk.chunk_id, claim: "登记备注为空箱转场保障", quote: "进入三号门。登记备注：空箱转场保障。" }) as ToolReply;
+
+    expect(result.ok).toBe(true);
+    const citeId = (JSON.parse(result.content) as { cite_id: string }).cite_id;
+    const citation = ledger.cited.get(citeId)!;
+    expect(citation.quote).toBe("进入三号门。\n登记备注：空箱转场保障。");
+    expect(chunk.text.slice(citation.quote_char_start, citation.quote_char_end)).toBe(citation.quote);
+  });
+});
+
+describe("search_materials 的 material_id 字符串 null 容错", () => {
+  it('material_id 传字符串 "null" 时按未指定素材处理（全链路彩排回归）', async () => {
+    const chunk = audioChunk("目标于码头出现。");
+    const ledger = createCitationLedger();
+    const tools = createIntelTools({
+      ledger,
+      actor: OPERATOR,
+      caseId: "case-1",
+      nameById: new Map([[chunk.material_id, "录音.wav"]]),
+      retrieve: async () => [],
+      navigation: {
+        listMaterials: async () => [],
+        loadChunks: async () => [chunk],
+      },
+      readBudgetBytes: 1000,
+      perReadCapBytes: 1000,
+    });
+    const search = tools.find((tool) => tool.name === "search_materials")!;
+
+    const result = await search.execute({ query: "码头", material_id: "null" }) as ToolReply;
+
+    expect(result.ok).toBe(true);
+    const matches = JSON.parse(result.content) as unknown[];
+    expect(matches.length).toBe(1);
+  });
 });
 
 describe("add_claim 逐条提交与 finalize_answer 封卷", () => {

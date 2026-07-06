@@ -59,6 +59,8 @@ interface DetectionStats {
   chunksCovered: number;
   chunksTotal: number;
   failedBatches: number;
+  /** 首个失败批次的底层原因（截断后进 warnings，便于现场定位而非只见"部分覆盖"）。 */
+  failureReason?: string;
 }
 
 export type ContradictionDetectionStatus = "succeeded" | "degraded" | "failed";
@@ -97,6 +99,7 @@ interface ClaimBatchResult {
   claims: GroundedClaim[];
   chunksCovered: number;
   failed: boolean;
+  error?: string;
 }
 
 type AgenticClaim = GroundedClaim & { claim_id: string };
@@ -338,8 +341,8 @@ export class ContradictionService {
         rawClaims = await this.extractClaims(batch, opts.signal);
       } catch (e) {
         if (opts.signal?.aborted || e instanceof AppError) throw e;
-        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续。
-        return { claims: [], chunksCovered: 0, failed: true };
+        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续；保留原因供 warnings 透出。
+        return { claims: [], chunksCovered: 0, failed: true, error: e instanceof Error ? e.message : String(e) };
       }
       // 接地在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
       const retrievedById = new Map(batch.map((chunk) => [chunk.chunk_id, chunk]));
@@ -352,6 +355,7 @@ export class ContradictionService {
     const claims = batchResults.flatMap((result) => result.claims);
     const chunksCovered = batchResults.reduce((sum, result) => sum + result.chunksCovered, 0);
     const failedBatches = batchResults.filter((result) => result.failed).length;
+    const failureReason = batchResults.find((result) => result.error)?.error;
     const clusters = this.clusterClaims(claims);
     if (process.env.MINI_AGENT_CONTRADICTION_DEBUG) {
       console.error(`[ct-debug] grounded=${claims.length} clusters=${clusters.size} sizes=[${[...clusters.values()].map((c) => c.length).join(",")}] keys=${[...clusters.keys()].slice(0, 20).join(" | ")}`);
@@ -366,6 +370,7 @@ export class ContradictionService {
       chunksCovered,
       chunksTotal: chunks.length,
       failedBatches,
+      ...(failureReason ? { failureReason } : {}),
     });
     this.detectionPropositions.set(contradictions, claims);
     return contradictions;
@@ -849,7 +854,10 @@ export class ContradictionService {
   private makeResult(contradictions: Contradiction[], stats: DetectionStats): ContradictionDetectionResult {
     const truncated = stats.chunksCovered < stats.chunksTotal;
     const warnings: string[] = [];
-    if (stats.failedBatches > 0) warnings.push(`${stats.failedBatches} 个批次处理失败，结果为部分覆盖`);
+    if (stats.failedBatches > 0) {
+      const reason = stats.failureReason ? `（原因：${stats.failureReason.slice(0, 160)}）` : "";
+      warnings.push(`${stats.failedBatches} 个批次处理失败，结果为部分覆盖${reason}`);
+    }
     if (truncated && stats.failedBatches === 0) warnings.push(`仅覆盖 ${stats.chunksCovered}/${stats.chunksTotal} 个素材块`);
     return {
       status: warnings.length > 0 ? "degraded" : "succeeded",

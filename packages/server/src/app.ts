@@ -10,6 +10,7 @@ import { PromptStore } from "./admin/prompt-store.js";
 import { AuditService } from "./audit/audit-service.js";
 import { AuthService } from "./auth/auth-service.js";
 import { UserStore } from "./auth/user-store.js";
+import { BriefService } from "./brief/brief-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { ContradictionService } from "./analysis/contradiction-service.js";
 import { ElementGraphService } from "./analysis/element-graph-service.js";
@@ -72,6 +73,7 @@ export interface AppServices {
   tasks: TaskService;
   admin: AdminService;
   suggestions: SuggestionService;
+  briefs: BriefService;
   /** 模型槽适配器（二期 P2.2；mock-first，供媒体管线/稠密检索消费）。 */
   slots: ModelSlots;
   /** 文本 LLM 是否已配置（供启动日志/降级判断）。 */
@@ -185,6 +187,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const tasks = new TaskService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
   const suggestions = new SuggestionService(audit, inquiries, findings, contradictions, elementGraph, context, promptService, llm);
+  // 研判简报聚合（阶段三 M2 / D1·D5）：只读既有产物 + LLM 概览段（逐句绑定引用），brief.json 缓存。
+  const briefs = new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, suggestions, llm);
 
   // 自动流水线（阶段三 M1 / D6）：素材全部加工完成后自动创建/推进核验流水线并预跑要素抽取、
   // 矛盾检测（经 JobRegistry，复用 /jobs/:kind/cancel 停止）。挂在素材状态转换收口处；素材服务
@@ -211,6 +215,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     tasks,
     admin,
     suggestions,
+    briefs,
     slots,
     modelConfigured,
     egressAllowlist: guard.allowlist,
@@ -218,7 +223,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions }));
+  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions, briefs }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

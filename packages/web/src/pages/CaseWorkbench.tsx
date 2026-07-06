@@ -4,10 +4,10 @@ import { getCase, type ApiCase } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS } from "../types";
 import { scrollWorkbenchBodyIntoView } from "./CaseWorkbench/components/helpers";
-import { TaskOverview } from "./CaseWorkbench/components/TaskOverview";
 import { VerificationSummary } from "./CaseWorkbench/components/VerificationSummary";
 
 const TABS: { to: string; label: string }[] = [
+  { to: "brief", label: "研判简报" },
   { to: "materials", label: "素材" },
   { to: "elements", label: "要素 / 时间线" },
   { to: "contradictions", label: "矛盾核验" },
@@ -53,7 +53,6 @@ export function CaseWorkbench() {
       </div>
 
       <VerificationSummary caseInfo={caseInfo} caseId={id} enabled={Boolean(user && id)} />
-      <TaskOverview caseId={id} enabled={Boolean(user && id)} />
 
       <nav className="tabs">
         {TABS.map((t) => (

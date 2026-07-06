@@ -510,8 +510,8 @@ export function getCase(id: string): Promise<ApiCase> {
   return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, { headers: headers() }).then((r) => unwrap<ApiCase>(r, "case"));
 }
 
-/** 更新专题（当前用于归档/恢复，`PATCH /api/cases/:id`；仅创建者或 admin 可调）。 */
-export function updateCase(id: string, patch: { name?: string; status?: ApiCase["status"] }): Promise<ApiCase> {
+/** 更新专题（归档/恢复、自动流水线开关，`PATCH /api/cases/:id`；仅创建者或 admin 可调）。 */
+export function updateCase(id: string, patch: { name?: string; status?: ApiCase["status"]; autopilot?: boolean }): Promise<ApiCase> {
   return fetch(`${BASE}/cases/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: headers(true),
@@ -872,6 +872,80 @@ export function applySuggestedFinding(caseId: string, suggestionId: string): Pro
     headers: headers(),
   }).then((r) => unwrap<ApiFinding>(r, "finding"));
 }
+
+// ---- 研判简报（阶段三 M2 / D1·D5） ----
+
+export interface ApiBriefOverviewSentence {
+  text: string;
+  chunk_id: string;
+  material_id: string;
+  material_name: string;
+  quote: string;
+  citation: ApiCitation;
+}
+
+export interface ApiBriefMaterialStats {
+  total: number;
+  pending: number;
+  processing: number;
+  done: number;
+  failed: number;
+  needsConfig: number;
+  byModality: Record<Modality, number>;
+}
+
+export interface ApiBriefProcessingStats {
+  elementCount: number;
+  contradictionCount: number;
+  unresolvedContradictionCount: number;
+  findingCount: number;
+  approvedFindingCount: number;
+}
+
+export interface ApiBriefEntity {
+  id: string;
+  name: string;
+  type: ElementType;
+  freq: number;
+}
+
+export interface ApiBriefContradiction {
+  id: string;
+  entity: string;
+  attribute?: string;
+  confidence: number;
+  scope: "cross-material" | "intra-material";
+  rationale: string;
+  claim_a: { text: string; citation: ApiCitation };
+  claim_b: { text: string; citation: ApiCitation };
+  acknowledgement_status: ContradictionAcknowledgementStatus | null;
+}
+
+export interface ApiBrief {
+  caseId: string;
+  generatedAt: string;
+  degraded: boolean;
+  fingerprint: string;
+  overview: ApiBriefOverviewSentence[];
+  materials: ApiBriefMaterialStats;
+  processing: ApiBriefProcessingStats;
+  timeline: TimelinePoint[];
+  entities: ApiBriefEntity[];
+  contradictions: ApiBriefContradiction[];
+  openQuestions: ApiQuestionSuggestion[];
+  task: ApiTaskRunSnapshot | null;
+  autopilot: boolean;
+  /** 报告覆盖度（M4 前占位 null）。 */
+  coverage: null;
+}
+
+/** 取研判简报（命中新鲜缓存则直接返回；`refresh` 强制重算）。 */
+export function getBrief(caseId: string, refresh = false): Promise<ApiBrief> {
+  const qs = refresh ? "?refresh=1" : "";
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/brief${qs}`, { headers: headers() }).then((r) => unwrap<ApiBrief>(r, "brief"));
+}
+
+export const refreshBrief = (caseId: string) => getBrief(caseId, true);
 
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 

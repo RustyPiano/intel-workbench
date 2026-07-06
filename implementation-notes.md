@@ -73,3 +73,13 @@
 - **失败恢复走"新建 run"而非"就地清 failed"**：执行体失败时标记对应阶段 failed（evidence-units 经 advanceStage；contradiction-detection 因被 checkpoint 阻塞不可 advance，其失败由落盘 result.status=failed 派生）。因 computeStages 中 stored `failed` 会覆盖派生，就地重跑不清除失败态。恢复路径沿用既有语义：失败 run 为终态，下次素材状态转换触发时 createRun 新建 run 并从当前产物重新派生（成功重跑后新 run 的阶段派生为 done）；人工重跑 job 亦始终可用。
 - **已分析专题增量加素材不自动重分析（M1 已知限制）**：autopilot 以产物存在（elements.json / contradictions.result.json）幂等跳过，避免重复触发重跑、与人工复核抢跑。故向已分析专题新增素材后不会自动重跑分析（需人工重跑 job）。留待后续里程碑按需处理陈旧性。
 - **模型未配置降级为"跳过"而非"失败 run"**：启动时文本 LLM 未配置 → autopilot 落 `autopilot.skip(reason:model-unavailable)` 并直接返回（不建 run、不产生每次上传都失败的噪声），人工路径不受影响；运行期 job 失败（网络等）仍标记阶段 failed 并带明确 reason（满足 D6/需求 5 的"明确 reason、不卡死、不抛未捕获异常"）。
+
+### 阶段三 M2（研判简报，2026-07-07）
+
+- **缓存边界：只缓存"派生快照"，实时字段每请求现算叠加（对 D5"brief.json 缓存"的落地界定）**：`cases/<id>/brief.json` 只存进指纹的派生部分（LLM 概览段 + 素材/加工统计 + 时间线 + 关键实体 + 未处置矛盾 + 待核问题 + generatedAt/degraded/fingerprint）。任务阶段条（`tasks.getCurrentRun`）、autopilot 开关（`manifest.autopilot`）、覆盖度占位每次 GET 现算叠加，**不进指纹**。原因：确认检查点/推进阶段只写 `task-runs.json`，若纳入指纹会让这些廉价操作误触发一次 LLM 概览重跑；这些字段本身廉价，现算即可保证实时。
+- **指纹用"素材签名 + 产物文件 size:mtime"，含 `contradiction-acks.json`（对 D5"素材/要素/矛盾/结论变更即 stale"的落地）**：指纹 = 素材（id/status/chunk_count/processed_at）+ elements.json / contradictions.result.json / contradiction-acks.json / findings.json 的 `size:mtimeMs`。素材签名含 `processed_at`/`chunk_count` 以捕获"素材数不变但重加工"的内容变更；矛盾处置（ack）单独成文件，纳入指纹以让"未处置矛盾/待核问题"随处置即时刷新。
+- **概览防编造：服务端逐句 quote 校验后丢弃不过关句（计划 §4 风险条落地）**：概览经 `generateJson` 产出 `[{text,chunk_id,quote}]`，服务端逐句校验 chunk 命中本次上下文、`sha256(chunk.text)===content_hash`、quote 为原文连续子串（复用 `chunkToCitation`，其内部会再核一次子串），任一不过整句丢弃；每句携带 `citation`（含 quote span 偏移/hash）供前端点回原文。LLM 未配置 / 出站被 OfflineGuard 拒 / 无已加工素材 / 生成或解析失败 → 概览为空 + `degraded:true`，整份简报仍返回统计部分（不抛错、不阻断）。
+- **待核问题复用规则版 `suggestQuestions`（不叠加额外 LLM 调用）**：简报"待核问题"取 `SuggestionService.suggestQuestions`（纯规则、不出网），只在重算时计算并进缓存快照，避免轮询时重复触发 `suggestion.questions` 审计与图谱重建；不用 LLM 版以免每次重算多打一次模型。
+- **"阶段条并入简报头部"= BriefPanel 复用 TaskOverview 组件（对任务项 7"删除因此闲置代码"的界定）**：TaskOverview 从 CaseWorkbench 外壳移除后改由 BriefPanel 头部渲染（起草/确认检查点/标记阶段等交互整体保留），故该组件仍被引用、无闲置代码需删；VerificationSummary 未在任务范围内，保持在外壳不动。BriefPanel 头部另加 autopilot 开关（PATCH `/cases/:id` 的 autopilot 字段，复用既有通道）与"刷新概览"（`?refresh=1`）。
+- **待核问题→问答 Tab 预填走 URL query（最小侵入）**：BriefPanel 点击待核问题 → 深链 `/cases/:id/inquiry?q=<question>`；InquiryPanel 读 `?q=` 填入输入框并聚焦，随即以 `replace` 清掉 query（避免刷新/返回重复预填），不自动发送（保留人工复核/编辑余地）。沿用仓库既有"URL query 深链"惯例（MaterialsPanel 的 `?material/quote/start/end`）。
+- **简报读端点不额外审计，重算才记 `brief.generate`（对任务项 5"读类无审计惯例则不加"的落地）**：命中缓存的 GET 不落审计（与 overview/task 读服务一致）；仅重算（含一次 LLM 出站）记一条 `brief.generate`（附 degraded/句数/要素数等），与 element/contradiction/suggestion 的"compute 记账"惯例对齐。密级/存在性校验复用 `cases.get`，不可读专题在入口抛 403/404。

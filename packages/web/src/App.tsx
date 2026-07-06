@@ -17,6 +17,11 @@ import { LoginPage } from "./pages/Login";
 import { NewCasePage } from "./pages/NewCase";
 import { OverviewPage } from "./pages/Overview";
 
+const BriefPanel = React.lazy(() =>
+  import("./pages/CaseWorkbench/panels/BriefPanel").then((module) => ({
+    default: module.BriefPanel,
+  }))
+);
 const MaterialsPanel = React.lazy(() =>
   import("./pages/CaseWorkbench/panels/MaterialsPanel").then((module) => ({
     default: module.MaterialsPanel,
@@ -75,7 +80,8 @@ export function App() {
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/cases/new" element={<NewCasePage />} />
         <Route path="/cases/:id" element={<CaseWorkbench />}>
-          <Route index element={<Navigate to="materials" replace />} />
+          <Route index element={<Navigate to="brief" replace />} />
+          <Route path="brief" element={<BriefPanel />} />
           <Route path="materials" element={<MaterialsPanel />} />
           <Route path="elements" element={<ElementsPanel />} />
           <Route path="contradictions" element={<ContradictionsPanel />} />

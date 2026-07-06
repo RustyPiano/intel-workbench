@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   askInquiryStream,
   clearInquiries,
@@ -187,6 +187,8 @@ export function InquiryPanel() {
   const [questionSuggestions, setQuestionSuggestions] = useState<ApiQuestionSuggestion[]>([]);
   const [suggestionMode, setSuggestionMode] = useState<SuggestionMode>("rule");
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const appliedQuestionRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -326,6 +328,19 @@ export function InquiryPanel() {
       }
     };
   }, []);
+
+  // 简报「待核问题」深链预填（`?q=...`）：填入输入框并聚焦，随后清掉 query
+  // 以免刷新/返回时重复预填。不自动发送，保留用户复核与编辑余地。
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (!q || appliedQuestionRef.current === q || busy) return;
+    appliedQuestionRef.current = q;
+    setInput(q);
+    const next = new URLSearchParams(searchParams);
+    next.delete("q");
+    setSearchParams(next, { replace: true });
+    editTimerRef.current = window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, [searchParams, setSearchParams, busy]);
 
   const handleEditQuestion = (question: string) => {
     if (busy) return;

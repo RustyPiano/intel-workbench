@@ -71,8 +71,9 @@ function normalizeKey(question: string): string {
  * 该题可入池候选数（口径贴合 SuggestionService.suggestFindings 的来源零 / 来源一）：
  * 结构化候选须至少 1 条支持引用已判 supported；支持型结论须 supported 且 ≥2 条 supported 引用、
  * 无对立引用。仅用于「已产生候选」徽章，真正的证据校验与去重仍在 suggestFindings 落地。
+ * 导出供 demo/seed.ts 复用，保证预置 auto-inquiry.json 的 candidateCount 与本服务口径不漂移。
  */
-function countCandidates(inquiry: Inquiry): number {
+export function countCandidates(inquiry: Inquiry): number {
   let count = 0;
   for (const sf of inquiry.submitted_findings ?? []) {
     if (sf.supporting_citations.some((c) => c.support_status === "supported")) count += 1;

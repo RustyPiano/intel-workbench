@@ -314,6 +314,41 @@ pm2 restart mini-agent-server
 
 ---
 
+## 2026-07-07 阶段三交付
+
+> 与本文档上文的 Phase 1-2（建议/上下文/提示词服务）是不同批次的工作，编号也不同——这里的"阶段一/二/三"
+> 沿用根目录 `implementation-notes.md` 与 `docs/plans/2026-07-06-phase3-guided-autopilot-plan.md` 的计划文档编号，
+> 不是本文档第 223 节"Phase 3 待定"里规划的 FeedbackService/AI 助手（那部分仍待定，未开工）。
+> 阶段一（agent 成功率修复）、阶段二（透明化事件流）已先于阶段三合入，均见 `implementation-notes.md`。
+
+**产品主张**：把一份案卷变成一份全覆盖、可审计的核验报告——上传即自动加工与研判，人从"提问者"变成"复核者"。四个里程碑（M1–M4）已全部合入 main，M5（本次）完成 demo 种子适配与文档收尾：
+
+- **M1 自动流水线**：素材全部加工完成（done/failed）后，`task/autopilot-service.ts` 自动创建/推进核验 TaskRun，并预跑三个不需人工输入的执行体——要素抽取 → 矛盾检测 → 自动研判；checkpoint 阶段（实体归并、矛盾确认）仍停下等人工确认。任一执行体产物已在盘上则幂等跳过，不会重复触发。
+- **M2 研判简报**：进入专题默认首屏即"研判简报"（`brief/brief-service.ts` + BriefPanel）——案情概览（LLM 生成，逐句绑定引用，不可用时降级为纯统计）、时间线、关键实体、矛盾、待核问题、报告覆盖度一屏读懂案情，逐项深链到对应 Tab。`brief.json` 只缓存派生快照，任务阶段/自动研判进度每次现算叠加。
+- **M3 自动研判批处理**：`inquiry/auto-inquiry-service.ts` 复用既有构件——出题走 suggestion 服务、逐题走与手动 `POST /inquiries` 相同的 agent 问答，产物照常入 Finding 候选池；进度落 `cases/<id>/auto-inquiry.json`，简报现算叠加显示逐题状态，可中途取消。
+- **M4 报告覆盖率仪表**：`report/coverage.ts` 固定五节（背景与素材概况/关键时间线/矛盾核验/研判结论/未决事项），每节给可判定的证据要求 + 人话缺口明细 + 深链引导；纯展示与引导，**不新增导出硬门禁**（既有引用完整性门禁不变）。
+
+**评测入口**：
+
+```bash
+pnpm eval:agent                    # 默认单题 180s 超时，10 题固定题集
+pnpm eval:agent -- --timeout 300   # 广度综合题（timeline-1/entities-1）超 180s 时调大
+```
+
+结果 JSON（`packages/server/eval/results/*.json`）现含每题 `answer` 正文与 `claims` 摘要，可离线核对内容质量，不必只看 finalize/error 率。
+
+**已知限制**：
+
+1. **增量素材不自动重分析**：已分析专题（elements.json/contradictions.result.json 已存在）追加新素材后，autopilot 按"产物已存在"幂等跳过，不会自动重新分析新素材；需人工在对应 Tab 重跑 job。
+2. **自动研判批次幂等语义**：`auto-inquiry.json` 只要存在（含 `cancelled`/`partial` 状态的批次）即视为"已跑过"，autopilot 不会自动重跑；需重跑走手动 `POST /cases/:id/jobs/auto-inquiry/start`。
+3. **"未决事项"口径**：报告覆盖率的"未决事项"节以自动研判批次为准——批次从未运行过就判该节未满足（明细"自动研判尚未运行"），这是引导用户去跑自动研判、闭合待核问题的软提示，不是数据错误，也不影响报告导出。
+
+**Demo 种子**（`packages/server/src/demo/seed.ts`，`MINI_AGENT_DEMO=1`）：演示专题预置了闭环的自动研判批次与矛盾处置台账，报告覆盖率开箱即 4/5——唯一缺口是故意留 1 条未处置的矛盾（`ct-unload-status`，卸货完成状态，是 7 条矛盾里唯一没有被任何已核准 Finding 引用覆盖的一条），用于现场演示"处置矛盾"这个动作。细节见 `implementation-notes.md` 「阶段三 M5」小节。
+
+**验证**：`pnpm vitest run packages/server`（530 passed / 1 skipped，61 文件）+ server typecheck（含 eval tsconfig）全绿。真模型端到端演练（新建专题→上传→自动跑→简报→报告导出）建议在部署前用本地/内网模型跑一遍。
+
+---
+
 **文档维护者**: Claude (AI 协调者)  
-**最后更新**: 2026-07-03  
+**最后更新**: 2026-07-07  
 **版本**: v1.0

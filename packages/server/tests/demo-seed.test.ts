@@ -14,6 +14,7 @@ import type { CaseManifest, Chunk, Citation, Contradiction, Element, Finding, Id
 import { validateCitationIntegrity } from "../src/inquiry/citation.js";
 import { MaterialService } from "../src/materials/material-service.js";
 import type { LlmDeps } from "../src/model/structured.js";
+import { computeCoverage } from "../src/report/coverage.js";
 import { ReportService } from "../src/report/report-service.js";
 import type { OfflineGuard } from "../src/security/offline-guard.js";
 
@@ -126,7 +127,7 @@ describe("demo delivery seed", () => {
     const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
     expect(manifest.materials).toHaveLength(19);
     await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), "report", "report.json"), "utf8")).resolves.toContain("\"status\": \"draft\"");
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 4");
+    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 5");
     await expect(readFile(path.join(paths.caseDir("restricted-review-sample"), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 2");
   });
 
@@ -143,7 +144,7 @@ describe("demo delivery seed", () => {
     expect(events.some((event) => event.action === "case.create" && event.detail?.caseId === DEMO_CASE_ID)).toBe(true);
     expect(events.some((event) => event.action === "case.access" && event.detail?.caseId === "restricted-review-sample" && event.result === "deny")).toBe(true);
     expect(events.filter((event) => event.action === "material.ingest" && event.detail?.caseId === DEMO_CASE_ID)).toHaveLength(19);
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 4");
+    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 5");
   });
 
   it("preserves user-added demo materials when repairing an old unmarked seed", async () => {
@@ -180,7 +181,7 @@ describe("demo delivery seed", () => {
     await writeFile(markerFile, `${JSON.stringify({ version: 2 })}\n`, "utf8");
 
     await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-    await expect(readFile(markerFile, "utf8")).resolves.toContain("\"version\": 4");
+    await expect(readFile(markerFile, "utf8")).resolves.toContain("\"version\": 5");
 
     const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
     expect(manifest.materials.find((material) => material.id === "m-source-register")?.note).toContain("不能作为案情事实主依据");
@@ -261,6 +262,14 @@ describe("demo delivery seed", () => {
     for (const cite of citations) {
       expect(validateCitationIntegrity(cite, chunks)).toEqual({ validChunk: true, validSpan: true, missingSpan: false });
     }
+
+    // 演示专题报告覆盖率开箱即 4/5（阶段三 M5），唯一缺口是故意留一条未处置的高置信矛盾
+    // （ct-unload-status，未被任何已核准 Finding 引用覆盖），用于现场演示处置动作。
+    const coverage = await computeCoverage(paths, DEMO_CASE_ID, demoCase);
+    expect(coverage.satisfiedCount).toBeGreaterThanOrEqual(4);
+    expect(coverage.totalSections).toBe(5);
+    expect(coverage.sections.find((section) => section.key === "contradiction")).toMatchObject({ satisfied: false, detail: "1/7 条高置信矛盾未处置" });
+    expect(coverage.sections.filter((section) => section.key !== "contradiction").every((section) => section.satisfied)).toBe(true);
 
     const materials = new MaterialService(paths, audit, cases);
     const contradictionService = new ContradictionService(paths, audit, cases, materials, {

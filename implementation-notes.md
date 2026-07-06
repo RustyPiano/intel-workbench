@@ -118,3 +118,19 @@
 - **「未决事项」批次未运行即判未满足**：如上，选可判定的 auto-inquiry 口径带来的后果是——从未跑自动研判的专题该节恒为缺口。这是有意的引导（点缺口 → 去跑自动研判/补充核验），不是硬门禁，不影响导出；与 M3「autopilot 闭合待核问题」叙事一致。若后续希望「无任何待核问题时也算满足」，需引入 suggestion 现算判空（会多打一次规则引擎/图谱），本里程碑不做。
 - **无数据专题「矛盾核验」节空满足（非字面「全不满足」）**：任务描述「无数据专题（全不满足）不抛错」。实测无数据时矛盾节因「无高置信未处置矛盾」而空满足（satisfiedCount=1），其余四节缺口。这是语义正确的（该节要求是「无未处置高置信矛盾」，零矛盾即真空满足），测试按实际断言并注明；核心要求「不抛错」满足。
 - **cancelled/partial 批次仍算「已跑」**：`auto-inquiry.json` 存在即幂等跳过（含被取消的批次），与 M1 「产物存在即跳过」一致；需重跑走手动 jobs 路由（始终覆盖重跑）。
+
+### 阶段三 M5（收尾：demo 种子适配 + 文档，2026-07-07）
+
+- **时间线锚点补两个既有引用衍生的时间要素，不新增事实**：`report/coverage.ts` 的「关键时间线」节要求 `buildElementGraph` 时间线锚定点 ≥3，seed 原来只有 1 个 `type:"time"` 要素（`el-time-window`，聚合窗口 "2026-07-01 22:30-23:40"）。新增 `el-time-seal-patrol`（"2026-07-02 00:20"，复用既有引用 `cSealPerfect`）与 `el-time-customs`（"2026-07-02 09:30"，复用既有引用 `cCustomsTime`）凑够 3 个锚点，均取材已在 seed 中使用过的引用，不引入新素材事实。
+- **矛盾处置台账：6/7 已处置，`ct-unload-status` 故意留空**——选择依据是引用交叉而非直觉：核对 7 条矛盾与 5 条已核准 Finding 的 `supporting_citations`，`ct-unload-status`（卸货活动完成状态：`cDispatchUnload` vs `cFollowupNoUnload`）是唯一一条未被任何已核准 Finding 引用覆盖的矛盾，其余 6 条都能对应到具体 Finding 的处置结论（如 `ct-berth-status`→`f-berth-timeline`），因此可据实标记 `resolved`（`by:"security"`，与既有 `finding.reviewed_by` 一致）。**没有选叙事上更"贴切"的 `ct-seal-status`**（尽管 `m-followup` 的引用 `cFollowupLhGap` 字面写着"未解释 23:18 现场照片与 00:20 封志巡检冲突"）：它的两条冲突引用（`cSealPerfect`/`cPhotoSealMissing`）恰好都被 `f-seal-customs-risk` 引用覆盖，若也标 `resolved` 站得住脚，但把它当"故意留空"就需要额外解释为什么已覆盖的矛盾还不算处置，不如 `ct-unload-status`（零覆盖、零需要辩解）干净。矛盾处置写入同时补齐了 `contradiction.acknowledge` 审计事件（`appendMissingAudit`，字段对齐 `contradiction-service.ts` 真实写法）。
+- **auto-inquiry.json 的 candidateCount 复用真实服务同一函数，不手算硬编码**：把 `inquiry/auto-inquiry-service.ts` 内部的 `countCandidates` 改为 `export`，seed 直接调用而非照抄一份计算逻辑或手填数字，避免未来 claims 改动时种子数据与真实口径漂移。四条已种问答记录（`inq-port-key-evidence`/`inq-berth-2230`/`inq-lh7712-risk`/`inq-missing-materials`）代入后 candidateCount 分别为 4/3/3/1，均 >0 → 全部落 `status:"candidate"`；批次整体 `status:"done"`、`total=completed=4`，让简报「待核问题」与报告覆盖率「未决事项」节开箱即显示已闭环的批次，而非空态。同步补 `auto-inquiry.batch`/`auto-inquiry.done` 审计事件。
+- **未显式设置 `manifest.autopilot:false`（计划书给的二选一，选"不设"）**：依据 M1 语义——seed 直接写盘、不经素材摄入流程，不会触发 `AutopilotService.onMaterialsSettled`（启动崩溃清扫同样不经此路径）；即便后续人工往该专题追加素材触发它，三个执行体的产物（`elements.json`/`contradictions.result.json`/`auto-inquiry.json`）均已在盘上，会被幂等跳过（不调用模型、不产生失败 run）。两层保护叠加已足够「避免演示时误触发重跑」，无需再加一层配置开关；理由写在 `seed.ts` manifest 构造处的注释里，供后续读者按同一逻辑判断是否要动这个开关。
+- **SEED_VERSION 4 → 5**：新增/改动的产物需要让已有本地工作区/CI 缓存的旧 seed 重新执行才能生效；同步更新 `demo-seed.test.ts` 三处硬编码的 `"version": 4` 断言为 `5`。
+- **HANDOVER.md 而非 HANDOFF.md 追加交接小节**：两份文档并存，`docs/HANDOFF.md` 最后更新于 2026-06-23，是更早一条技术轨（P3.A–D/Batch F，多模态摄入/矛盾检测 benchmark）的历史交接；`docs/HANDOVER.md` 内部日期 2026-07-03，且自述"本文档用于新对话快速了解项目背景和当前状态"，是持续维护的活文档，故追加到后者。为避免与该文档自身「Phase 1-2」编号（建议/上下文/提示词服务）混淆，新增小节开头注明这里的"阶段一/二/三"沿用 `implementation-notes.md`/`docs/plans/2026-07-06-phase3-guided-autopilot-plan.md` 的编号，是不同批次的工作。
+- **新增覆盖率断言进 `demo-seed.test.ts` 既有集成测试**：在既有的"seeds the port verification case..."用例里、矛盾处置台账被测试自身覆盖为「全部 resolved」之前，插入 `computeCoverage` 断言（`satisfiedCount>=4`、矛盾节 `satisfied:false` 且明细 `"1/7 条高置信矛盾未处置"`、其余四节全满足），把「演示专题覆盖率 4/5 且缺口是矛盾节」这条设计意图钉成回归测试，避免未来改 seed 数据时悄悄回退。
+- **验证数字（2026-07-07，脚本化模型 / 无真端点）**：`pnpm vitest run packages/server` 全绿（530 passed / 1 skipped，61 文件，含更新后的 `demo-seed.test.ts`）；server typecheck（含 eval tsconfig）全绿。手工用一次性脚本调用 `computeCoverage` 核对种子输出：`satisfiedCount:4/5`，唯一未满足节为「矛盾核验」（明细 `1/7 条高置信矛盾未处置`），其余四节（背景/时间线/结论/未决事项）均满足。
+
+### 阶段三 M5 Deviations
+
+- **未在本次任务中执行计划 §2 M5 验收要求的"一次真模型端到端演练"**：本次委派范围明确为 demo 种子适配 + 文档 + `pnpm vitest run packages/server`/typecheck 回归，未接入真实模型端点跑新建专题→上传→自动跑→简报→报告导出全链路。已在 `docs/HANDOVER.md` 本次新增小节中注明该验收项留待部署前人工执行，不视为静默跳过。
+- **不显式设置 `manifest.autopilot:false`（计划任务书给的二选一）**：见上文，判断依据是 M1 幂等跳过语义 + seed 不触发 hook 的双重保护已覆盖"避免演示时误触发重跑"的诉求；如后续产品决定"演示专题一律禁用自动化"作为显式产品策略（而非仅靠现状巧合防护），可再补 `autopilot:false`。

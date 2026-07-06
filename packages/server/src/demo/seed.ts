@@ -4,9 +4,10 @@ import path from "node:path";
 import type { AuditService } from "../audit/audit-service.js";
 import { UserStore } from "../auth/user-store.js";
 import type { DataPaths } from "../data/paths.js";
-import type { AuditEvent, CaseManifest, Chunk, Citation, Contradiction, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
+import type { AuditEvent, CaseManifest, Chunk, Citation, Contradiction, ContradictionAcknowledgement, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
 import { DEMO_MATERIALS, type DemoMaterialInput } from "./port-anomaly-materials.js";
 import { chunkToCitation } from "../inquiry/citation.js";
+import { countCandidates, type AutoInquiryItem, type AutoInquiryProgress } from "../inquiry/auto-inquiry-service.js";
 import { chunkText, normalize } from "../materials/material-service.js";
 import { citationId } from "../report/report-service.js";
 
@@ -14,7 +15,9 @@ export const DEMO_CASE_ID = "port-anomaly-verification";
 const RESTRICTED_CASE_ID = "restricted-review-sample";
 const SEED_MARKER = ".demo-seed-complete.json";
 // 演示专题 seed 内容版本；提升该值会让 seedDemoWorkspace 重新执行完整 seed 写入。
-const SEED_VERSION = 4;
+// v5（阶段三 M5）：新增时间锚点要素、矛盾处置台账（留一条故意未处置）、预置 auto-inquiry.json，
+// 使演示专题在报告覆盖率仪表下开箱即 4/5（详见 implementation-notes.md 阶段三 M5）。
+const SEED_VERSION = 5;
 const now = "2026-07-02T09:00:00.000Z";
 
 interface BuiltMaterial {
@@ -170,6 +173,10 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   const caseDir = paths.caseDir(DEMO_CASE_ID);
   const built = DEMO_MATERIALS.map(buildMaterial);
   const previousManifest = await readManifest(paths, DEMO_CASE_ID);
+  // autopilot 字段保持缺省（视为开启）：seed 直接写盘，不经素材摄入流程，不会触发
+  // AutopilotService.onMaterialsSettled；即便后续人工往本专题追加素材触发它，三个执行体的
+  // 产物（elements.json / contradictions.result.json / auto-inquiry.json）都已在盘上，
+  // 会被幂等跳过（阶段三 M1 语义），不会重新调用模型。故无需显式置 autopilot:false。
   const manifest: CaseManifest = {
     id: DEMO_CASE_ID,
     name: "港口异常活动线索核验（模拟数据）",
@@ -256,6 +263,10 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     { id: "el-customs", type: "event", name: "LH-7712 查验预约", aliases: ["查验预约"], mentions: [cCustomsTime, cCustomsNoOpen], freq: 2 },
     { id: "el-seal-event", type: "event", name: "封志异常", aliases: ["拆封风险"], mentions: [cPhotoSealMissing, cSealPerfect], freq: 2 },
     { id: "el-time-window", type: "time", name: "2026-07-01 22:30-23:40", aliases: ["23点前", "23:18"], mentions: [cBrief, cAis, cPhotoTimestamp, cWeatherStable], freq: 4 },
+    // 以下两个时间锚点补充报告覆盖率「关键时间线」节所需的锚定点（阈值 3，阶段三 M5）；
+    // 均取材已有引用，非新增事实。
+    { id: "el-time-seal-patrol", type: "time", name: "2026-07-02 00:20", aliases: [], mentions: [cSealPerfect], freq: 1 },
+    { id: "el-time-customs", type: "time", name: "2026-07-02 09:30", aliases: [], mentions: [cCustomsTime], freq: 1 },
   ];
   await writeJson(path.join(caseDir, "elements.json"), elements);
 
@@ -348,7 +359,17 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   };
   await writeJson(path.join(caseDir, "contradictions.json"), contradictions);
   await writeJson(path.join(caseDir, "contradictions.result.json"), contradictionResult);
-  await writeJson(path.join(caseDir, "contradiction-acks.json"), []);
+  // 矛盾处置台账：6 条已通过对应已核准结论处置，`ct-unload-status`（卸货完成状态）故意留空——
+  // 它是唯一未被任何已核准 Finding 引用覆盖的矛盾，留给现场演示处置动作（报告覆盖率「矛盾核验」节缺口，阶段三 M5）。
+  const acks: ContradictionAcknowledgement[] = [
+    { id: "ca-berth-status", case_id: DEMO_CASE_ID, contradiction_id: "ct-berth-status", status: "resolved", note: "已通过已核准结论「靠泊时间线存在高可信冲突」处置，采信 AIS/VTS/泊位计划时间线。", by: "security", at: now },
+    { id: "ca-truck-count", case_id: DEMO_CASE_ID, contradiction_id: "ct-truck-count", status: "resolved", note: "已通过已核准结论「三号门车辆登记存在缺口」处置，采信 OCR 与堆场复核数量。", by: "security", at: now },
+    { id: "ca-container-location", case_id: DEMO_CASE_ID, contradiction_id: "ct-container-location", status: "resolved", note: "已通过已核准结论「LH-7712 存在夜间异常移动风险」处置，采信堆场与现场记录。", by: "security", at: now },
+    { id: "ca-weight-empty", case_id: DEMO_CASE_ID, contradiction_id: "ct-weight-empty", status: "resolved", note: "已通过已核准结论「地磅记录与出场状态不一致」处置，待续核地磅照片与装载来源。", by: "security", at: now },
+    { id: "ca-inspection-process", case_id: DEMO_CASE_ID, contradiction_id: "ct-inspection-process", status: "resolved", note: "已通过已核准结论「封志与查验流程存在优先复核风险」处置。", by: "security", at: now },
+    { id: "ca-seal-status", case_id: DEMO_CASE_ID, contradiction_id: "ct-seal-status", status: "resolved", note: "已通过已核准结论「封志与查验流程存在优先复核风险」处置，现场照片采信，巡检记录缺 EXIF 佐证。", by: "security", at: now },
+  ];
+  await writeJson(path.join(caseDir, "contradiction-acks.json"), acks);
 
   const inquiries: Inquiry[] = [
     {
@@ -406,6 +427,31 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     },
   ];
   await writeJsonl(path.join(caseDir, "inquiries.jsonl"), inquiries);
+
+  // 预置一批已完成的自动研判批次：题目取自上面四条已种问答记录，candidateCount 复用
+  // AutoInquiryService.countCandidates 同一口径计算，避免与真实批处理口径漂移（阶段三 M5）。
+  // 让简报「待核问题」板块与报告覆盖率「未决事项」节开箱即显示已闭环的批次，而非空态。
+  const autoInquiryItems: AutoInquiryItem[] = inquiries.map((inquiry) => {
+    const candidateCount = countCandidates(inquiry);
+    return {
+      question: inquiry.question,
+      status: candidateCount > 0 ? "candidate" : "done",
+      inquiryId: inquiry.id,
+      inquiryStatus: inquiry.status,
+      candidateCount,
+    };
+  });
+  const autoInquiry: AutoInquiryProgress = {
+    status: "done",
+    total: autoInquiryItems.length,
+    completed: autoInquiryItems.length,
+    currentIndex: null,
+    items: autoInquiryItems,
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: now,
+  };
+  await writeJson(path.join(caseDir, "auto-inquiry.json"), autoInquiry);
 
   const findings: Finding[] = [
     {
@@ -528,7 +574,10 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     })),
     { user: "operator", action: "element.extract", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: elements.length, seeded: true } },
     { user: "operator", action: "contradiction.detect", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: contradictions.length, status: "succeeded", seeded: true } },
+    ...acks.map((ack): AuditAppendInput => ({ user: ack.by, action: "contradiction.acknowledge", object: `contradiction:${ack.contradiction_id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, contradictionId: ack.contradiction_id, status: ack.status, note: ack.note, seeded: true } })),
+    { user: "operator", action: "auto-inquiry.batch", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, total: autoInquiryItems.length, seeded: true } },
     ...inquiries.map((inquiry): AuditAppendInput => ({ user: "operator", action: "inquiry.create", object: `inquiry:${inquiry.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, inquiryId: inquiry.id, status: inquiry.status, seeded: true } })),
+    { user: "operator", action: "auto-inquiry.done", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, status: autoInquiry.status, total: autoInquiryItems.length, completed: autoInquiry.completed, candidates: autoInquiryItems.filter((item) => item.status === "candidate").length, seeded: true } },
     ...findings.flatMap((finding): AuditAppendInput[] => [
       { user: "operator", action: "finding.create", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, seeded: true } },
       { user: "security", action: "finding.review", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, review_status: "approved", seeded: true } },

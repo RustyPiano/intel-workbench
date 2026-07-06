@@ -81,6 +81,7 @@ export function createCasesRouter(cases: CaseService, materials: MaterialService
     const manifest = await cases.update(req.identity, req.params.id, {
       name: body.name === undefined || typeof body.name === "string" ? body.name : "",
       status: body.status as never,
+      autopilot: typeof body.autopilot === "boolean" ? body.autopilot : undefined,
     });
     res.json({ ok: true, case: manifest });
   });

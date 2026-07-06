@@ -27,7 +27,7 @@ export const MULTI_SOURCE_VERIFICATION_TEMPLATE: TaskTemplate = {
   stages: [
     { key: "material-ingest", name: "素材导入" },
     { key: "quality-check", name: "加工质量检查" },
-    { key: "evidence-units", name: "证据单元" },
+    { key: "evidence-units", name: "要素抽取" },
     { key: "entity-merge", name: "实体归并", checkpoint: true },
     { key: "proposition-extraction", name: "补充核验取证" },
     { key: "contradiction-detection", name: "矛盾检测", checkpoint: true },

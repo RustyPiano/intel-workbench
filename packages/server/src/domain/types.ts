@@ -307,6 +307,12 @@ export interface CaseManifest {
   created_at: string;
   updated_at: string;
   materials: Material[];
+  /**
+   * 自动流水线开关（阶段三 M1 / D6）。缺省视为开启（`autopilot !== false`）：
+   * 素材全部加工完成后系统自动创建/推进核验任务并预跑要素抽取、矛盾检测。
+   * 经专题更新通道（PATCH /cases/:id）可关。
+   */
+  autopilot?: boolean;
 }
 
 export type AuditResult = "ok" | "deny" | "error";

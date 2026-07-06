@@ -123,7 +123,7 @@ describe("TaskService（Batch D 任务编排层）", () => {
     expect(run.stages.map((stage) => stage.name)).toEqual([
       "素材导入",
       "加工质量检查",
-      "证据单元",
+      "要素抽取",
       "实体归并",
       "补充核验取证",
       "矛盾检测",

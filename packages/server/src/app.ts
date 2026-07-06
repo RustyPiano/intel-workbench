@@ -33,6 +33,7 @@ import { ReviewService } from "./review/review-service.js";
 import { OfflineGuard } from "./security/offline-guard.js";
 import { createApiRouter } from "./routes/api.js";
 import { SuggestionService } from "./suggestion/suggestion-service.js";
+import { AutopilotService } from "./task/autopilot-service.js";
 import { TaskService } from "./task/task-service.js";
 
 export interface CreateAppOptions {
@@ -184,6 +185,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const tasks = new TaskService(paths, audit, cases);
   const admin = new AdminService(paths, audit, model, guard.allowlist, users, promptStore);
   const suggestions = new SuggestionService(audit, inquiries, findings, contradictions, elementGraph, context, promptService, llm);
+
+  // 自动流水线（阶段三 M1 / D6）：素材全部加工完成后自动创建/推进核验流水线并预跑要素抽取、
+  // 矛盾检测（经 JobRegistry，复用 /jobs/:kind/cancel 停止）。挂在素材状态转换收口处；素材服务
+  // 先于分析服务装配，故经 setAutopilotHook 后置注线。启动崩溃清扫不经此路径 → 不触发自动分析。
+  const autopilot = new AutopilotService(paths, audit, cases, tasks, jobRegistry, elements, contradictions, modelConfigured);
+  materials.setAutopilotHook((actor, caseId) => {
+    void autopilot.onMaterialsSettled(actor, caseId).catch(() => undefined);
+  });
 
   const services: AppServices = {
     paths,

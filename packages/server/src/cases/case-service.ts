@@ -31,6 +31,8 @@ export interface CreateCaseInput {
 export interface UpdateCaseInput {
   name?: string;
   status?: CaseStatus;
+  /** 自动流水线开关（阶段三 M1 / D6）。 */
+  autopilot?: boolean;
 }
 
 export class CaseService {
@@ -137,6 +139,9 @@ export class CaseService {
       if (patch.status !== undefined) {
         if (patch.status !== "active" && patch.status !== "archived") throw new AppError(400, "非法状态");
         m.status = patch.status;
+      }
+      if (patch.autopilot !== undefined) {
+        m.autopilot = patch.autopilot;
       }
     });
     await this.audit.append({

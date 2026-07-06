@@ -247,6 +247,21 @@ export class MaterialService {
     private readonly promptStore?: PromptStore,
   ) {}
 
+  /**
+   * 自动流水线钩子（阶段三 M1）。在素材状态转换的收口处（ingest / ingestStream / 显式
+   * process 完成后）通知，由 AutopilotService 判定是否全部素材达终态并自动推进核验流水线。
+   * 启动崩溃清扫走 CaseService.sweepInterrupted（不经此路径），故不触发自动分析（避免开机风暴）。
+   */
+  private autopilotHook?: (actor: Identity, caseId: string) => void;
+
+  setAutopilotHook(hook: (actor: Identity, caseId: string) => void): void {
+    this.autopilotHook = hook;
+  }
+
+  private notifyMaterialsSettled(actor: Identity, caseId: string): void {
+    this.autopilotHook?.(actor, caseId);
+  }
+
   /** 汇入多件素材到专题（§5）。文档加工，媒体降级；每件落审计。 */
   async ingest(actor: Identity, caseId: string, files: IngestFile[]): Promise<Material[]> {
     // 校验专题存在 + 当前账户可访问（密级）。
@@ -258,6 +273,8 @@ export class MaterialService {
       const material = await this.ingestOne(actor, caseId, file);
       results.push(material);
     }
+    // 批次收口：整批汇入后再通知自动流水线，避免逐件触发在批中提前判定「全部终态」。
+    this.notifyMaterialsSettled(actor, caseId);
     return results;
   }
 
@@ -417,7 +434,8 @@ export class MaterialService {
     if (!this.shouldProcessMediaAtIngest(material.modality)) return material;
 
     try {
-      const processed = await this.process(actor, caseId, material.id);
+      // fromIngest：由摄入内部调用，不在此处通知自动流水线——由 ingest/ingestStream 批次收口统一通知。
+      const processed = await this.process(actor, caseId, material.id, { fromIngest: true });
       if (processed.status !== "failed") return processed;
     } catch (e) {
       // 并发 409（已有 caller 持有 processing）：绝不能把 processing 改回 pending 破坏状态机——原样抛出，不降级。
@@ -644,7 +662,9 @@ export class MaterialService {
       caseId,
       detail: { caseId, materialId: id, filename, modality, status: base.status, via: "stream" },
     });
-    return this.processMediaAtIngest(actor, caseId, base);
+    const result = await this.processMediaAtIngest(actor, caseId, base);
+    this.notifyMaterialsSettled(actor, caseId);
+    return result;
   }
 
   /** 专题素材列表 + 加工状态（§5）。 */
@@ -812,7 +832,7 @@ export class MaterialService {
    * 提交点顺序（§2.4）：先把 media.json + chunks.jsonl 完整原子写盘 → 再翻 done → 审计，
    * 杜绝并发问答读到"done 但零 chunk"。
    */
-  async process(actor: Identity, caseId: string, materialId: string): Promise<Material> {
+  async process(actor: Identity, caseId: string, materialId: string, opts: { fromIngest?: boolean } = {}): Promise<Material> {
     const manifest = await this.cases.requireWriteAccess(actor, caseId, "material.process", { materialId }); // 访问 + 密级 + 写权限校验
     const material = manifest.materials.find((m) => m.id === materialId);
     if (!material) throw new AppError(404, "素材不存在");
@@ -890,6 +910,10 @@ export class MaterialService {
       return updated;
     } catch (e) {
       return this.failProcess(actor, caseId, materialId, `加工失败：${(e as Error).message}`, "pipeline-error");
+    } finally {
+      // 状态转换收口：显式加工完成（done/failed）后通知自动流水线；摄入内部调用（fromIngest）
+      // 不在此通知，交由 ingest/ingestStream 批次收口统一处理，避免批中提前触发。
+      if (!opts.fromIngest) this.notifyMaterialsSettled(actor, caseId);
     }
   }
 

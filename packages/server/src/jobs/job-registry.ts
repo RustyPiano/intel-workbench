@@ -29,6 +29,8 @@ export class JobRegistry {
   private readonly jobsByPair = new Map<string, Job>();
   private readonly jobsById = new Map<string, Job>();
   private readonly controllersByPair = new Map<string, AbortController>();
+  /** 每个 (caseId,kind) 最近一次运行的完结 promise，供自动流水线顺序等待（不改变 fire-and-forget 语义）。 */
+  private readonly settledByPair = new Map<string, Promise<Job>>();
 
   start<R>(caseId: string, kind: string, runner: (ctx: JobContext) => Promise<R>): Job<R> {
     const key = this.key(caseId, kind);
@@ -56,7 +58,7 @@ export class JobRegistry {
     this.controllersByPair.set(key, controller);
 
     try {
-      runner(ctx)
+      const settled = runner(ctx)
         .then((result) => {
           if (controller.signal.aborted) {
             job.state = "cancelled";
@@ -70,13 +72,21 @@ export class JobRegistry {
         })
         .finally(() => {
           this.controllersByPair.delete(key);
-        });
+        })
+        .then(() => job);
+      this.settledByPair.set(key, settled);
     } catch (error) {
       this.fail(job, controller, error);
       this.controllersByPair.delete(key);
+      this.settledByPair.set(key, Promise.resolve(job));
     }
 
     return job;
+  }
+
+  /** 等待某 (caseId,kind) 最近一次运行结束，返回其终态 Job；从未启动过则 undefined。 */
+  settled(caseId: string, kind: string): Promise<Job> | undefined {
+    return this.settledByPair.get(this.key(caseId, kind));
   }
 
   status(caseId: string, kind: string): Job | undefined {

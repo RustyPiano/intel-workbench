@@ -63,3 +63,13 @@
 
 - core：未强加 max tokens 硬默认值，走 `MINI_AGENT_MAX_OUTPUT_TOKENS` 配置链（低上限模型硬编码 8192 会直接 400）；server 的 agent 创建处需读该 env 并传入（随 server 移植落地）
 - 评测：`insufficient` 计入 finalize 成功（系统如实说"材料不足"是正确行为，不是失败）
+
+### 阶段三 M1（自动流水线，2026-07-07）
+
+- **预跑跨越 checkpoint（最重要，满足 M1 验收"要素与矛盾自动就绪"）**：实际 9 阶段模板里 `entity-merge`（实体归并）checkpoint 排在 `contradiction-detection` 之前。若严格按"逐阶段游标推进、遇 checkpoint 即停"，游标会停在 entity-merge，矛盾检测永不自动跑，与验收"要素与矛盾自动就绪"冲突。**取舍**：AutopilotService 按流水线顺序预跑两个"不需人工输入"的分析执行体（要素抽取 → 矛盾检测），使二者产物在用户不点按钮时就绪；而阶段游标仍由 `TaskService.computeStages` 从落盘产物派生并停在第一个未确认 checkpoint（entity-merge）。即 checkpoint 只闸人工确认，不闸可复核产物的预计算。矛盾检测执行体本身不依赖 entity-merge 确认（仅读 elements 别名表），故预跑安全。
+- **新增编排文件而非改 TaskService（对 D2"不新建系统"的界定）**：D2 要求"改造现有 pipeline 而非新建系统"。TaskService 现仅依赖 (paths, audit, cases)，其阶段全部从落盘产物派生。为不把 JobRegistry/Element/Contradiction 依赖塞进 TaskService，新增薄编排层 `task/autopilot-service.ts` 复用既有 TaskService 管线与 JobRegistry。未新建任何 pipeline/阶段系统，TaskService 逻辑除阶段显示名外零改动。
+- **审计 actor 双轨（对 D6"actor 标记 system-autopilot / 密级按创建者收敛"的落地）**：现有审计 `append({user})` 只是字符串，但 TaskService.createRun/advanceStage 的 `assertCanMutate` 与 Element/Contradiction 的密级校验、出站授权都硬绑真实 Identity（owner/admin），无法以"system-autopilot"身份通过。**处理**：AutopilotService 自身的决策事件（`autopilot.run.create/advance/fail/stop/skip`）以 `user:"system-autopilot"` 落审计；底层 mutation 与执行体（`task.run.create`、`element.extract`、`contradiction.detect`）仍以触发者（摄入/加工时经 requireWriteAccess 已收敛为 owner/admin）身份执行并记账。二者形成双轨：系统决策链 + 真实操作链，均满足"密级按创建者收敛"。
+- **阶段显示名改 `evidence-units`：证据单元 → 要素抽取（偏离 D2 举例的"素材加工"）**：web 的 `taskStageName` = `TASK_STAGE_DISPLAY_NAMES[key] ?? stage.name`，只覆写 4 个 key，其余回退 server `name`。用户可见且属工程词的 server 名只有"证据单元"。D2 举例改为"素材加工"，但会与相邻的"素材导入/加工质量检查"语义打架；且该阶段派生完成即 `elementCount>0`、自动流水线在此跑的正是要素抽取，故改为"要素抽取"更贴事实且与产品"要素"术语一致，并顺接下一阶段"实体归并"。key 与持久化格式不变（computeStages 始终以模板 `def.name` 渲染，旧 run 显示同步更新，不破坏数据）；web 标签文件未改。仅同步更新 task-service.test.ts 一处断言。
+- **失败恢复走"新建 run"而非"就地清 failed"**：执行体失败时标记对应阶段 failed（evidence-units 经 advanceStage；contradiction-detection 因被 checkpoint 阻塞不可 advance，其失败由落盘 result.status=failed 派生）。因 computeStages 中 stored `failed` 会覆盖派生，就地重跑不清除失败态。恢复路径沿用既有语义：失败 run 为终态，下次素材状态转换触发时 createRun 新建 run 并从当前产物重新派生（成功重跑后新 run 的阶段派生为 done）；人工重跑 job 亦始终可用。
+- **已分析专题增量加素材不自动重分析（M1 已知限制）**：autopilot 以产物存在（elements.json / contradictions.result.json）幂等跳过，避免重复触发重跑、与人工复核抢跑。故向已分析专题新增素材后不会自动重跑分析（需人工重跑 job）。留待后续里程碑按需处理陈旧性。
+- **模型未配置降级为"跳过"而非"失败 run"**：启动时文本 LLM 未配置 → autopilot 落 `autopilot.skip(reason:model-unavailable)` 并直接返回（不建 run、不产生每次上传都失败的噪声），人工路径不受影响；运行期 job 失败（网络等）仍标记阶段 failed 并带明确 reason（满足 D6/需求 5 的"明确 reason、不卡死、不抛未捕获异常"）。

@@ -1,8 +1,10 @@
 # Agent 自主调查 Harness 设计方案
 
 **日期**: 2026-07-03  
-**状态**: 待实施  
+**状态**: 已分化（2026-07-07 核实，见下方状态更新）  
 **适用范围**: 补充核验 Agent、候选结论生成、核验池、报告生成前置质量  
+
+> **状态更新（2026-07-07）**：本方案提出的新增能力已分化为"已实现"与"未实现/被取代"两部分。全仓 grep 核实：`search_materials`（全案关键词搜索）、`expand_chunk`（片段前后展开）、`submit_finding`（结构化提交核验池候选）**已实现**，见 `packages/server/src/inquiry/intel-harness.ts`。而 `submit_case_brief`、"全案巡检"按钮、`cases/{caseId}/agent-briefs.jsonl`、`coverage_check` 工具**全仓零命中，未实现**——这部分设想的产品目标已被阶段三以不同机制承接：案卷综述由 M2 研判简报（`brief-service.ts`，服务端派生统计 + LLM 概览逐句引用校验，而非 agent 自主提交 narrative）承接；覆盖检查由 M4 报告覆盖率（`report/coverage.ts`，规则判定五节是否满足）承接。详见根 `AGENTS.md`「当前进度」与 `implementation-notes.md` 阶段三 M2/M4 记录。
 
 ---
 

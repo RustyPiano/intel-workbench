@@ -19,13 +19,15 @@
 
 ## 2. 原创矛盾检测 skill（锚定流水线 vs 大模型直出；含 NLI 思考分流对照）
 
-语料：自造带标注案卷 **≈30 切块 / 6 虚构文件 / 12 条金标矛盾对**（含跨文件「同事实异说」+ 文件内矛盾 + 干扰项）。指标=矛盾对 Precision/Recall/F1。复现 `source dev.env.sh && npm run eval:contradiction`。
+语料：自造带标注案卷 **≈30 切块 / 6 虚构文件 / 12 条金标矛盾对**（含跨文件「同事实异说」+ 文件内矛盾 + 干扰项）。指标=矛盾对 Precision/Recall/F1。复现 `source dev.env.sh && pnpm eval:contradiction`。
 
 | 方案 | Precision | Recall | F1 | TP | FP | FN |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | **anchored（NLI 关思考，默认）** | **1.000** | **0.917** | **0.957** | 11 | **0** | 1 |
 | anchored（NLI 开思考） | 1.000 | 0.833 | 0.909 | 10 | 0 | 2 |
 | llm-direct（全块丢 LLM 列矛盾） | 1.000 | 0.917 | 0.957 | 11 | 0 | 1 |
+
+> **2026-07-07 复测（当前代码，含阶段三 M5 的 `parseJsonOutput` 漏逗号修复后）**：`pnpm eval:contradiction` 重跑，**anchored 关思考 F1=0.957（R=0.917）、开思考 F1=0.909（R=0.833）与上表完全复现**——M5 稳健性修复未影响精度，数字在当前代码上仍成立。本次 **llm-direct=1.000（R=1.0，12/12）**，高于上一版的 0.957——直出为非确定性、逐次浮动。据此把价值定位表述**进一步收紧**：锚定流水线 F1 与直出**持平或略低**（本次 0.957 vs 直出 1.0），结构化的价值**明确不在 F1**，而在零编造引用 / 全语料覆盖 / 确定性 / 可审计（与诚实红线一致）。上表数字为 2026-06-22 定格值，本次复测确认其在当前 pipeline 仍可复现。
 
 **算法**（非「让 LLM 找矛盾」）：①逐块抽原子主张 `{entity,attribute,value,chunk_id}`（LLM，关思考）→ `resolveValidCitations` 丢弃伪造锚点；②**按实体确定性聚类**（非 LLM）；③**仅簇内成对 NLI**（LLM 判 `contradiction|agreement|unrelated`），复杂度 O(Σnᵢ²) 而非 O(N²)；④确定性置信度（关系确定度+是否跨源+数值距离）+ scope（cross/intra-material）。两条矛盾陈述各经 `chunkToCitation` 绑定 content_hash = 逐条 provenance。
 

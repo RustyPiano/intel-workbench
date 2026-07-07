@@ -1,5 +1,7 @@
 # 情报分析工作台 · 三期工程方案（Agent Harness 转向）
 
+> **状态（2026-07-07）：本方案（P3.x agent harness 技术轨）已被阶段一/二/三取代，仅作历史参考。** 当前有效进度见根 `AGENTS.md`「当前进度」与 `implementation-notes.md`；本文件的 P3.0-P3.D 编号与当前「阶段一/二/三」（成功率修复/透明化/目标驱动工作台）是两套不相关的编号，详见 AGENTS.md「里程碑编号消歧」表。
+>
 > 一期：`intel-workbench-phase1-engineering-plan.md`（M0–M5，结构化 RAG 流水线）。
 > 二期：`intel-workbench-phase2-engineering-plan.md` + `...phase2-multimodal-rag-spec.md`（多模态加工 + 混合检索，P2.0–P2.5 mock 完成，P2.6 阻塞于本地模型部署）。
 > 本文是**范式转向**：把当前"绕过 harness 的单发结构化流水线"改造为"agent 在 harness 内自由编排、红线作为 harness 不变量"的形态。
@@ -34,6 +36,8 @@
 **这次改什么、为什么改**
 
 当前情报工作台的问答/要素抽取走的是 `generateJson()` —— **单次结构化 LLM 调用 + 事后 Citation 过滤**（`inquiry/inquiry-service.ts:218`、`elements/element-service.ts:132`、`model/structured.ts`）。这条路径为了守溯源红线，把模型输出塞进固定 JSON schema 单发，**代价是 agent 不能多轮推理、不能自己决定深挖、不能调工具**。
+
+> **旁注（2026-07-07）**：以上是本方案立项时（2026-07-03）的旧诊断。问答生产路径已在阶段一/二转为 `askViaAgent` agent 循环（`inquiry-service.ts` 内 `askViaAgent`，多轮检索/读取/引用/finalize_answer，见 `implementation-notes.md` 阶段一）；`generateJson` 单发路径仍保留但降级为测试用/内部兜底（如支持性判定），非生产主路径。要素抽取（`element-service.ts`）仍走 `generateJson` 单发，诊断对这部分依然成立。
 
 但这是个 **agent 项目**：目标是做一个 **Harness**，让 agent 在 harness 范围内充分发挥（多轮、自编排、按需调工具），保证任务顺利执行。当前形态把 agent 的认知能力锁死了，方向偏了。
 
@@ -206,6 +210,8 @@ P3.0–P3.C **现在就能做**（本地文本 LLM + mock 多模态）；P3.D �
 ---
 
 ### P3.C 多 agent 编排（老师 #3）
+
+> **状态（2026-07-07）**：全仓 grep `spawn_subagent` 零命中——本里程碑**未实现，已列不做**（收敛主线，见 `AGENTS.md` 红线"禁止再加新功能面"）。
 
 **目标**：agent 能派生子 agent 并行调查，子 agent 产出仍守红线。
 

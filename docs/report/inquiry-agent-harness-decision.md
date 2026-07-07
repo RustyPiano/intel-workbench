@@ -1,6 +1,6 @@
 # 溯源问答 Agent Harness 决策记录
 
-> 状态：已决策，待实现落地
+> 状态：已决策，已落地（2026-07-07 核实：`add_claim` 逐条提交、repair turn、`MINI_AGENT_CONTRADICTION_MODE=agent` 均已实现并在主干生效，见阶段一 `implementation-notes.md`）
 > 日期：2026-07-03
 > 范围：专题工作台的溯源问答、`finalize_answer` 契约、harness 提示词装配、聊天 UI 状态表达。
 

@@ -1,7 +1,7 @@
 # 情报分析工作台 · 二期工程方案（多模态 + RAG）
 
 > 配套规格：`intel-workbench-phase2-multimodal-rag-spec.md`（设计/契约）。本文是**实施计划**：里程碑、触碰文件、验收标准、依赖。
-> 一期工程：`intel-workbench-phase1-engineering-plan.md`。可视化：`docs/architecture.html`。
+> 一期工程：`intel-workbench-phase1-engineering-plan.md`。可视化：`docs/archive/architecture.html`（已归档）。
 > v2（2026-06，已过 opus 评审 SOUND-WITH-FIXES）。评审三阻塞项已并入：**manifest 写入需先串行化**（§P2.3a 第一步）、**重加工 Citation 失效规则**（采新 chunk_id 版本化，Spec §2.5）、**P2.0 类型原子提交**；并把 **P2.3 拆为 P2.3a（音频）/ P2.3b（视频图像）**、补 **25MB 上传墙**修复。
 
 ---

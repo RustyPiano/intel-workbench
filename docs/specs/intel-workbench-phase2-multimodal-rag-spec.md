@@ -1,7 +1,7 @@
 # 情报分析工作台 · 二期技术规格：多模态入库 + RAG 检索
 
 > 状态：草案 v2（2026-06，已过 opus 子代理架构评审，结论 SOUND-WITH-FIXES，下列改动已并入）。本文是**设计规格（Spec）**，回答"做什么/怎么设计"；实施步骤见配套《二期工程方案》`intel-workbench-phase2-engineering-plan.md`。
-> 配套可视化：`docs/architecture.html`（当前 vs 推荐架构图解）。模型选型依据见记忆 `offline-media-rag-architecture.md`。
+> 配套可视化：`docs/archive/architecture.html`（历史架构图解，已归档）。模型选型依据见记忆 `offline-media-rag-architecture.md`。
 >
 > **评审并入的关键修正（务必读）**：① manifest 写入当前**未串行化**，引入异步加工前必须先接 per-case 串行队列（§4.1，阻塞项）；② 重加工会改 content_hash 致**历史 Citation 静默失效**，定了失效规则（§2.5，阻塞项）；③ `ChunkLocator` 与 `Citation.locator` 必须**同一提交**加宽（§2.2，阻塞项）；④ 25MB base64 上传**装不下真实音视频**，需多部分/流式上传（§4.6）；⑤ `.vec` 需带模型/维度版本戳，不匹配回退 BM25（§5.3）。
 

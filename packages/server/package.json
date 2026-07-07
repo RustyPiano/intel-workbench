@@ -1,8 +1,8 @@
 {
   "name": "@intel-workbench/server",
-  "version": "0.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "情报分析工作台 — 本地 HTTP API 服务（M0 脚手架：健康检查 + §5 路由占位）。",
+  "description": "情报分析工作台 API — 鉴权、专题、多模态素材加工、agentic RAG 问答（引用台账）、矛盾检测、要素/时间线、研判简报、自动流水线、报告与哈希链审计。",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {

@@ -221,6 +221,79 @@ Contract:
 - `contentHash`
 - `newlyActivated`
 
+### `probe_media`
+
+Contract:
+
+- resolves the path through read policy
+- runs `ffprobe` to report duration, container format, and per-stream codec/dimensions/sample-rate/channels
+- computes file size (ffprobe-reported size, falling back to a filesystem `stat`)
+- estimates the inline-Base64 encoded size and whether it fits under the inline transport limit
+- recommends a transport (`inline` or `model_reachable_url_or_preprocess`) and, when not inline, a recommended chunk length in seconds
+- fails with `INTERNAL_ERROR` if `ffprobe` (from ffmpeg) is not installed, or a structured error if `ffprobe` exits non-zero
+
+`meta` fields:
+
+- `path`
+- `durationSeconds`
+- `formatName`
+- `sizeBytes`
+- `inlineBase64Bytes`
+- `inlineBase64Allowed`
+- `recommendedTransport`
+- `recommendedChunkSeconds`
+- `hasVideo`
+- `hasAudio`
+- `streams` — array of `{ index, type, codec, width, height, sampleRate, channels }`
+
+### `analyze_media`
+
+Contract:
+
+- requires a configured multimodal model (`MINI_AGENT_MM_MODEL`, with optional `MINI_AGENT_MM_API_KEY`/`MINI_AGENT_MM_BASE_URL` overrides); fails with `MODEL_ERROR` otherwise
+- accepts exactly one of `path` (local file) or `url` (model-reachable URL, requiring `kind`, and `format` for audio URLs)
+- sends local files inline when the encoded size fits the inline limit; oversized local files upload to Volcano Engine TOS (when configured) and pass a short-lived pre-signed URL to the model, with the signed URL redacted in the returned `source`
+- calls the configured multimodal model with `instruction` and optional `want_json`
+- returns the analysis inline by default; when `out_path` is set, persists the full result (text, parsed JSON, usage) to that path and returns a short summary instead
+
+`meta` fields:
+
+- `source` (redacted when the source was TOS-published)
+- `originalSource` and `publishedMedia` — present only when the input was uploaded to TOS
+- `kind`
+- `model`
+- `usage`
+- `outPath` — present only when `out_path` was set
+
+Artifacts:
+
+- one `file` artifact pointing at the persisted result, when `out_path` is set
+
+### `analyze_audio`
+
+Contract:
+
+- requires configured ASR credentials (`MINI_AGENT_ASR_API_KEY`, or `MINI_AGENT_ASR_APP_KEY` + `MINI_AGENT_ASR_ACCESS_KEY`); fails with `MODEL_ERROR` otherwise
+- accepts exactly one of `path` (local file) or `url`, with `format` required for URL inputs
+- the caller must choose `engine`: `turbo` sends supported local `wav`/`mp3`/`ogg`/`opus` inline as Base64 (bounded by `MINI_AGENT_ASR_TURBO_MAX_BYTES`, hard-capped) with no upload; `standard` requires a model-reachable URL, uploading local files to TOS when configured
+- reports `engineUsed` and any requested capabilities the engine could not honor (`capabilitiesDropped`, e.g. `emotion` on turbo)
+- returns the transcript and utterances inline by default; when `out_path` is set, persists the full result (transcript, utterances, raw provider payload) and returns a short summary instead
+
+`meta` fields:
+
+- `durationMs`
+- `utteranceCount`
+- `speakerCount`
+- `engineUsed`
+- `reason`
+- `capabilitiesDropped` — present only when non-empty
+- `source` and `publishedMedia` — present when resolved from a file/URL, or TOS-published respectively
+- `outPath` — present only when `out_path` was set
+
+Artifacts:
+
+- one `file` artifact pointing at the persisted result, when `out_path` is set
+
 ## Session recording
 
 The runtime persists `tool_call` and `tool_result` entries into the session log. `tool_result.meta` is the canonical structured metadata field.

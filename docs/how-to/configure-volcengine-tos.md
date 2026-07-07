@@ -70,7 +70,7 @@ For VPC access, set the internal S3 host (`tos-s3-<region>.ivolces.com`).
 Run:
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 Then use local media only for the cases that need TOS:

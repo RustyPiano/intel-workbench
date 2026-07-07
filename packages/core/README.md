@@ -18,9 +18,9 @@
 From the repository root:
 
 ```bash
-npm install
-npm run build -w mini-agent
-npm run test:run -- packages/core
+pnpm install
+pnpm --filter mini-agent build
+pnpm test:run packages/core
 ```
 
 ## Quick Start
@@ -37,25 +37,25 @@ export MINI_AGENT_API_KEY=your-api-key
 Run a single prompt:
 
 ```bash
-npm run dev -w mini-agent -- "Summarize the workspace"
+pnpm --filter mini-agent dev "Summarize the workspace"
 ```
 
 Open the interactive shell:
 
 ```bash
-npm run dev -w mini-agent
+pnpm --filter mini-agent dev
 ```
 
 Utility commands:
 
 ```bash
-npm run dev -w mini-agent -- skills list
-npm run dev -w mini-agent -- run list
-npm run dev -w mini-agent -- run show <run-id>
-npm run dev -w mini-agent -- session list
-npm run dev -w mini-agent -- session show <session-id> --trace
-npm run dev -w mini-agent -- doctor --last-run
-npm run dev -w mini-agent -- doctor
+pnpm --filter mini-agent dev skills list
+pnpm --filter mini-agent dev run list
+pnpm --filter mini-agent dev run show <run-id>
+pnpm --filter mini-agent dev session list
+pnpm --filter mini-agent dev session show <session-id> --trace
+pnpm --filter mini-agent dev doctor --last-run
+pnpm --filter mini-agent dev doctor
 ```
 
 ## Compatibility Notes

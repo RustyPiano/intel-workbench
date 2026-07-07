@@ -19,7 +19,7 @@ export MINI_AGENT_BASE_URL=https://your-endpoint.example.com/v1
 Then run:
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 ## Use CLI flags
@@ -27,7 +27,7 @@ npm run dev -- doctor
 Use flags when you need a one-off connection override:
 
 ```bash
-npm run dev -- \
+pnpm --filter mini-agent dev \
   --provider openai-compatible \
   --model gpt-4.1 \
   --base-url https://your-endpoint.example.com/v1 \
@@ -54,7 +54,7 @@ Create this file in the workspace root:
 Then run:
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 ## Override precedence

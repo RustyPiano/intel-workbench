@@ -1,8 +1,8 @@
 {
   "name": "@intel-workbench/web",
-  "version": "0.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "情报分析工作台 — React + Vite 前端（M0 脚手架：全局外壳 + 双面分离 + §8 全路由占位）。",
+  "description": "情报分析工作台前端 — React 工作台：研判简报、多模态素材、要素图、矛盾核验、流式补充核验（活动流+证据台账）、结论核验、报告与审计。",
   "type": "module",
   "scripts": {
     "dev": "vite",

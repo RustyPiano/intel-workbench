@@ -55,7 +55,7 @@ export MINI_AGENT_API_KEY=your-bailian-api-key
 Then verify:
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 Check `[model_provider]`:
@@ -68,7 +68,7 @@ Check `[model_provider]`:
 Run a minimal prompt:
 
 ```bash
-npm run dev -- "用一句话说明你是谁"
+pnpm --filter mini-agent dev "用一句话说明你是谁"
 ```
 
 ## 4. Optional: Configure Qwen-Omni For Video/Image
@@ -94,7 +94,7 @@ export MINI_AGENT_MM_TIMEOUT_MS=180000
 Then run:
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 Check `[multimodal_path]` for `mm_configured yes`.
@@ -118,7 +118,7 @@ when you intentionally want a live check:
 ```bash
 RUN_DASHSCOPE_OMNI_SMOKE=1 \
 DASHSCOPE_API_KEY=your-bailian-api-key \
-npm run test:run -- tests/integration/dashscope-omni-smoke.test.ts
+pnpm test:run packages/core/tests/integration/dashscope-omni-smoke.test.ts
 ```
 
 You can also use `MINI_AGENT_MM_API_KEY`, `MINI_AGENT_MM_MODEL`, and

@@ -16,7 +16,7 @@ const PORT = Number(process.env.PORT ?? 4319);
 
 /**
  * Smoke check that the workspace wiring resolves `mini-agent` (core).
- * We only assert the symbol is importable — M0 does not drive the agent.
+ * We only assert the symbol is importable — this smoke check does not drive the agent.
  */
 function assertCoreWiring(): void {
   if (typeof RuntimeAgent?.create !== "function") {

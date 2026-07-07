@@ -5,8 +5,7 @@ import { AppError } from "../domain/identity.js";
 import type { Identity } from "../domain/types.js";
 
 /**
- * 审计 REST 路由（工程方案 §5 / §7.2，M1 做实：列表 + verify）。
- * 导出留存（`/export`）属 M5，留 stub。
+ * 审计 REST 路由（工程方案 §5 / §7.2）：列表、verify、导出留存（`/export`）均已做实。
  */
 export function createAuditRouter(audit: AuditService): Router {
   const router = Router();

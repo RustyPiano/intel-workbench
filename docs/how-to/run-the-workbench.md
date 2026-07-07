@@ -128,4 +128,4 @@ pnpm check          # typecheck + 全量 vitest（不连任何真模型）
 
 ---
 
-更深的架构/红线/扩展见 **[../HANDOFF.md](../HANDOFF.md)** 与 **[../architecture-explained.html](../architecture-explained.html)**。
+更深的架构与红线见根 **[AGENTS.md](../../AGENTS.md)** 与 **[expert-review-brief.md](../expert-review-brief.md)**；历史架构图解见 **[archive/architecture-explained.html](../archive/architecture-explained.html)**（旧技术轨，仅参考）。

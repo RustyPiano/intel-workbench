@@ -87,7 +87,7 @@ Discovery does not load these directories up front. They are inventoried only wh
 Run:
 
 ```bash
-npm run dev -- skills list
+pnpm --filter mini-agent dev skills list
 ```
 
 You should see your skill name and description in the catalog output.
@@ -107,7 +107,7 @@ The two practical checks are:
 1. run a prompt that should clearly need the skill
 2. add a deterministic test around `SkillRegistry.activate()`
 
-The existing unit tests in `tests/unit/skill-registry.test.ts` are the right pattern for activation checks.
+The existing unit tests in `packages/core/tests/unit/skill-registry.test.ts` are the right pattern for activation checks.
 
 ## 7. Prepare fixtures for the skill
 
@@ -127,7 +127,7 @@ fixtures/<skill-name>/
 └── expected-report.md
 ```
 
-The repo-level example for this lives under `fixtures/intel-bulletin/` with a matching readiness test in `tests/integration/intel-bulletin-readiness.test.ts`.
+The repo-level example for this lives under `fixtures/intel-bulletin/` with a matching readiness test in `packages/core/tests/integration/intel-bulletin-readiness.test.ts`.
 
 Then add a test that checks at least:
 

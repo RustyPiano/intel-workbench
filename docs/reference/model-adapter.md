@@ -14,6 +14,9 @@ interface GenerateInput {
   signal?: AbortSignal
   temperature?: number
   maxTokens?: number
+  // Provider thinking/reasoning toggle (DeepSeek `thinking:{type}` shape).
+  // Forwarded verbatim to the request body when set; omitted otherwise.
+  thinking?: { type: "enabled" | "disabled" }
 }
 
 interface GenerateResult {
@@ -26,14 +29,33 @@ interface GenerateResult {
   rawResponse?: unknown
 }
 
+type ModelStreamEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "reasoning_delta"; text: string }
+  | { type: "tool_call_delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
+  | { type: "complete"; result: GenerateResult }
+
 interface ModelAdapter {
   name: string
   generate(input: GenerateInput): Promise<GenerateResult>
-  stream?(input: GenerateInput): AsyncIterable<unknown>
+  stream?(input: GenerateInput): AsyncIterable<ModelStreamEvent>
 }
 ```
 
 `mini-agent` currently ships one provider implementation: `openai-compatible`.
+
+## Streaming (`stream()`)
+
+Adapters that implement `stream()` yield provider deltas as they arrive, accumulate them internally, then yield exactly one final `complete` event carrying the assembled `GenerateResult` — identical in shape and content to what `generate()` would return for the same provider response. `complete` is always last; nothing is yielded after it.
+
+`ModelStreamEvent` variants:
+
+- `text_delta` — an incremental chunk of assistant message text
+- `reasoning_delta` — an incremental chunk of provider reasoning/thinking content (e.g. DeepSeek `reasoning_content`). This is a streaming-only signal: it is not folded into the assembled message content, so the final `complete` result stays identical to `generate()` for the same response
+- `tool_call_delta` — an index-addressed increment of a streamed tool call's `id`, `name`, and/or `argumentsDelta`, accumulated by the adapter and assembled into the final tool calls
+- `complete` — the terminal event, carrying the fully assembled `GenerateResult`
+
+Streamed `usage` can be `undefined` if a provider ignores `stream_options.include_usage`, so the assembled result's `usage` may diverge from `generate()`'s for such providers.
 
 ## Provider selection
 
@@ -58,6 +80,8 @@ Connection fields:
 - `model`
 - `apiKey`
 - `baseURL`
+
+When `input.thinking` is set, both `generate()` and `stream()` forward it verbatim as a non-standard `thinking` field on the request body (DeepSeek's `thinking:{type}` toggle). It is omitted from the request when not set.
 
 ## Message mapping
 

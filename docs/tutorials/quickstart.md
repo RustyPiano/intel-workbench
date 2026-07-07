@@ -5,13 +5,13 @@ This tutorial gets a fresh checkout from zero to one successful runtime command.
 ## Prerequisites
 
 - Node.js 20 or newer
-- npm
+- pnpm
 - An API key for an OpenAI-compatible endpoint
 
 ## 1. Install dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 ## 2. Set model connection variables
@@ -36,7 +36,7 @@ export MINI_AGENT_API_KEY=your-api-key
 ## 3. Verify the local project
 
 ```bash
-npm run check
+pnpm check
 ```
 
 Expected result:
@@ -47,7 +47,7 @@ Expected result:
 ## 4. Inspect runtime status
 
 ```bash
-npm run dev -- doctor
+pnpm --filter mini-agent dev doctor
 ```
 
 Check that:
@@ -60,7 +60,7 @@ Check that:
 ## 5. Run a one-shot prompt
 
 ```bash
-npm run dev -- "Summarize the project structure"
+pnpm --filter mini-agent dev "Summarize the project structure"
 ```
 
 This starts a new session, builds the runtime prompt, and asks the model to respond or call tools.
@@ -68,7 +68,7 @@ This starts a new session, builds the runtime prompt, and asks the model to resp
 ## 6. Explore the bundled skill
 
 ```bash
-npm run dev -- skills list
+pnpm --filter mini-agent dev skills list
 ```
 
 You should see `intel-bulletin` in the catalog.
@@ -76,7 +76,7 @@ You should see `intel-bulletin` in the catalog.
 ## 7. Open the interactive shell
 
 ```bash
-npm run dev
+pnpm --filter mini-agent dev
 ```
 
 Type a prompt and press Enter. Type `exit`, `quit`, or `:q` to leave.

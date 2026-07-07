@@ -17,7 +17,7 @@ import { shortId } from "../util/hash.js";
 /**
  * 要素抽取（产品 spec §5.2 / §8.6，一期"最小可用"）。复用溯源红线管线：
  * OfflineGuard 授权 → 结构化生成 → 每条"提及"必须引用真实 chunk（content_hash
- * 校验，§4.3）；无有效提及的要素丢弃。关系图谱/复杂时间线属二期（§14）。
+ * 校验，§4.3）；无有效提及的要素丢弃。关系图谱与时间线由 analysis/element-graph.ts 派生。
  */
 
 const ELEMENT_TYPES: readonly ElementType[] = ["person", "org", "location", "event", "equipment", "time"];

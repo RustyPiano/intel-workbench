@@ -127,6 +127,7 @@ large local video/image or standard-engine local audio.
 | --- | --- |
 | `MINI_AGENT_SESSION_DIR` | Session directory override. |
 | `MINI_AGENT_MAX_TURNS` | Loop turn cap. |
+| `MINI_AGENT_MAX_OUTPUT_TOKENS` | Max output tokens requested per model call, forwarded as the provider's `max_tokens`. Unset leaves the provider default; raise it when long tool-call payloads are truncated (`finish_reason: length`). |
 | `MINI_AGENT_TOOL_TIMEOUT_MS` | Generic tool timeout. |
 | `MINI_AGENT_BASH_TIMEOUT_MS` | Bash timeout. |
 | `MINI_AGENT_MAX_BASH_OUTPUT_BYTES` | Bash output tail size kept in context. |
@@ -168,6 +169,7 @@ large local video/image or standard-engine local audio.
   "workspaceRoot": ".",
   "sessionDir": ".mini-agent/sessions",
   "maxTurns": 12,
+  "maxOutputTokens": 8192,
   "toolTimeoutMs": 60000,
   "mmTimeoutMs": 180000,
   "asrTimeoutMs": 180000,

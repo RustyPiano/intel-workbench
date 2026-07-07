@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat \"${CLAUDE_PROJECT_DIR:-.}/AGENTS.md\" 2>/dev/null | jq -Rs '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:.}}' 2>/dev/null || true",
+            "statusMessage": "载入 AGENTS.md 项目上下文"
+          }
+        ]
+      }
+    ]
+  }
+}

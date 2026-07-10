@@ -17,7 +17,7 @@ export const DEMO_CASE_ID = "port-anomaly-verification";
 const RESTRICTED_CASE_ID = "restricted-review-sample";
 const SEED_MARKER = ".demo-seed-complete.json";
 // 演示专题 seed 内容版本；提升该值会让 seedDemoWorkspace 重新执行完整 seed 写入。
-// v5（阶段三 M5）：新增时间锚点要素、矛盾处置台账（留一条故意未处置）、预置 auto-inquiry.json，
+// v5（阶段三 M5）：新增时间锚点要素、矛盾处置台账（留一条故意未处置）、预置 workflow.json 研判进度，
 // 使演示专题在报告覆盖率仪表下开箱即 4/5（详见 implementation-notes.md 阶段三 M5）。
 const SEED_VERSION = 5;
 const now = "2026-07-02T09:00:00.000Z";

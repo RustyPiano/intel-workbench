@@ -4531,3 +4531,6 @@ button.citation:focus-visible {
 .loading-text {
   color: var(--text-dim);
 }
+
+.brief-findings { display: flex; flex-direction: column; gap: 10px; }
+.brief-finding { display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.6; }

@@ -43,3 +43,6 @@ __pycache__/
 # 数据根独占锁（运行期生成，优雅退出即删）
 /.workbench.lock
 /packages/server/.workbench.lock
+
+# Agent worktree 隔离目录（运行期生成）
+/.claude/worktrees/

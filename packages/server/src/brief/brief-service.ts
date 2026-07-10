@@ -12,7 +12,7 @@ import { computeCoverage, type ReportCoverage } from "../report/coverage.js";
  *
  * 只读既有落盘产物，把一份案卷投影成一屏可核验视图：概览句、已验证时间线、关键要素、
  * 未处置高置信矛盾、已核准 Finding、报告覆盖率。GET 不写任何文件、不落审计、不调模型，
- * 故同一份产物必然得到一致结果（旧版的 brief.json 缓存 / 指纹 / last-good / LLM 概览 /
+ * 故同一份产物必然得到一致结果（旧版缓存 / 指纹 / last-good / LLM 概览 /
  * OfflineGuard 出站 / ?refresh / degraded 全部删除）。实时执行状态（task/自动研判/素材统计）
  * 改由 GET /cases/:id/status 提供，不再进本视图。
  */

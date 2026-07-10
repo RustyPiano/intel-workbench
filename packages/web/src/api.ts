@@ -932,14 +932,6 @@ export interface ApiBriefOverviewSentence {
   citation: ApiCitation;
 }
 
-export interface ApiBriefProcessingStats {
-  elementCount: number;
-  contradictionCount: number;
-  unresolvedContradictionCount: number;
-  findingCount: number;
-  approvedFindingCount: number;
-}
-
 export interface ApiBriefEntity {
   id: string;
   name: string;
@@ -956,7 +948,6 @@ export interface ApiBriefContradiction {
   rationale: string;
   claim_a: { text: string; citation: ApiCitation };
   claim_b: { text: string; citation: ApiCitation };
-  acknowledgement_status: ContradictionAcknowledgementStatus | null;
 }
 
 /** 报告五节覆盖度（阶段三 M4 / D4）：固定五节，每节满足与否 + 人话明细 + 前端引导。 */
@@ -974,17 +965,16 @@ export interface ApiReportCoverage {
   sections: ApiCoverageSection[];
 }
 
+/** 确定性投影简报（R2 批次 D）：只读既有产物，无缓存、无模型调用。 */
 export interface ApiBrief {
   caseId: string;
-  generatedAt: string;
-  fingerprint: string;
   overview: ApiBriefOverviewSentence[];
-  processing: ApiBriefProcessingStats;
   timeline: TimelinePoint[];
   entities: ApiBriefEntity[];
+  /** 未处置高置信矛盾（阈值 0.75，与导出闸同口径）。 */
   contradictions: ApiBriefContradiction[];
-  openQuestions: ApiQuestionSuggestion[];
-  /** 报告五节覆盖度（阶段三 M4，现算）。 */
+  approvedFindings: ApiFinding[];
+  /** 报告五节覆盖度（现算）。 */
   coverage: ApiReportCoverage;
 }
 

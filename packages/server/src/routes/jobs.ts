@@ -68,7 +68,7 @@ function serializeJob(job: Job) {
     state: job.state,
     progress: job.progress,
     error: job.error,
-    // 矛盾检测结果随 job 回传供面板直用；自动研判进度以 auto-inquiry.json 为准（简报现算叠加），此处也附终态便于轮询。
+    // 矛盾检测结果随 job 回传供面板直用；自动研判进度以 workflow.json 的 inquiries items 为准，此处也附终态便于轮询。
     ...((job.kind === "contradictions" || job.kind === "auto-inquiry") && job.result !== undefined ? { result: job.result } : {}),
     startedAt: job.startedAt,
   };

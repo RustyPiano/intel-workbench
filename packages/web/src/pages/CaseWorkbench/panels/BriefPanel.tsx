@@ -311,12 +311,6 @@ export function BriefPanel() {
     }
   };
 
-  const askQuestion = (question: string) => {
-    if (!caseId) return;
-    navigate(`/cases/${encodeURIComponent(caseId)}/inquiry?q=${encodeURIComponent(question)}`);
-    scrollWorkbenchBodyIntoView();
-  };
-
   const openFindings = () => {
     if (!caseId) return;
     navigate(`/cases/${encodeURIComponent(caseId)}/findings`);
@@ -353,10 +347,17 @@ export function BriefPanel() {
 
   if (!caseId) return null;
 
-  const generatedAt = brief ? new Date(brief.generatedAt).toLocaleTimeString() : "";
   const materialsTile = statusTile(caseStatus, (d) => d.materials, (m) => ({
     main: `${m.processed}/${m.total}`,
     hint: m.failed > 0 ? `${m.failed} 失败` : "已加工 / 总数",
+  }));
+  const contradictionsTile = statusTile(caseStatus, (d) => d.contradictions, (c) => ({
+    main: String(c.openHighConfidence),
+    hint: `共检出 ${c.total} 条`,
+  }));
+  const findingsTile = statusTile(caseStatus, (d) => d.findings, (f) => ({
+    main: `${f.approved}/${f.total}`,
+    hint: "已核准 / 结论池",
   }));
   const inquiriesStep = caseStatus.status === "ready" && caseStatus.data.workflow.state === "ready"
     ? caseStatus.data.workflow.data.steps.inquiries
@@ -374,12 +375,6 @@ export function BriefPanel() {
           ) : (
             <span className="brief-controls__muted">加载中…</span>
           )}
-          {brief ? (
-            <>
-              <span className="brief-controls__sep">·</span>
-              <span className="brief-controls__muted">概览生成于 {generatedAt}</span>
-            </>
-          ) : null}
         </div>
         <div className="brief-controls__actions">
           {canManage ? (
@@ -409,18 +404,18 @@ export function BriefPanel() {
             </div>
             <div className="brief-stat">
               <span>关键实体</span>
-              <strong>{brief.processing.elementCount}</strong>
+              <strong>{brief.entities.length}</strong>
               <small>抽取的人物/组织/地点等</small>
             </div>
             <div className="brief-stat">
               <span>未处置矛盾</span>
-              <strong>{brief.processing.unresolvedContradictionCount}</strong>
-              <small>共检出 {brief.processing.contradictionCount} 条</small>
+              <strong>{brief.contradictions.length}</strong>
+              <small>{contradictionsTile.hint}</small>
             </div>
             <div className="brief-stat">
               <span>核准结论</span>
-              <strong>{brief.processing.approvedFindingCount}/{brief.processing.findingCount}</strong>
-              <small>已核准 / 结论池</small>
+              <strong>{findingsTile.main}</strong>
+              <small>{findingsTile.hint}</small>
             </div>
           </section>
 
@@ -485,7 +480,22 @@ export function BriefPanel() {
             )}
           </BriefSection>
 
-          <BriefSection title="待核问题" count={brief.openQuestions.length} caseId={caseId} tab="inquiry" tabLabel="去补充核验">
+          <BriefSection title="已核准结论" count={brief.approvedFindings.length} caseId={caseId} tab="findings" tabLabel="去结论核验">
+            {brief.approvedFindings.length === 0 ? (
+              <div className="brief-empty">尚无已核准结论。supported 结论转入核验池并经保密员核准后在此列出。</div>
+            ) : (
+              <div className="brief-findings">
+                {brief.approvedFindings.map((finding) => (
+                  <div key={finding.id} className="brief-finding">
+                    <span className="brief-finding__text">{finding.conclusion}</span>
+                    <CitationChips citations={finding.supporting_citations} onFrame={setFrameCite} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </BriefSection>
+
+          <BriefSection title="自动研判" count={inquiriesStep?.items.length ?? 0} caseId={caseId} tab="inquiry" tabLabel="去补充核验">
             {inquiriesStep && inquiriesStep.items.length > 0 ? (
               <AutoInquiryProgressBlock
                 progress={inquiriesStep}
@@ -504,32 +514,6 @@ export function BriefPanel() {
                     {restartingBatch ? "启动中…" : "启动自动研判"}
                   </button>
                 ) : null}
-              </div>
-            )}
-            {brief.openQuestions.length === 0 ? (
-              <div className="brief-empty">暂无系统建议的待核问题。</div>
-            ) : (
-              <div className="brief-questions">
-                {brief.openQuestions.map((q, i) => (
-                  <button
-                    key={`${q.category}:${i}`}
-                    type="button"
-                    className="brief-question"
-                    title={`${q.rationale}\n（点击带着该问题去补充核验）`}
-                    onClick={() => askQuestion(q.question)}
-                  >
-                    <span className={`category-tag category-tag--${q.category}`}>
-                      {q.category === "basic" ? "基础"
-                        : q.category === "timeline" ? "时间线"
-                        : q.category === "relationship" ? "关联"
-                        : q.category === "contradiction" ? "冲突"
-                        : q.category === "verification" ? "待核"
-                        : q.category === "analysis" ? "分析"
-                        : q.category}
-                    </span>
-                    <span className="brief-question__text">{q.question}</span>
-                  </button>
-                ))}
               </div>
             )}
           </BriefSection>

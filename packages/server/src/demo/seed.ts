@@ -1,10 +1,11 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import type { AuditService } from "../audit/audit-service.js";
+import { AuditService } from "../audit/audit-service.js";
 import { UserStore } from "../auth/user-store.js";
-import type { DataPaths } from "../data/paths.js";
-import type { AuditEvent, CaseManifest, Chunk, Citation, Contradiction, ContradictionAcknowledgement, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
+import { resolveDataPaths, type DataPaths } from "../data/paths.js";
+import type { CaseManifest, Chunk, Citation, Contradiction, ContradictionAcknowledgement, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
 import { DEMO_MATERIALS, type DemoMaterialInput } from "./port-anomaly-materials.js";
 import { chunkToCitation } from "../inquiry/citation.js";
 import { countCandidates } from "../inquiry/auto-inquiry-service.js";
@@ -13,14 +14,82 @@ import { citationId } from "../report/report-service.js";
 import type { InquiryBatchItem, WorkflowState } from "../workflow/types.js";
 import { materialInputHash } from "../workflow/workflow-service.js";
 
+/**
+ * 演示数据播种（破坏性收敛 R3：完全重置，零迁移）。
+ *
+ * - 只允许写入**空数据根**（目录不存在或为空）；非空即抛错，提示先 `pnpm demo:reset`。
+ * - 无 seed 版本号、无标记文件、无 merge/补写：每次播种都是从零完整生成。
+ * - 审计链一律经 AuditService 正常追加（绝不手写哈希），播种完成即全链可验证。
+ */
+
 export const DEMO_CASE_ID = "port-anomaly-verification";
 const RESTRICTED_CASE_ID = "restricted-review-sample";
-const SEED_MARKER = ".demo-seed-complete.json";
-// 演示专题 seed 内容版本；提升该值会让 seedDemoWorkspace 重新执行完整 seed 写入。
-// v5（阶段三 M5）：新增时间锚点要素、矛盾处置台账（留一条故意未处置）、预置 workflow.json 研判进度，
-// 使演示专题在报告覆盖率仪表下开箱即 4/5（详见 implementation-notes.md 阶段三 M5）。
-const SEED_VERSION = 5;
 const now = "2026-07-02T09:00:00.000Z";
+
+/** 固定演示数据根：<仓库根>/.workbench-data/demo（MINI_AGENT_DEMO=1 与 demo:seed / demo:reset 共用）。 */
+export function demoDataRoot(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // packages/server/{src,dist}/demo -> 仓库根
+  return path.resolve(here, "..", "..", "..", "..", ".workbench-data", "demo");
+}
+
+/** 判空时忽略的运行期文件：数据根独占锁（调用方持有）与 macOS 目录元数据。 */
+const IGNORED_ROOT_ENTRIES = new Set([".workbench.lock", ".DS_Store"]);
+
+/** 数据根是否为空（目录不存在也算空）。 */
+export async function dataRootIsEmpty(root: string): Promise<boolean> {
+  try {
+    return (await readdir(root)).every((entry) => IGNORED_ROOT_ENTRIES.has(entry));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw e;
+  }
+}
+
+/** 旧格式（R1/R2 收敛前）遗留的专题级状态文件：零兼容，启动命中即拒绝，不迁移。 */
+const LEGACY_ARTIFACTS = ["task-runs.json", "autopilot-state.json", "auto-inquiry.json", "brief.json", "audit.log"] as const;
+
+/** 扫描 cases/<id>/ 下的旧格式痕迹文件，返回命中的完整路径（供启动拒绝时逐一指出）。 */
+export async function findLegacyArtifacts(casesDir: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(casesDir, { withFileTypes: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+  const hits: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    for (const name of LEGACY_ARTIFACTS) {
+      const file = path.join(casesDir, entry.name, name);
+      if (await exists(file)) hits.push(file);
+    }
+  }
+  return hits;
+}
+
+/**
+ * demo:reset —— 只允许重置**固定演示数据根**：清空其中全部数据（保留调用方持有的锁文件）
+ * 后从零重新播种。路径硬校验，绝不接受任意路径，防止误删用户数据根。
+ */
+export async function resetDemoWorkspace(root: string): Promise<{ caseId: string }> {
+  if (path.resolve(root) !== demoDataRoot()) {
+    throw new Error(`demo:reset 只允许重置固定演示数据根 ${demoDataRoot()}，拒绝操作：${root}`);
+  }
+  let entries: string[] = [];
+  try {
+    entries = await readdir(root);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  for (const entry of entries) {
+    if (entry === ".workbench.lock") continue; // 保留调用方持有的数据根独占锁
+    await rm(path.join(root, entry), { recursive: true, force: true });
+  }
+  const paths = resolveDataPaths(root);
+  return seedDemoWorkspace(paths, new AuditService(paths));
+}
 
 interface BuiltMaterial {
   material: Material;
@@ -83,60 +152,8 @@ async function writeJsonl(file: string, values: unknown[]): Promise<void> {
   await writeFile(file, values.map((value) => JSON.stringify(value)).join("\n") + (values.length ? "\n" : ""), "utf8");
 }
 
-function seedMarker(paths: DataPaths, caseId: string): string {
-  return path.join(paths.caseDir(caseId), SEED_MARKER);
-}
-
-async function writeSeedMarker(paths: DataPaths, caseId: string, version: number): Promise<void> {
-  await writeJson(seedMarker(paths, caseId), { version, completed_at: now });
-}
-
-async function readSeedMarkerVersion(paths: DataPaths, caseId: string): Promise<number> {
-  try {
-    const raw = JSON.parse(await readFile(seedMarker(paths, caseId), "utf8")) as { version?: unknown };
-    return typeof raw.version === "number" ? raw.version : 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function readManifest(paths: DataPaths, caseId: string): Promise<CaseManifest | null> {
-  try {
-    return JSON.parse(await readFile(paths.caseManifest(caseId), "utf8")) as CaseManifest;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
-  }
-}
-
-function mergeMaterials(seedMaterials: Material[], existing: CaseManifest | null): Material[] {
-  const seeded = new Set(seedMaterials.map((material) => material.id));
-  const extras = (existing?.materials ?? []).filter((material) => !seeded.has(material.id));
-  return [...seedMaterials, ...extras];
-}
-
-type AuditAppendInput = Parameters<AuditService["append"]>[0];
-
-function auditMatches(event: AuditEvent, input: AuditAppendInput): boolean {
-  const result = input.result ?? "ok";
-  if (event.action !== input.action || event.object !== input.object || event.result !== result) return false;
-  const detail = input.detail ?? {};
-  for (const key of ["caseId", "materialId", "inquiryId", "findingId"] as const) {
-    if (detail[key] !== undefined && event.detail?.[key] !== detail[key]) return false;
-  }
-  return true;
-}
-
-async function appendMissingAudit(audit: AuditService, inputs: AuditAppendInput[]): Promise<void> {
-  const seen = await audit.readAll();
-  for (const input of inputs) {
-    if (seen.some((event) => auditMatches(event, input))) continue;
-    seen.push(await audit.append(input));
-  }
-}
-
+/** 绝密留存样例专题：演示密级裁剪（operator 无权访问）与 deny 审计。 */
 async function seedRestrictedCase(paths: DataPaths, audit: AuditService): Promise<void> {
-  if (await exists(seedMarker(paths, RESTRICTED_CASE_ID))) return;
   const manifest: CaseManifest = {
     id: RESTRICTED_CASE_ID,
     name: "保密员复核留存样例（绝密）",
@@ -151,34 +168,32 @@ async function seedRestrictedCase(paths: DataPaths, audit: AuditService): Promis
   await mkdir(path.join(paths.caseDir(RESTRICTED_CASE_ID), "processed"), { recursive: true });
   await mkdir(path.join(paths.caseDir(RESTRICTED_CASE_ID), "report"), { recursive: true });
   await writeJson(paths.caseManifest(RESTRICTED_CASE_ID), manifest);
-  await appendMissingAudit(audit, [
-    { user: "security", action: "case.create", object: `case:${RESTRICTED_CASE_ID}`, caseId: RESTRICTED_CASE_ID, detail: { caseId: RESTRICTED_CASE_ID, name: manifest.name, clearance: manifest.clearance } },
-    {
-      user: "operator",
-      action: "case.access",
-      object: `case:${RESTRICTED_CASE_ID}`,
-      result: "deny",
-      caseId: RESTRICTED_CASE_ID,
-      detail: { caseId: RESTRICTED_CASE_ID, reason: "clearance", actorClearance: "confidential", caseClearance: "topsecret", seeded: true },
-    },
-  ]);
-  await writeSeedMarker(paths, RESTRICTED_CASE_ID, 2);
+  await audit.append({ user: "security", action: "case.create", object: `case:${RESTRICTED_CASE_ID}`, caseId: RESTRICTED_CASE_ID, detail: { caseId: RESTRICTED_CASE_ID, name: manifest.name, clearance: manifest.clearance } });
+  await audit.append({
+    user: "operator",
+    action: "case.access",
+    object: `case:${RESTRICTED_CASE_ID}`,
+    result: "deny",
+    caseId: RESTRICTED_CASE_ID,
+    detail: { caseId: RESTRICTED_CASE_ID, reason: "clearance", actorClearance: "confidential", caseClearance: "topsecret", seeded: true },
+  });
 }
 
-export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): Promise<{ seeded: boolean; caseId: string }> {
+/**
+ * 从零播种演示工作区。只接受空数据根：非空一律抛错（先 `pnpm demo:reset`）。
+ * 产物全部为当前格式：claim 带稳定 id、citation 带 verdict、workflow.json 冻结契约、
+ * findings 带 source_claim、审计链经 AuditService 逐条追加。
+ */
+export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): Promise<{ caseId: string }> {
+  if (!(await dataRootIsEmpty(paths.root))) {
+    throw new Error(`演示播种只允许写入空数据根，而 ${paths.root} 非空。请先执行 pnpm demo:reset 重置演示数据根；自定数据根请先迁走已有数据。`);
+  }
+
   await new UserStore(paths).ensureDemoUsers();
   await seedRestrictedCase(paths, audit);
-  // 版本升级会把演示专题（DEMO_CASE_ID）的 findings/inquiries/report 重置回 seed 状态，这是演示专题的预期行为；
-  // 用户自行上传的材料经 mergeMaterials 保留，不会被清空。
-  if ((await readSeedMarkerVersion(paths, DEMO_CASE_ID)) >= SEED_VERSION) return { seeded: false, caseId: DEMO_CASE_ID };
 
   const caseDir = paths.caseDir(DEMO_CASE_ID);
   const built = DEMO_MATERIALS.map(buildMaterial);
-  const previousManifest = await readManifest(paths, DEMO_CASE_ID);
-  // autopilot 字段保持缺省（视为开启）：seed 直接写盘，不经素材摄入流程，不会触发
-  // WorkflowService.onMaterialsSettled；即便后续人工往本专题追加素材触发它，workflow.json 里
-  // 三个步骤均 succeeded 且指纹匹配当前素材、产物在盘，会被幂等跳过，不会重新调用模型。
-  // 故无需显式置 autopilot:false。
   const manifest: CaseManifest = {
     id: DEMO_CASE_ID,
     name: "港口异常活动线索核验（模拟数据）",
@@ -187,7 +202,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     owner: "operator",
     created_at: now,
     updated_at: now,
-    materials: mergeMaterials(built.map((item) => item.material), previousManifest),
+    materials: built.map((item) => item.material),
   };
 
   await mkdir(path.join(caseDir, "materials"), { recursive: true });
@@ -265,8 +280,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     { id: "el-customs", type: "event", name: "LH-7712 查验预约", aliases: ["查验预约"], mentions: [cCustomsTime, cCustomsNoOpen], freq: 2 },
     { id: "el-seal-event", type: "event", name: "封志异常", aliases: ["拆封风险"], mentions: [cPhotoSealMissing, cSealPerfect], freq: 2 },
     { id: "el-time-window", type: "time", name: "2026-07-01 22:30-23:40", aliases: ["23点前", "23:18"], mentions: [cBrief, cAis, cPhotoTimestamp, cWeatherStable], freq: 4 },
-    // 以下两个时间锚点补充报告覆盖率「关键时间线」节所需的锚定点（阈值 3，阶段三 M5）；
-    // 均取材已有引用，非新增事实。
+    // 两个时间锚点补足报告覆盖率「关键时间线」节的锚定点（阈值 3）；均取材已有引用，非新增事实。
     { id: "el-time-seal-patrol", type: "time", name: "2026-07-02 00:20", aliases: [], mentions: [cSealPerfect], freq: 1 },
     { id: "el-time-customs", type: "time", name: "2026-07-02 09:30", aliases: [], mentions: [cCustomsTime], freq: 1 },
   ];
@@ -362,7 +376,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   await writeJson(path.join(caseDir, "contradictions.json"), contradictions);
   await writeJson(path.join(caseDir, "contradictions.result.json"), contradictionResult);
   // 矛盾处置台账：6 条已通过对应已核准结论处置，`ct-unload-status`（卸货完成状态）故意留空——
-  // 它是唯一未被任何已核准 Finding 引用覆盖的矛盾，留给现场演示处置动作（报告覆盖率「矛盾核验」节缺口，阶段三 M5）。
+  // 它是唯一未被任何已核准 Finding 引用覆盖的矛盾，留给现场演示处置动作（报告覆盖率「矛盾核验」节缺口）。
   const acks: ContradictionAcknowledgement[] = [
     { id: "ca-berth-status", case_id: DEMO_CASE_ID, contradiction_id: "ct-berth-status", status: "resolved", note: "已通过已核准结论「靠泊时间线存在高可信冲突」处置，采信 AIS/VTS/泊位计划时间线。", by: "security", at: now },
     { id: "ca-truck-count", case_id: DEMO_CASE_ID, contradiction_id: "ct-truck-count", status: "resolved", note: "已通过已核准结论「三号门车辆登记存在缺口」处置，采信 OCR 与堆场复核数量。", by: "security", at: now },
@@ -430,10 +444,8 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   ];
   await writeJsonl(path.join(caseDir, "inquiries.jsonl"), inquiries);
 
-  // 预置唯一执行状态 workflow.json（R2）：要素/矛盾步骤 succeeded（产物已在盘），自动研判步骤
-  // succeeded 且 items 取自上面四条已种问答记录（candidateCount 用 countCandidates 同口径判 candidate/done）。
-  // 让简报「待核问题」板块与报告覆盖率「未决事项」节开箱即显示已闭环的批次，而非空态。检查点留空由人工确认。
-  // （完整重写属 R3；此处只写合法契约。）
+  // 唯一执行状态 workflow.json（R2 冻结契约）：要素/矛盾步骤 succeeded（产物已在盘），自动研判步骤
+  // succeeded 且 items 取自上面四条已种问答记录（candidate/done 用 countCandidates 同口径判定）。
   const inquiryItems: InquiryBatchItem[] = inquiries.map((inquiry) => ({
     question: inquiry.question,
     status: countCandidates(inquiry) > 0 ? "candidate" : "done",
@@ -450,6 +462,8 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   };
   await writeJson(paths.workflowFile(DEMO_CASE_ID), workflow);
 
+  // findings：多数由问答结论晋升而来（source_claim 指向上面真实存在的 claim id）；
+  // f-weight-register-risk 保留为人工创建样例（无 source_claim）。
   const findings: Finding[] = [
     {
       id: "f-berth-timeline",
@@ -462,6 +476,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       reviewed_by: "security",
       reviewed_at: now,
       open_questions: ["值班简报补录时间与系统时间是否一致？", "AccessAIS 派生样本是否需要替换为现场原始 AIS 导出？"],
+      source_claim: { inquiryId: "inq-berth-2230", claimId: "claim-b2230-1" },
     },
     {
       id: "f-gate-vehicle-gap",
@@ -474,6 +489,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       reviewed_by: "security",
       reviewed_at: now,
       open_questions: ["未登记车辆是否存在补录或临时保障审批？", "三号门原始视频是否完整留存？"],
+      source_claim: { inquiryId: "inq-port-key-evidence", claimId: "claim-pke-2" },
     },
     {
       id: "f-container-handling-risk",
@@ -486,6 +502,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       reviewed_by: "security",
       reviewed_at: now,
       open_questions: ["LH-7712 是否有临时移箱审批？", "堆场系统未入位是否为同步延迟？"],
+      source_claim: { inquiryId: "inq-lh7712-risk", claimId: "claim-lh-2" },
     },
     {
       id: "f-weight-register-risk",
@@ -510,6 +527,7 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       reviewed_by: "security",
       reviewed_at: now,
       open_questions: ["23:18 现场照片原图和 EXIF 是否可取？", "7 月 2 日 09:30 海关查验结果是什么？"],
+      source_claim: { inquiryId: "inq-lh7712-risk", claimId: "claim-lh-3" },
     },
   ];
   await writeJson(path.join(caseDir, "findings.json"), findings);
@@ -560,28 +578,32 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     "utf8",
   );
 
-  await appendMissingAudit(audit, [
-    { user: "operator", action: "case.create", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, name: manifest.name, clearance: manifest.clearance } },
-    ...built.map((item): AuditAppendInput => ({
+  // 审计链：全部经 AuditService 正常追加（不手写哈希），顺序即业务发生顺序。
+  await audit.append({ user: "operator", action: "case.create", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, name: manifest.name, clearance: manifest.clearance } });
+  for (const item of built) {
+    await audit.append({
       user: "operator",
       action: "material.ingest",
       object: `material:${item.material.id}`,
       caseId: DEMO_CASE_ID,
       detail: { caseId: DEMO_CASE_ID, materialId: item.material.id, filename: item.material.filename, modality: "doc", status: "done", seeded: true },
-    })),
-    { user: "operator", action: "element.extract", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: elements.length, seeded: true } },
-    { user: "operator", action: "contradiction.detect", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: contradictions.length, status: "succeeded", seeded: true } },
-    ...acks.map((ack): AuditAppendInput => ({ user: ack.by, action: "contradiction.acknowledge", object: `contradiction:${ack.contradiction_id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, contradictionId: ack.contradiction_id, status: ack.status, note: ack.note, seeded: true } })),
-    { user: "operator", action: "auto-inquiry.batch", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, total: inquiryItems.length, seeded: true } },
-    ...inquiries.map((inquiry): AuditAppendInput => ({ user: "operator", action: "inquiry.create", object: `inquiry:${inquiry.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, inquiryId: inquiry.id, status: inquiry.status, seeded: true } })),
-    { user: "operator", action: "auto-inquiry.done", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, status: "done", total: inquiryItems.length, completed: inquiryItems.length, candidates: inquiryItems.filter((item) => item.status === "candidate").length, seeded: true } },
-    ...findings.flatMap((finding): AuditAppendInput[] => [
-      { user: "operator", action: "finding.create", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, seeded: true } },
-      { user: "security", action: "finding.review", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, review_status: "approved", seeded: true } },
-    ]),
-    { user: "operator", action: "report.draft", object: `report:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, rendered: true, seeded: true } },
-  ]);
-  await writeSeedMarker(paths, DEMO_CASE_ID, SEED_VERSION);
+    });
+  }
+  await audit.append({ user: "operator", action: "element.extract", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: elements.length, seeded: true } });
+  await audit.append({ user: "operator", action: "contradiction.detect", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: contradictions.length, status: "succeeded", seeded: true } });
+  for (const ack of acks) {
+    await audit.append({ user: ack.by, action: "contradiction.acknowledge", object: `contradiction:${ack.contradiction_id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, contradictionId: ack.contradiction_id, status: ack.status, note: ack.note, seeded: true } });
+  }
+  await audit.append({ user: "operator", action: "auto-inquiry.batch", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, total: inquiryItems.length, seeded: true } });
+  for (const inquiry of inquiries) {
+    await audit.append({ user: "operator", action: "inquiry.create", object: `inquiry:${inquiry.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, inquiryId: inquiry.id, status: inquiry.status, seeded: true } });
+  }
+  await audit.append({ user: "operator", action: "auto-inquiry.done", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, status: "done", total: inquiryItems.length, completed: inquiryItems.length, candidates: inquiryItems.filter((item) => item.status === "candidate").length, seeded: true } });
+  for (const finding of findings) {
+    await audit.append({ user: "operator", action: "finding.create", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, seeded: true } });
+    await audit.append({ user: "security", action: "finding.review", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, review_status: "approved", seeded: true } });
+  }
+  await audit.append({ user: "operator", action: "report.draft", object: `report:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, rendered: true, seeded: true } });
 
-  return { seeded: true, caseId: DEMO_CASE_ID };
+  return { caseId: DEMO_CASE_ID };
 }

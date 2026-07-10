@@ -9,7 +9,7 @@ import { RuntimeAgent, RUNTIME_VERSION } from "mini-agent";
 import type { AppServices } from "./app.js";
 import { createApp } from "./app.js";
 import { acquireDataRootLock } from "./data/data-root-lock.js";
-import { seedDemoWorkspace } from "./demo/seed.js";
+import { dataRootIsEmpty, demoDataRoot, findLegacyArtifacts, seedDemoWorkspace } from "./demo/seed.js";
 
 // Loopback only — never 0.0.0.0. (零外发红线，§7.1)
 const HOST = "127.0.0.1";
@@ -36,7 +36,20 @@ async function reconcileAtStartup(services: AppServices): Promise<string> {
 async function main(): Promise<void> {
   assertCoreWiring();
 
-  const app = createApp();
+  // 演示模式（MINI_AGENT_DEMO=1）数据根固定为 <仓库根>/.workbench-data/demo；
+  // 显式设置 WORKBENCH_DATA_DIR 时以显式值优先并提示。
+  const demoMode = process.env.MINI_AGENT_DEMO === "1";
+  let dataDir: string | undefined;
+  if (demoMode) {
+    if (process.env.WORKBENCH_DATA_DIR) {
+      // eslint-disable-next-line no-console
+      console.log(`MINI_AGENT_DEMO=1：检测到显式 WORKBENCH_DATA_DIR，数据根以显式值优先（${process.env.WORKBENCH_DATA_DIR}），不使用固定演示数据根。`);
+    } else {
+      dataDir = demoDataRoot();
+    }
+  }
+
+  const app = createApp(dataDir ? { dataDir } : {});
   const services = app.locals.services as AppServices;
 
   // 数据根独占锁：同一数据根不得两进程并发写，否则审计哈希链会分叉（§4.1）。
@@ -52,12 +65,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (process.env.MINI_AGENT_DEMO === "1") {
+  // 旧格式零兼容：cases/*/ 下命中 R1/R2 前的状态文件即拒绝启动（不迁移、不降级）。
+  const legacy = await findLegacyArtifacts(services.paths.casesDir);
+  if (legacy.length > 0) {
+    // eslint-disable-next-line no-console
+    console.error(
+      [
+        "数据根包含旧格式痕迹文件，拒绝启动：",
+        ...legacy.map((file) => `  - ${file}`),
+        "请执行 pnpm demo:reset 重建演示数据根；若为自定数据根，请先迁走旧数据再重启。",
+      ].join("\n"),
+    );
+    await lock.release();
+    process.exit(1);
+  }
+
+  // 演示播种只写空数据根：非空（已播种或已有数据）直接沿用现有数据。
+  if (demoMode && (await dataRootIsEmpty(services.paths.root))) {
     const seeded = await seedDemoWorkspace(services.paths, services.audit);
-    if (seeded.seeded) {
-      // eslint-disable-next-line no-console
-      console.log(`演示专题已初始化: ${seeded.caseId}`);
-    }
+    // eslint-disable-next-line no-console
+    console.log(`演示专题已初始化: ${seeded.caseId}`);
   }
 
   // 崩溃清扫先于服务（§4.1）：把上次中断遗留的 `processing` 素材翻 `failed` 可重试。

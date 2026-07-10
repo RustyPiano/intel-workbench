@@ -7,7 +7,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "seed:demo": "MINI_AGENT_DEMO=1 tsx src/demo/seed-cli.ts",
+    "demo:seed": "MINI_AGENT_DEMO=1 tsx src/demo/seed-cli.ts seed",
+    "demo:reset": "MINI_AGENT_DEMO=1 tsx src/demo/seed-cli.ts reset",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.eval.json"

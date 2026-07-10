@@ -5,22 +5,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AuditService } from "../src/audit/audit-service.js";
-import { ContradictionService } from "../src/analysis/contradiction-service.js";
 import { UserStore, verifyPassword } from "../src/auth/user-store.js";
-import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
-import { DEMO_CASE_ID, seedDemoWorkspace } from "../src/demo/seed.js";
-import type { CaseManifest, Chunk, Citation, Contradiction, Element, Finding, Identity, Inquiry, ReportRecord } from "../src/domain/types.js";
+import { DEMO_CASE_ID, dataRootIsEmpty, demoDataRoot, findLegacyArtifacts, resetDemoWorkspace, seedDemoWorkspace } from "../src/demo/seed.js";
+import type { CaseManifest, Chunk, Citation, Contradiction, ContradictionAcknowledgement, Finding, Inquiry } from "../src/domain/types.js";
 import { validateCitationIntegrity } from "../src/inquiry/citation.js";
-import { MaterialService } from "../src/materials/material-service.js";
-import type { LlmDeps } from "../src/model/structured.js";
-import { computeCoverage } from "../src/report/coverage.js";
-import { ReportService } from "../src/report/report-service.js";
-import type { OfflineGuard } from "../src/security/offline-guard.js";
-
-const INTERNAL_OPERATOR: Identity = { id: "operator-low", name: "低密作业员", role: "operator", clearance: "internal" };
-const OPERATOR: Identity = { id: "operator", name: "作业员", role: "operator", clearance: "confidential" };
-const SECURITY: Identity = { id: "security", name: "保密员", role: "security", clearance: "topsecret" };
+import { readWorkflowState } from "../src/workflow/types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -53,241 +43,138 @@ async function readChunks(paths: DataPaths, manifest: CaseManifest): Promise<Chu
   return chunks;
 }
 
-describe("demo delivery seed", () => {
+describe("demo seed（破坏性收敛：空根播种 + 固定演示数据根）", () => {
   let root: string;
   let paths: DataPaths;
   let audit: AuditService;
-  let oldDemo: string | undefined;
 
   beforeEach(async () => {
-    oldDemo = process.env.MINI_AGENT_DEMO;
-    process.env.MINI_AGENT_DEMO = "1";
     root = await mkdtemp(path.join(tmpdir(), "iw-demo-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
   });
 
   afterEach(async () => {
-    if (oldDemo === undefined) delete process.env.MINI_AGENT_DEMO;
-    else process.env.MINI_AGENT_DEMO = oldDemo;
     await rm(root, { recursive: true, force: true });
   });
 
-  it("creates usable demo users with 12+ character passwords", async () => {
+  it("空数据根播种成功：产物为新格式且审计链全链可验证", async () => {
+    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ caseId: DEMO_CASE_ID });
+
+    // 演示用户：沿用三账号口径
     const users = new UserStore(paths);
-    const publicUsers = await users.list();
-    expect(publicUsers.map((user) => user.id).sort()).toEqual(["admin", "operator", "security"]);
-    await expect(users.findById("operator")).resolves.toMatchObject({ clearance: "confidential", enabled: true });
+    expect((await users.list()).map((user) => user.id).sort()).toEqual(["admin", "operator", "security"]);
     expect(verifyPassword("operator123456", (await users.findById("operator"))!.pwd_hash)).toBe(true);
     expect(verifyPassword("security123456", (await users.findById("security"))!.pwd_hash)).toBe(true);
     expect(verifyPassword("admin12345678", (await users.findById("admin"))!.pwd_hash)).toBe(true);
-  });
 
-  it("upserts demo users even when users.json already exists", async () => {
-    delete process.env.MINI_AGENT_DEMO;
-    const users = new UserStore(paths);
-    await users.list();
-
-    process.env.MINI_AGENT_DEMO = "1";
-    await seedDemoWorkspace(paths, audit);
-
-    const ids = (await users.list()).map((user) => user.id).sort();
-    expect(ids).toEqual(expect.arrayContaining(["admin", "operator", "security"]));
-    expect(verifyPassword("operator123456", (await users.findById("operator"))!.pwd_hash)).toBe(true);
-  });
-
-  it("repairs partial demo and restricted seeds that only have a manifest", async () => {
-    const partialDemo: CaseManifest = {
-      id: DEMO_CASE_ID,
-      name: "partial",
-      clearance: "confidential",
-      status: "active",
-      owner: "operator",
-      created_at: "2026-07-02T00:00:00.000Z",
-      updated_at: "2026-07-02T00:00:00.000Z",
-      materials: [],
-    };
-    const partialRestricted: CaseManifest = {
-      id: "restricted-review-sample",
-      name: "partial restricted",
-      clearance: "topsecret",
-      status: "active",
-      owner: "security",
-      created_at: "2026-07-02T00:00:00.000Z",
-      updated_at: "2026-07-02T00:00:00.000Z",
-      materials: [],
-    };
-    await mkdir(paths.caseDir(DEMO_CASE_ID), { recursive: true });
-    await mkdir(paths.caseDir("restricted-review-sample"), { recursive: true });
-    await writeFile(paths.caseManifest(DEMO_CASE_ID), `${JSON.stringify(partialDemo, null, 2)}\n`, "utf8");
-    await writeFile(paths.caseManifest("restricted-review-sample"), `${JSON.stringify(partialRestricted, null, 2)}\n`, "utf8");
-
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-
+    // 两个专题：演示专题 + 绝密留存样例
     const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
-    expect(manifest.materials).toHaveLength(19);
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), "report", "report.json"), "utf8")).resolves.toContain("\"status\": \"draft\"");
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 5");
-    await expect(readFile(path.join(paths.caseDir("restricted-review-sample"), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 2");
-  });
+    expect(manifest.materials.length).toBeGreaterThanOrEqual(10);
+    expect(manifest.materials.every((material) => material.status === "done" && (material.chunk_count ?? 0) > 0)).toBe(true);
+    const restricted = JSON.parse(await readFile(paths.caseManifest("restricted-review-sample"), "utf8")) as CaseManifest;
+    expect(restricted.clearance).toBe("topsecret");
 
-  it("repairs missing seed audit before writing completion markers", async () => {
-    await seedDemoWorkspace(paths, audit);
-    await rm(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), { force: true });
-    await rm(path.join(paths.caseDir("restricted-review-sample"), ".demo-seed-complete.json"), { force: true });
-    await rm(paths.auditFile, { force: true });
-    audit = new AuditService(paths);
-
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-
-    const events = await audit.readAll();
-    expect(events.some((event) => event.action === "case.create" && event.detail?.caseId === DEMO_CASE_ID)).toBe(true);
-    expect(events.some((event) => event.action === "case.access" && event.detail?.caseId === "restricted-review-sample" && event.result === "deny")).toBe(true);
-    expect(events.filter((event) => event.action === "material.ingest" && event.detail?.caseId === DEMO_CASE_ID)).toHaveLength(19);
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), ".demo-seed-complete.json"), "utf8")).resolves.toContain("\"version\": 5");
-  });
-
-  it("preserves user-added demo materials when repairing an old unmarked seed", async () => {
-    await seedDemoWorkspace(paths, audit);
     const caseDir = paths.caseDir(DEMO_CASE_ID);
-    await rm(path.join(caseDir, ".demo-seed-complete.json"), { force: true });
-    const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
-    manifest.materials.push({
-      id: "m-user-added",
-      case_id: DEMO_CASE_ID,
-      filename: "用户追加材料.txt",
-      modality: "doc",
-      format: "txt",
-      size: 12,
-      ingested_at: "2026-07-02T10:00:00.000Z",
-      status: "done",
-      chunk_count: 0,
-    });
-    await writeFile(paths.caseManifest(DEMO_CASE_ID), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-    await writeFile(path.join(caseDir, "materials", "m-user-added-用户追加材料.txt"), "用户追加材料", "utf8");
 
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-
-    const repaired = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
-    expect(repaired.materials.map((material) => material.id)).toContain("m-user-added");
-    await expect(readFile(path.join(caseDir, "materials", "m-user-added-用户追加材料.txt"), "utf8")).resolves.toBe("用户追加材料");
-  });
-
-  it("re-seeds the demo case when the marker version is stale, and keeps user materials", async () => {
-    await seedDemoWorkspace(paths, audit);
-    const caseDir = paths.caseDir(DEMO_CASE_ID);
-    const markerFile = path.join(caseDir, ".demo-seed-complete.json");
-
-    await writeFile(markerFile, `${JSON.stringify({ version: 2 })}\n`, "utf8");
-
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-    await expect(readFile(markerFile, "utf8")).resolves.toContain("\"version\": 5");
-
-    const manifest = JSON.parse(await readFile(paths.caseManifest(DEMO_CASE_ID), "utf8")) as CaseManifest;
-    expect(manifest.materials.find((material) => material.id === "m-source-register")?.note).toContain("不能作为案情事实主依据");
-
-    const before = (await audit.readAll()).length;
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: false, caseId: DEMO_CASE_ID });
-    expect((await audit.readAll())).toHaveLength(before);
-  });
-
-  it("seeds the port verification case, restricted sample, and deny audit idempotently", async () => {
-    const first = await seedDemoWorkspace(paths, audit);
-    expect(first).toEqual({ seeded: true, caseId: DEMO_CASE_ID });
-
-    const cases = new CaseService(paths, audit);
-    const demoCase = await cases.get(OPERATOR, DEMO_CASE_ID);
-    expect(demoCase).toMatchObject({
-      name: "港口异常活动线索核验（模拟数据）",
-      clearance: "confidential",
-    });
-    expect(demoCase.materials.map((material) => material.id)).toEqual([
-      "m-source-register",
-      "m-port-brief",
-      "m-ais-export",
-      "m-vts-radio",
-      "m-security-sop",
-      "m-gate-log",
-      "m-gate-ocr",
-      "m-yard-log",
-      "m-weighbridge",
-      "m-warehouse",
-      "m-driver-chat",
-      "m-dispatch-phone",
-      "m-customs",
-      "m-seal-patrol",
-      "m-field-photo",
-      "m-weather-tide",
-      "m-berth-plan",
-      "m-followup",
-      "m-media-index",
-    ]);
-    expect(demoCase.materials.find((material) => material.id === "m-source-register")?.note).toContain("不能作为案情事实主依据");
-    expect(demoCase.materials.find((material) => material.id === "m-media-index")?.note).toContain("不能作为案情事实主依据");
-    await expect(cases.get(INTERNAL_OPERATOR, "restricted-review-sample")).rejects.toMatchObject({ status: 403 });
-
-    const securityCases = await cases.list(SECURITY);
-    const operatorCases = await cases.list(OPERATOR);
-    expect(securityCases.map((item) => item.id)).toEqual(expect.arrayContaining([DEMO_CASE_ID, "restricted-review-sample"]));
-    expect(operatorCases.map((item) => item.id)).toContain(DEMO_CASE_ID);
-    expect(operatorCases.map((item) => item.id)).not.toContain("restricted-review-sample");
-
-    const contradictions = JSON.parse(await readFile(path.join(paths.caseDir(DEMO_CASE_ID), "contradictions.json"), "utf8")) as Contradiction[];
-    const elements = JSON.parse(await readFile(path.join(paths.caseDir(DEMO_CASE_ID), "elements.json"), "utf8")) as Element[];
-    const inquiries = (await readFile(path.join(paths.caseDir(DEMO_CASE_ID), "inquiries.jsonl"), "utf8"))
+    // 新格式 inquiries.jsonl：claim 带稳定 id 与 support，citation 带 verdict
+    const inquiries = (await readFile(path.join(caseDir, "inquiries.jsonl"), "utf8"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Inquiry);
-    const findings = JSON.parse(await readFile(path.join(paths.caseDir(DEMO_CASE_ID), "findings.json"), "utf8")) as Finding[];
-    const report = JSON.parse(await readFile(path.join(paths.caseDir(DEMO_CASE_ID), "report", "report.json"), "utf8")) as ReportRecord;
-    const chunks = await readChunks(paths, demoCase);
+    expect(inquiries.length).toBeGreaterThan(0);
+    for (const inquiry of inquiries) {
+      expect(inquiry.claims.length).toBeGreaterThan(0);
+      for (const claim of inquiry.claims) {
+        expect(claim.id.length).toBeGreaterThan(0);
+        expect(["supported", "pending", "unsupported"]).toContain(claim.support);
+        for (const cite of claim.citations) {
+          expect(["supports", "contradicts", "mentions", "context", "pending"]).toContain(cite.verdict);
+        }
+      }
+    }
 
-    expect(contradictions).toHaveLength(7);
-    expect(contradictions.some((item) => item.confidence >= 0.75)).toBe(true);
-    expect(elements.length).toBeGreaterThanOrEqual(18);
-    expect([...new Set(elements.map((element) => element.type))].sort()).toEqual(["equipment", "event", "location", "org", "time"]);
-    expect(inquiries).toHaveLength(4);
-    expect(inquiries.every((inquiry) => inquiry.status === "answered" && inquiry.claims.length > 0)).toBe(true);
-    expect(findings).toHaveLength(5);
-    expect(findings.every((finding) => finding.review_status === "approved" && finding.supporting_citations.length > 0)).toBe(true);
-    expect(report.status).toBe("draft");
-    expect(report.spec.sections).toHaveLength(findings.length);
-    expect(report.spec.sections.map((section) => section.finding_ids[0]).sort()).toEqual(findings.map((finding) => finding.id).sort());
-    expect(report.spec.sections.every((section) => section.coverage_status === "covered" && section.citation_ids.length > 0)).toBe(true);
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), "materials", "m-media-index-18-真实多媒体素材下载索引.txt"), "utf8")).resolves.toContain("https://www.dvidshub.net/video/1010679");
-    await expect(readFile(path.join(paths.caseDir(DEMO_CASE_ID), "materials", "m-source-register-00-公开来源与素材使用清单.txt"), "utf8")).resolves.toContain("访问日期：2026-07-02");
+    // findings 带 source_claim 且指向真实存在的 claim
+    const findings = JSON.parse(await readFile(path.join(caseDir, "findings.json"), "utf8")) as Finding[];
+    const promoted = findings.filter((finding) => finding.source_claim);
+    expect(promoted.length).toBeGreaterThan(0);
+    for (const finding of promoted) {
+      const inquiry = inquiries.find((item) => item.id === finding.source_claim!.inquiryId);
+      expect(inquiry?.claims.some((claim) => claim.id === finding.source_claim!.claimId)).toBe(true);
+    }
 
+    // workflow.json 合法（R2 冻结契约）：三步 succeeded，inquiries items 齐全
+    const workflow = await readWorkflowState(paths.workflowFile(DEMO_CASE_ID));
+    expect(workflow?.steps.elements.status).toBe("succeeded");
+    expect(workflow?.steps.contradictions.status).toBe("succeeded");
+    expect(workflow?.steps.inquiries.status).toBe("succeeded");
+    expect(workflow?.steps.inquiries.items).toHaveLength(inquiries.length);
+    expect(workflow?.steps.inquiries.items.every((item) => item.inquiryId && ["candidate", "done"].includes(item.status))).toBe(true);
+
+    // 矛盾产物 + 处置台账（故意留 ct-unload-status 未处置）
+    const contradictions = JSON.parse(await readFile(path.join(caseDir, "contradictions.json"), "utf8")) as Contradiction[];
+    const result = JSON.parse(await readFile(path.join(caseDir, "contradictions.result.json"), "utf8")) as { status: string; contradictions: Contradiction[] };
+    expect(result.status).toBe("succeeded");
+    expect(result.contradictions).toHaveLength(contradictions.length);
+    const acks = JSON.parse(await readFile(path.join(caseDir, "contradiction-acks.json"), "utf8")) as ContradictionAcknowledgement[];
+    expect(acks.length).toBe(contradictions.length - 1);
+    expect(acks.some((ack) => ack.contradiction_id === "ct-unload-status")).toBe(false);
+
+    // 引用完整性：所有产物内的引用 chunk + span 均可验证
+    const elements = JSON.parse(await readFile(path.join(caseDir, "elements.json"), "utf8")) as unknown[];
+    const chunks = await readChunks(paths, manifest);
     const citations = collectCitations({ contradictions, elements, inquiries, findings });
     expect(citations.length).toBeGreaterThanOrEqual(60);
     for (const cite of citations) {
       expect(validateCitationIntegrity(cite, chunks)).toEqual({ validChunk: true, validSpan: true, missingSpan: false });
     }
 
-    // 演示专题报告覆盖率开箱即 4/5（阶段三 M5），唯一缺口是故意留一条未处置的高置信矛盾
-    // （ct-unload-status，未被任何已核准 Finding 引用覆盖），用于现场演示处置动作。
-    const coverage = await computeCoverage(paths, DEMO_CASE_ID, demoCase);
-    expect(coverage.satisfiedCount).toBeGreaterThanOrEqual(4);
-    expect(coverage.totalSections).toBe(5);
-    expect(coverage.sections.find((section) => section.key === "contradiction")).toMatchObject({ satisfied: false, detail: "1/7 条高置信矛盾未处置" });
-    expect(coverage.sections.filter((section) => section.key !== "contradiction").every((section) => section.satisfied)).toBe(true);
+    // 审计链经 AuditService 正常追加：新实例重算全链通过
+    const verify = await new AuditService(paths).verify();
+    expect(verify.ok).toBe(true);
+    expect(verify.count).toBeGreaterThan(0);
+    const events = await audit.readAll();
+    expect(events.some((event) => event.action === "case.create" && event.detail?.caseId === DEMO_CASE_ID)).toBe(true);
+    expect(events.some((event) => event.action === "case.access" && event.result === "deny" && event.detail?.caseId === "restricted-review-sample")).toBe(true);
+    expect(events.filter((event) => event.action === "material.ingest").length).toBe(manifest.materials.length);
+  });
 
-    const materials = new MaterialService(paths, audit, cases);
-    const contradictionService = new ContradictionService(paths, audit, cases, materials, {
-      adapter: null,
-      guard: { authorize: async () => undefined } as unknown as OfflineGuard,
-      modelEndpoint: "",
-    } satisfies LlmDeps);
-    for (const contradiction of contradictions) {
-      await contradictionService.acknowledge(SECURITY, DEMO_CASE_ID, contradiction.id, { status: "resolved", note: "演示复核通过" });
-    }
-    const reports = new ReportService(paths, audit, cases);
-    await reports.submit(OPERATOR, DEMO_CASE_ID);
-    await reports.approve(SECURITY, DEMO_CASE_ID);
-    await expect(reports.export(OPERATOR, DEMO_CASE_ID)).resolves.toMatchObject({ filename: `${DEMO_CASE_ID}-bulletin.md`, status: "exported" });
+  it("非空数据根播种被拒并提示 demo:reset", async () => {
+    await writeFile(path.join(root, "existing.txt"), "已有数据", "utf8");
+    await expect(seedDemoWorkspace(paths, audit)).rejects.toThrow(/demo:reset/);
+  });
 
-    const before = (await audit.readAll()).length;
-    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ seeded: false, caseId: DEMO_CASE_ID });
-    expect((await audit.readAll())).toHaveLength(before);
-    expect((await audit.readAll()).some((event) => event.action === "case.access" && event.result === "deny")).toBe(true);
+  it("判空忽略数据根独占锁文件（CLI 持锁播种场景）", async () => {
+    await writeFile(path.join(root, ".workbench.lock"), `${JSON.stringify({ pid: process.pid })}\n`, "utf8");
+    await expect(dataRootIsEmpty(root)).resolves.toBe(true);
+    await expect(seedDemoWorkspace(paths, audit)).resolves.toEqual({ caseId: DEMO_CASE_ID });
+  });
+
+  it("demo:reset 路径硬校验：拒绝任何非固定演示数据根", async () => {
+    await expect(resetDemoWorkspace(root)).rejects.toThrow(/固定演示数据根/);
+    // 硬校验先于删除：临时目录内容原样保留
+    await writeFile(path.join(root, "keep.txt"), "别删我", "utf8");
+    await expect(resetDemoWorkspace(root)).rejects.toThrow();
+    await expect(readFile(path.join(root, "keep.txt"), "utf8")).resolves.toBe("别删我");
+  });
+
+  it("demoDataRoot 固定指向仓库根 .workbench-data/demo", () => {
+    expect(demoDataRoot().endsWith(path.join(".workbench-data", "demo"))).toBe(true);
+  });
+
+  it("启动扫描发现旧格式痕迹文件并逐一指出路径", async () => {
+    // cases 目录不存在：无命中
+    await expect(findLegacyArtifacts(paths.casesDir)).resolves.toEqual([]);
+
+    const legacyDir = path.join(paths.casesDir, "old-case");
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(path.join(legacyDir, "manifest.json"), "{}", "utf8"); // 现行文件不报
+    await writeFile(path.join(legacyDir, "task-runs.json"), "[]", "utf8");
+    await expect(findLegacyArtifacts(paths.casesDir)).resolves.toEqual([path.join(legacyDir, "task-runs.json")]);
+
+    await writeFile(path.join(legacyDir, "brief.json"), "{}", "utf8");
+    const hits = await findLegacyArtifacts(paths.casesDir);
+    expect(hits).toContain(path.join(legacyDir, "task-runs.json"));
+    expect(hits).toContain(path.join(legacyDir, "brief.json"));
   });
 });

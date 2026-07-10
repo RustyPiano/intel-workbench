@@ -185,7 +185,7 @@ export class AuditService {
     if (!result.ok) {
       throw new Error(
         `审计哈希链校验未通过：${this.paths.auditFile} 第 ${result.brokenAt} 行 —— ${result.reason}。` +
-          `请人工修复该行后重启，或清理/重置数据根（删除 audit/audit.jsonl 后重新播种）。`,
+          `请人工修复该行后重启；演示数据根可执行 pnpm demo:reset 从零重建，自定数据根请先迁走数据再清理。`,
       );
     }
   }

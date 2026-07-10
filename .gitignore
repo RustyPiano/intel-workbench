@@ -13,6 +13,8 @@ packages/web/node_modules/.vite/
 
 # runtime data (落盘产物，不入库)：专题、审计链、用户配置、媒体任务
 # 注意：用根锚定（前导 /），避免误伤同名的源码目录（如 packages/server/src/audit）。
+# 固定演示数据根（demo:seed / demo:reset / MINI_AGENT_DEMO=1）
+/.workbench-data/
 /cases/
 /audit/
 /config/

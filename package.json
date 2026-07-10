@@ -23,6 +23,8 @@
     "eval:gen": "tsx packages/server/eval/gen-corpus.ts",
     "eval:contradiction": "tsx packages/server/eval/run-contradiction-eval.ts",
     "eval:agent": "tsx packages/server/eval/run-agent-eval.ts",
+    "demo:seed": "pnpm --filter @intel-workbench/server demo:seed",
+    "demo:reset": "pnpm --filter @intel-workbench/server demo:reset",
     "dev:server": "pnpm --filter @intel-workbench/server dev",
     "dev:web": "pnpm --filter @intel-workbench/web dev",
     "build:server": "pnpm --filter @intel-workbench/server build",

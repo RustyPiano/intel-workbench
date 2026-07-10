@@ -4,6 +4,7 @@ import type { AdminService } from "../admin/admin-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { AuthService } from "../auth/auth-service.js";
 import type { BriefService } from "../brief/brief-service.js";
+import type { StatusService } from "../brief/status-service.js";
 import type { ContradictionService } from "../analysis/contradiction-service.js";
 import type { ElementGraphService } from "../analysis/element-graph-service.js";
 import type { CaseService } from "../cases/case-service.js";
@@ -21,6 +22,7 @@ import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createAuthRouter } from "./auth.js";
 import { createBriefRouter } from "./briefs.js";
+import { createStatusRouter } from "./status.js";
 import { createCasesRouter } from "./cases.js";
 import { createContradictionsRouter } from "./contradictions.js";
 import { createElementGraphRouter } from "./element-graph.js";
@@ -64,6 +66,7 @@ export interface ApiServices {
   admin: AdminService;
   suggestions: SuggestionService;
   briefs: BriefService;
+  status: StatusService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -102,6 +105,7 @@ export function createApiRouter(services: ApiServices): Router {
         "POST /api/cases/:id/jobs/:kind/cancel",
         "GET /api/cases/:id/element-graph",
         "GET /api/cases/:id/brief",
+        "GET /api/cases/:id/status",
         "GET /api/cases/:id/suggestions/questions",
         "GET /api/cases/:id/suggestions/questions-llm",
         "GET /api/cases/:id/suggestions/findings",
@@ -134,6 +138,7 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/cases", createContradictionsRouter(services.contradictions));
   router.use("/cases", createSuggestionsRouter(services.suggestions));
   router.use("/cases", createBriefRouter(services.briefs));
+  router.use("/cases", createStatusRouter(services.status));
   router.use("/cases", createReportsRouter(services.reports));
   router.use("/cases", createReviewRouter(services.review));
   router.use("/materials", createMaterialsRouter(services.materials));

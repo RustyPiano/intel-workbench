@@ -11,6 +11,7 @@ import { AuditService } from "./audit/audit-service.js";
 import { AuthService } from "./auth/auth-service.js";
 import { UserStore } from "./auth/user-store.js";
 import { BriefService } from "./brief/brief-service.js";
+import { StatusService } from "./brief/status-service.js";
 import { CaseService } from "./cases/case-service.js";
 import { ContradictionService } from "./analysis/contradiction-service.js";
 import { ElementGraphService } from "./analysis/element-graph-service.js";
@@ -211,8 +212,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   materials.setAutopilotHook((actor, caseId) => {
     void workflow.onMaterialsSettled(actor, caseId).catch(() => undefined);
   });
-  // 研判简报聚合（阶段三 M2 / D1·D5）：只读既有产物 + LLM 概览段（逐句绑定引用），brief.json 缓存。
-  const briefs = new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, suggestions, llm);
+  // 研判简报（破坏性收敛 R2 · 批次 D）：只读既有产物的确定性投影，GET 不写盘/不落审计/不调模型。
+  const briefs = new BriefService(paths, cases, elements, contradictions, findings);
+  // 专题聚合状态（批次 D）：GET /cases/:id/status，三态呈现素材/workflow/矛盾/结论/报告/审计。
+  const status = new StatusService(paths, cases, audit);
 
   const services: AppServices = {
     paths,
@@ -264,6 +267,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     admin,
     suggestions,
     briefs,
+    status,
   }));
 
   // Production static hosting of the web build. In dev this is skipped.

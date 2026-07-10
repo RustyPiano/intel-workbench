@@ -49,7 +49,7 @@ describe("报告覆盖率仪表（阶段三 M4）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-cov-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "覆盖度专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "目标甲于码头出现。随后驶离港口。" }]);

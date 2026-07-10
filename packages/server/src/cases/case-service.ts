@@ -46,8 +46,6 @@ export class CaseService {
   constructor(
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
-    /** 开发模式：禁止创建涉密专题（§7.5）。 */
-    private readonly devMode: boolean,
   ) {}
 
   async create(actor: Identity, input: CreateCaseInput): Promise<CaseManifest> {
@@ -57,18 +55,6 @@ export class CaseService {
     if (clearanceRank(input.clearance) > clearanceRank(actor.clearance)) {
       throw new AppError(403, "不得创建高于自身密级的专题");
     }
-    // §7.5 硬约束：开发模式下禁止创建涉密（高于"内部"）专题，留审计。
-    if (this.devMode && clearanceRank(input.clearance) > clearanceRank("internal")) {
-      await this.audit.append({
-        user: actor.id,
-        action: "case.create",
-        object: `case:${name}`,
-        result: "deny",
-        detail: { reason: "开发模式禁止涉密专题", clearance: input.clearance },
-      });
-      throw new AppError(403, "开发模式下禁止创建涉密专题（密级须为“内部”）");
-    }
-
     const id = await this.allocateId(name);
     const now = new Date().toISOString();
     const description = input.description?.trim();

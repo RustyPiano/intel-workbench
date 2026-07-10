@@ -64,7 +64,7 @@ describe("Contextual Retrieval", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-cr-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "语境检索专题", clearance: "internal" })).id;
   });
 

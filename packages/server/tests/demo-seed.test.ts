@@ -195,7 +195,7 @@ describe("demo delivery seed", () => {
     const first = await seedDemoWorkspace(paths, audit);
     expect(first).toEqual({ seeded: true, caseId: DEMO_CASE_ID });
 
-    const cases = new CaseService(paths, audit, false);
+    const cases = new CaseService(paths, audit);
     const demoCase = await cases.get(OPERATOR, DEMO_CASE_ID);
     expect(demoCase).toMatchObject({
       name: "港口异常活动线索核验（模拟数据）",

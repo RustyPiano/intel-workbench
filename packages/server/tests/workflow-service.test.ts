@@ -59,7 +59,7 @@ describe("WorkflowService（唯一执行状态 workflow.json）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-workflow-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     registry = new JobRegistry();
     caseId = (await cases.create(OPERATOR, { name: "工作流专题", clearance: "internal" })).id;
   });

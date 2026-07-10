@@ -180,7 +180,7 @@ async function main(): Promise<void> {
   const paths = resolveDataPaths(auditRoot);
   const audit = new AuditService(paths);
   const guard = new OfflineGuard([textLlm.host], audit);
-  const cases = new CaseService(paths, audit, false);
+  const cases = new CaseService(paths, audit);
   const materials = new MaterialService(paths, audit, cases);
   const llm: LlmDeps = { adapter: textLlm.adapter, guard, modelEndpoint: textLlm.endpoint };
   const service = new ContradictionService(paths, audit, cases, materials, llm);

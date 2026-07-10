@@ -48,7 +48,7 @@ describe("API 接线（鉴权 + M1）", () => {
 
   beforeAll(async () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-api-"));
-    const app = createApp({ dataDir: root, devMode: true });
+    const app = createApp({ dataDir: root });
     services = app.locals.services as AppServices;
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -67,10 +67,10 @@ describe("API 接线（鉴权 + M1）", () => {
   it("health 公开可用（免登录）", async () => {
     const res = await fetch(`${base}/api/health`);
     const body = await res.json();
-    expect(body).toMatchObject({ ok: true, devMode: true });
+    expect(body).toMatchObject({ ok: true });
     expect(typeof body.modelConfigured).toBe("boolean");
     expect(body.networkMode).toBe("offline");
-    expect(Object.keys(body).sort()).toEqual(["devMode", "modelConfigured", "networkMode", "ok"].sort());
+    expect(Object.keys(body).sort()).toEqual(["modelConfigured", "networkMode", "ok"].sort());
   });
 
   it("未登录访问受保护路由 → 401", async () => {
@@ -239,7 +239,7 @@ describe("流式问答 SSE 路由（B-1 回归）", () => {
     savedMode = process.env.MINI_AGENT_INQUIRY_MODE;
     process.env.MINI_AGENT_INQUIRY_MODE = "agent";
     root = await mkdtemp(path.join(tmpdir(), "iw-sse-"));
-    const app = createApp({ dataDir: root, devMode: true, modelAdapter: new StreamingInquiryAdapter("valid") });
+    const app = createApp({ dataDir: root, modelAdapter: new StreamingInquiryAdapter("valid") });
     server = await new Promise<Server>((resolve) => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });

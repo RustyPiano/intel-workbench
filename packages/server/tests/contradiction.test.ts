@@ -83,7 +83,7 @@ async function createFixture(): Promise<Fixture> {
   const root = await mkdtemp(path.join(tmpdir(), "iw-contradiction-"));
   const paths = resolveDataPaths(root);
   const audit = new AuditService(paths);
-  const cases = new CaseService(paths, audit, false);
+  const cases = new CaseService(paths, audit);
   const materials = new MaterialService(paths, audit, cases);
   return { root, paths, audit, cases, materials };
 }

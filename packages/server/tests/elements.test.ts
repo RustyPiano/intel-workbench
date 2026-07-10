@@ -53,7 +53,7 @@ describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-el-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "要素专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "代号 Siberia_01 在莫斯科活动。" }]);

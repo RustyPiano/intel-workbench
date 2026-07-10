@@ -53,7 +53,7 @@ describe("query rewrite for inquiry retrieval", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-qrewrite-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "改写专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [

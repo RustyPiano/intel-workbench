@@ -24,7 +24,7 @@ describe("ReviewService 人工校对（§9.2）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-review-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     review = new ReviewService(cases, audit);
     caseId = (await cases.create(OPERATOR, { name: "校对专题", clearance: "internal" })).id;
   });

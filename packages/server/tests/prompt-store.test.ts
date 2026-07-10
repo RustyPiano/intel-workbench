@@ -255,7 +255,7 @@ describe("PromptStore 接入问答与要素服务", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-prompts-svc-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     store = new PromptStore(paths, audit);
   });

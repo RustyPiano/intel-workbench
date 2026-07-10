@@ -412,7 +412,6 @@ async function unwrap<T>(res: Response, key: string): Promise<T> {
 
 export interface ApiRuntimeStatus {
   ok: true;
-  devMode: boolean;
   networkMode: "offline" | "restricted-cloud";
   modelConfigured: boolean;
 }

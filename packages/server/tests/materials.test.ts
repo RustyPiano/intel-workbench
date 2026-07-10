@@ -35,7 +35,7 @@ describe("MaterialService 汇入与加工（M2）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-mat-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "素材专题", clearance: "internal" })).id;
   });
@@ -181,7 +181,7 @@ describe("MaterialService 汇入时媒体自动加工（B1）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-b1-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "B1 媒体自动加工", clearance: "internal" })).id;
   });
 
@@ -301,7 +301,7 @@ describe("MaterialService 音频加工（二期 P2.3a）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-au-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "音频专题", clearance: "internal" })).id;
   });
 
@@ -437,7 +437,7 @@ describe("MaterialService 视频/图像加工（二期 P2.3b）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-vi-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "视频专题", clearance: "internal" })).id;
   });
 
@@ -570,7 +570,7 @@ describe("MaterialService 稠密索引（二期 P2.4 §5.3）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-idx-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "索引专题", clearance: "internal" })).id;
   });
 

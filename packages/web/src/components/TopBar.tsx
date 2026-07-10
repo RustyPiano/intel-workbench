@@ -89,12 +89,6 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
             >
               {runtime.modelConfigured ? "模型已配置" : "模型未配置"}
             </span>
-            <span
-              className={`badge ${runtime.devMode ? "badge--devmode" : "badge--offline"}`}
-              title={runtime.devMode ? "开发模式：禁止用于真实涉密专题" : "服务端未启用开发模式"}
-            >
-              {runtime.devMode ? "开发模式" : "正式模式"}
-            </span>
           </>
         ) : (
           <span className="badge badge--devmode" title={runtimeUnavailable ? "无法读取服务端运行状态" : "正在读取服务端运行状态"}>

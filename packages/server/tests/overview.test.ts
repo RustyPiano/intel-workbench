@@ -25,7 +25,7 @@ describe("OverviewService 跨专题只读聚合（D2）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-overview-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     overview = new OverviewService(paths, cases);
   });

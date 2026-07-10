@@ -276,7 +276,7 @@ async function main(): Promise<void> {
   await copyIfExists(path.join(sourceCaseDir, "index"), path.join(destCaseDir, "index"));
 
   const audit = new AuditService(paths);
-  const cases = new CaseService(paths, audit, false);
+  const cases = new CaseService(paths, audit);
   const adapter = createModelAdapter({ provider: model.provider, model: model.model, baseURL: model.baseURL, apiKey: model.apiKey });
   const slotConfigs = readSlotConfigs();
   const guard = new OfflineGuard([model.host, ...slotAllowlistHosts(slotConfigs)], audit);

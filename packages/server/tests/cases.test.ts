@@ -18,8 +18,8 @@ describe("CaseService（M1 数据底座）", () => {
   let paths: DataPaths;
   let audit: AuditService;
 
-  function service(devMode: boolean): CaseService {
-    return new CaseService(paths, audit, devMode);
+  function service(): CaseService {
+    return new CaseService(paths, audit);
   }
 
   beforeEach(async () => {
@@ -33,7 +33,7 @@ describe("CaseService（M1 数据底座）", () => {
   });
 
   it("create 落盘 manifest 并 append 审计", async () => {
-    const cases = service(false);
+    const cases = service();
     const m = await cases.create(OPERATOR, { name: "测试专题", clearance: "internal" });
     expect(m.owner).toBe("op");
     expect(m.status).toBe("active");
@@ -45,28 +45,19 @@ describe("CaseService（M1 数据底座）", () => {
     expect((await audit.reconcile(await cases.listIds())).ok).toBe(true);
   });
 
-  it("开发模式禁止创建涉密专题，并留 deny 审计（§7.5）", async () => {
-    const cases = service(true);
-    await expect(cases.create(ADMIN, { name: "涉密", clearance: "secret" })).rejects.toMatchObject({
-      status: 403,
-    });
-    const events = await audit.readAll();
-    expect(events.at(-1)).toMatchObject({ action: "case.create", result: "deny" });
-  });
-
-  it("非开发模式允许涉密（在自身密级内）", async () => {
-    const cases = service(false);
+  it("允许创建自身密级内的涉密专题", async () => {
+    const cases = service();
     const m = await cases.create(ADMIN, { name: "机密专题", clearance: "confidential" });
     expect(m.clearance).toBe("confidential");
   });
 
   it("不得创建高于自身密级的专题", async () => {
-    const cases = service(false);
+    const cases = service();
     await expect(cases.create(OPERATOR, { name: "越权", clearance: "topsecret" })).rejects.toBeInstanceOf(AppError);
   });
 
   it("list 按密级过滤、按更新时间倒序", async () => {
-    const cases = service(false);
+    const cases = service();
     await cases.create(ADMIN, { name: "高密", clearance: "topsecret" });
     await cases.create(OPERATOR, { name: "低密", clearance: "internal" });
 
@@ -78,7 +69,7 @@ describe("CaseService（M1 数据底座）", () => {
   });
 
   it("update 重命名并记审计；非所有者非管理员被拒", async () => {
-    const cases = service(false);
+    const cases = service();
     const m = await cases.create(OPERATOR, { name: "原名", clearance: "internal" });
     const renamed = await cases.update(OPERATOR, m.id, { name: "新名" });
     expect(renamed.name).toBe("新名");
@@ -88,12 +79,12 @@ describe("CaseService（M1 数据底座）", () => {
   });
 
   it("get 不存在的专题 → 404", async () => {
-    const cases = service(false);
+    const cases = service();
     await expect(cases.get(OPERATOR, "nope")).rejects.toMatchObject({ status: 404 });
   });
 
   it("拒绝路径穿越的 caseId（红线，不落到文件系统外）", async () => {
-    const cases = service(false);
+    const cases = service();
     for (const evil of ["../../etc", "..", "a/b", "x\\y"]) {
       await expect(cases.get(OPERATOR, evil)).rejects.toMatchObject({ status: 400 });
     }
@@ -115,7 +106,7 @@ describe("CaseService 并发与崩溃恢复（二期 P2.3a 阻塞项）", () => 
     root = await mkdtemp(path.join(tmpdir(), "iw-cc-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "并发专题", clearance: "internal" })).id;
   });
 

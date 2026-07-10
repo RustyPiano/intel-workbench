@@ -48,7 +48,7 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-inq-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "问答专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [
@@ -203,7 +203,7 @@ describe("InquiryService 混合检索（二期 P2.4 §5.2）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-hyb-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases, EMBED_SLOTS); // 入库写 .vec
     caseId = (await cases.create(OPERATOR, { name: "混检专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "南海周边发现可疑舰船活动，疑似军事演习。" }]);
@@ -264,7 +264,7 @@ describe("InquiryService 重排门控（二期 P2.5 §5.2）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-rerank-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases, EMBED_SLOTS); // 入库写 .vec
     caseId = (await cases.create(OPERATOR, { name: "重排专题", clearance: "internal" })).id;
     // 10 份均含查询词"舰船"的素材 → BM25 候选 ≥ 默认阈值 8，触发重排门控。

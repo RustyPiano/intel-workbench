@@ -64,7 +64,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-auto-inq-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    const cases = new CaseService(paths, audit, false);
+    const cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "自动研判专题", clearance: "internal" })).id;
   });
 

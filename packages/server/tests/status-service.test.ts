@@ -43,7 +43,7 @@ describe("StatusService（专题聚合状态端点）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-status-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     status = new StatusService(paths, cases, audit);
 

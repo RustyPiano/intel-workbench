@@ -188,7 +188,7 @@ describe("MaterialService PDF/Office 文档解析（liteparse 注入）", () => 
     root = await mkdtemp(path.join(tmpdir(), "iw-doc-parse-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     caseId = (await cases.create(OPERATOR, { name: "文档解析专题", clearance: "internal" })).id;
   });
 

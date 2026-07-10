@@ -10,7 +10,6 @@ describe("runtime status and batch upload API", () => {
   it("reads the non-sensitive runtime status contract", async () => {
     const runtime = {
       ok: true as const,
-      devMode: false,
       networkMode: "restricted-cloud" as const,
       modelConfigured: true,
     };

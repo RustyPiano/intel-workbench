@@ -48,8 +48,6 @@ export interface CreateAppOptions {
   webDistDir?: string;
   /** 数据根目录（落盘）。默认 `WORKBENCH_DATA_DIR` 或进程工作目录。 */
   dataDir?: string;
-  /** 开发模式（§7.5）。默认开启，置 `WORKBENCH_DEV_MODE=false` 关闭。 */
-  devMode?: boolean;
   /** 测试缝：注入文本 LLM 适配器（替代 env 构建），按已配置处理，端点取 `modelEndpoint`。 */
   modelAdapter?: ModelAdapter;
   /** 测试缝：注入适配器时的端点（并入白名单），默认 `https://test.local/v1`。 */
@@ -82,7 +80,6 @@ export interface AppServices {
   /** OfflineGuard 当前白名单（启动日志展示）。 */
   egressAllowlist: string[];
   /** 前端安全状态仅消费这些非敏感枚举/布尔值。 */
-  devMode: boolean;
   networkMode: "offline" | "restricted-cloud";
 }
 
@@ -120,12 +117,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   // 数据底座与用例服务（M1–M2）。
   const paths = resolveDataPaths(options.dataDir ?? defaultDataDir());
-  const devMode = options.devMode ?? process.env.WORKBENCH_DEV_MODE !== "false";
   const audit = new AuditService(paths);
   const promptStore = new PromptStore(paths, audit);
   const users = new UserStore(paths);
   const auth = new AuthService(users, audit);
-  const cases = new CaseService(paths, audit, devMode);
+  const cases = new CaseService(paths, audit);
   const overview = new OverviewService(paths, cases);
   const jobRegistry = new JobRegistry();
 
@@ -238,7 +234,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
     slots,
     modelConfigured,
     egressAllowlist: guard.allowlist,
-    devMode,
     networkMode: networkModeForAllowlist(guard.allowlist),
   };
   app.locals.services = services;
@@ -246,7 +241,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
   app.use("/api", authMiddleware(auth), createApiRouter({
     health: {
-      devMode,
       networkMode: networkModeForAllowlist(guard.allowlist),
       modelConfigured,
     },

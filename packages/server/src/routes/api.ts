@@ -45,7 +45,6 @@ import { createWorkflowRouter } from "./workflow.js";
 
 export interface ApiServices {
   health: {
-    devMode: boolean;
     networkMode: "offline" | "restricted-cloud";
     modelConfigured: boolean;
   };

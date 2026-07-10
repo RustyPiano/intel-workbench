@@ -34,7 +34,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
     root = await mkdtemp(path.join(tmpdir(), "iw-rep-"));
     paths = resolveDataPaths(root);
     audit = new AuditService(paths);
-    cases = new CaseService(paths, audit, false);
+    cases = new CaseService(paths, audit);
     materials = new MaterialService(paths, audit, cases);
     findings = new FindingService(paths, audit, cases);
     contradictions = new ContradictionService(paths, audit, cases, materials, { adapter: null, guard: { authorize: async () => undefined } as unknown as OfflineGuard, modelEndpoint: "" } satisfies LlmDeps);

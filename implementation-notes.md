@@ -1,6 +1,16 @@
-# Implementation Notes — 全链路可靠性加固 + 阶段一至三
+# Implementation Notes — 破坏性收敛重构 + 全链路可靠性加固 + 阶段一至三
 
 本文按时间倒序记录当前实现。最新状态先读本节；早期里程碑中的测试数字与限制均保留为当时快照，不代表当前版本。
+
+## 破坏性收敛重构（2026-07-10，refactor/clean-break）
+
+把历史演进形成的重复状态、兼容字段和缓存层压缩成单一事实源。三轮子 Agent 并行实施（Opus 承担高风险核心、Sonnet 承担机械收敛），主 Agent 冻结共享契约、审核 diff、消解合并冲突、做集成适配；每轮门槛为全量 `pnpm check` 全绿。方案审核阶段的关键修正：Finding 晋升的服务端 span/hash 重校验本已存在，真实缺口是支持性语义信任客户端——防线据此上移；判定放 `Citation.verdict` 而非 ClaimEvidence 包装（同语义更小 diff）；suggestion 的 conclusion+citations 创建路径保留为服务端内部 API（矛盾/时间线来源没有对应 claim，不能砍）。
+
+- **R1·契约与地基**：Claim 三层同义状态（`status`/`support_status`/`support_label`）统一为单一判定链——`Citation.verdict`（supports/contradicts/mentions/context/pending，cite 产出即 pending、LLM 裁判后写实）→ 服务端聚合派生 `claim.support`；claim 带稳定 id；`POST /findings` 只收 `{inquiryId, claimId}`，服务端重加载 claim、逐条重校验引用、重算支持性，响应携带 `promotion.eligible/reason`；旧格式记录读到即报错，零静默迁移。审计删专题镜像（专题视图=全局链按 caseId 投影）、`verify()` 逐行解析报 1-based 行号、新增 `initialize()` 启动链校验失败拒监听、数据根 `wx`+PID 独占锁（server 与 seed 均先获锁，死锁回收）。前端会话单一 token key、api 客户端纯内存 token、删 `session_token` 与写而不读的 task-run localStorage。导出闸原因码 `citation:support-unverified` 更名 `citation:unjudged`。
+- **R2·唯一执行状态与确定性投影**：删除 TaskRun 三件套（task-service 502 行 + autopilot-service 233 行 + routes/tasks，净减 1027 行），`workflow.json` 成为唯一执行状态（冻结契约 `workflow/types.ts`）：素材指纹变化使三下游步骤与检查点全部失效；人工检查点绑产物 sha256，产物重生成即自动失效；服务重启把无活 job 的 running 对账为 failed；JobRegistry 回归进程内取消句柄。自动研判进度并入 workflow items，coverage「未决事项」同批迁移。简报改确定性投影（448→160 行）：删 brief.json 缓存/指纹/last-good/LLM 概览，GET 不写盘、不落审计、零模型调用，无模型配置也有完整简报；新增 `GET /cases/:id/status` 三态聚合（ready/not_started/error，损坏绝不转零值）。前端单一状态源（CaseWorkbench 一次加载 case+status 经 context 下发，`LoadState<T>`）、按需轮询（有 running 步骤才轮询、上一轮完成再排下一轮、空闲零周期请求、focus 补拉）、错误态显示"状态不可读取"而非 0 条、WorkflowStrip 替代 TaskOverview。删除 devMode 与开发模式密级闸门。
+- **R3·演示数据完全重置与验证**：固定演示数据根 `.workbench-data/demo`；`pnpm demo:seed` 只写空目录、`pnpm demo:reset` 硬校验路径后删除重建；seed 从零生成用户/专题/产物/workflow/经 AuditService 正常追加的完整审计链（47 条，零手写哈希），删除 SEED_VERSION/合并/补写全部迁移逻辑；启动扫描旧格式痕迹文件（task-runs/autopilot-state/auto-inquiry/brief.json/audit.log）命中即拒并提示 `pnpm demo:reset`。旧彩排数据（packages/server/cases 等）原地保留但退出交付数据体系。
+- **评测（真实模型）**：`eval:agent --label clean-break`——10 题 0 错误率、finalize 90%、7 答出/3 不足（其中两题为设计上不可答），对比阶段一修复后基线（finalize 70%、2 超时）无回归且更稳。`eval:contradiction`——anchored 精确率 1.0、召回 0.08-0.17（低召回为可靠性加固轮已知的保守策略，非本轮引入；发布口径仍以「先验证召回」为准）；`llm-direct` 基线变体因"模型未返回可解析 JSON"失败，恰为锚定管线所解问题的对照。
+- **过程事故与经验**：worktree 隔离曾把三个子 Agent 检出到 2026-06-23 的陈旧提交，一个 Sonnet 在旧代码上得出"问题不存在"的错误结论；此后所有子 Agent 任务书强制"第零步 HEAD 校正"。一个子 Agent 报告门槛全绿但合并后 3 个测试失败（均为其收紧语义后的测试夹具问题），由主 Agent 集成门禁捕获修复——多层门禁的必要性得到实证。
 
 ## 全链路可靠性加固（2026-07-10）
 

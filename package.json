@@ -25,6 +25,7 @@
     "eval:agent": "tsx packages/server/eval/run-agent-eval.ts",
     "demo:seed": "pnpm --filter @intel-workbench/server demo:seed",
     "demo:reset": "pnpm --filter @intel-workbench/server demo:reset",
+    "e2e:real": "pnpm --filter @intel-workbench/server e2e:real",
     "dev:server": "pnpm --filter @intel-workbench/server dev",
     "dev:web": "pnpm --filter @intel-workbench/web dev",
     "build:server": "pnpm --filter @intel-workbench/server build",

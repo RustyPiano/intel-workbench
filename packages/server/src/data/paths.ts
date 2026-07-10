@@ -28,6 +28,8 @@ export interface DataPaths {
   readonly usersFile: string;
   caseDir(id: string): string;
   caseManifest(id: string): string;
+  /** 专题唯一执行状态 workflow.json（R2 冻结契约，见 workflow/types.ts）。 */
+  workflowFile(id: string): string;
 }
 
 export function resolveDataPaths(root: string): DataPaths {
@@ -41,6 +43,7 @@ export function resolveDataPaths(root: string): DataPaths {
     usersFile: path.join(configDir, "users.json"),
     caseDir: (id) => path.join(casesDir, assertSafeId(id)),
     caseManifest: (id) => path.join(casesDir, assertSafeId(id), "manifest.json"),
+    workflowFile: (id) => path.join(casesDir, assertSafeId(id), "workflow.json"),
   };
 }
 

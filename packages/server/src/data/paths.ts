@@ -28,7 +28,6 @@ export interface DataPaths {
   readonly usersFile: string;
   caseDir(id: string): string;
   caseManifest(id: string): string;
-  caseAuditLog(id: string): string;
 }
 
 export function resolveDataPaths(root: string): DataPaths {
@@ -42,7 +41,6 @@ export function resolveDataPaths(root: string): DataPaths {
     usersFile: path.join(configDir, "users.json"),
     caseDir: (id) => path.join(casesDir, assertSafeId(id)),
     caseManifest: (id) => path.join(casesDir, assertSafeId(id), "manifest.json"),
-    caseAuditLog: (id) => path.join(casesDir, assertSafeId(id), "audit.log"),
   };
 }
 

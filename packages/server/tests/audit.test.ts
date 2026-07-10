@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -31,13 +31,22 @@ describe("AuditService 哈希链（§7.2）", () => {
     expect(verdict).toEqual({ ok: true, count: 2 });
   });
 
-  it("镜像关联专题事件到 cases/<id>/audit.log", async () => {
-    await audit.append({ user: "u1", action: "case.create", object: "case:x", caseId: "x" });
-    const caseLog = await readFile(paths.caseAuditLog("x"), "utf8");
-    expect(caseLog.trim().split("\n")).toHaveLength(1);
+  it("readCaseEvents 从全局权威链按 caseId 投影（不再落 cases/<id>/audit.log 镜像）", async () => {
+    await audit.append({ user: "u1", action: "case.create", object: "case:x", caseId: "x", detail: { caseId: "x" } });
+    await audit.append({ user: "u1", action: "material.ingest", object: "material:m1", caseId: "x", detail: { caseId: "x" } });
+    // 专题级事件仅靠 object=case:<id> 归属（无 detail.caseId）——命中 object 谓词。
+    await audit.append({ user: "u1", action: "review.mark", object: "case:x", caseId: "x", detail: { ref: "c-1" } });
+    // 另一个专题不应混入。
+    await audit.append({ user: "u1", action: "case.create", object: "case:y", caseId: "y", detail: { caseId: "y" } });
+
+    const events = await audit.readCaseEvents("x");
+    expect(events.map((e) => e.action)).toEqual(["case.create", "material.ingest", "review.mark"]);
+
+    // 不再写镜像文件。
+    await expect(readFile(path.join(paths.caseDir("x"), "audit.log"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("篡改一条事件内容 → verify 报出断链位置", async () => {
+  it("篡改一条事件内容 → verify 报出断链行号（1-based）", async () => {
     await audit.append({ user: "u1", action: "case.create", object: "case:x" });
     await audit.append({ user: "u2", action: "case.update", object: "case:x" });
     const lines = (await readFile(paths.auditFile, "utf8")).trim().split("\n");
@@ -49,7 +58,34 @@ describe("AuditService 哈希链（§7.2）", () => {
     const fresh = new AuditService(paths); // 新实例，不吃缓存
     const verdict = await fresh.verify();
     expect(verdict.ok).toBe(false);
-    expect(verdict.brokenAt).toBe(0);
+    expect(verdict.brokenAt).toBe(1);
+  });
+
+  it("畸形 JSON 行 → verify 不抛异常，精确定位行号", async () => {
+    await audit.append({ user: "u", action: "a", object: "o" });
+    await audit.append({ user: "u", action: "b", object: "o" });
+    const lines = (await readFile(paths.auditFile, "utf8")).trim().split("\n");
+    lines[1] = "{ 这行不是合法 JSON"; // 破坏第 2 行
+    await writeFile(paths.auditFile, `${lines.join("\n")}\n`, "utf8");
+
+    const verdict = await new AuditService(paths).verify();
+    expect(verdict.ok).toBe(false);
+    expect(verdict.brokenAt).toBe(2);
+    expect(verdict.reason).toContain("JSON");
+  });
+
+  it("initialize：空链/合法链放行，断链抛错（带精确行号）", async () => {
+    await audit.initialize(); // 空链（文件都不存在）视为合法
+    await audit.append({ user: "u", action: "a", object: "o" });
+    await new AuditService(paths).initialize(); // 合法链放行
+
+    // 制造断链后 initialize 必须拒绝。
+    const lines = (await readFile(paths.auditFile, "utf8")).trim().split("\n");
+    const ev = JSON.parse(lines[0]);
+    ev.user = "attacker";
+    lines[0] = JSON.stringify(ev);
+    await writeFile(paths.auditFile, `${lines.join("\n")}\n`, "utf8");
+    await expect(new AuditService(paths).initialize()).rejects.toThrow(/第 1 行/);
   });
 
   it("并发 append 仍保持链接完整（单写者串行）", async () => {
@@ -58,21 +94,6 @@ describe("AuditService 哈希链（§7.2）", () => {
     );
     const verdict = await audit.verify();
     expect(verdict).toEqual({ ok: true, count: 20 });
-  });
-
-  it("专题镜像写失败不会让后续全局审计事件断链", async () => {
-    const first = await audit.append({ user: "u", action: "first", object: "one" });
-    await mkdir(paths.casesDir, { recursive: true });
-    await writeFile(paths.caseDir("blocked"), "not-a-directory", "utf8");
-
-    await expect(audit.append({ user: "u", action: "mirrored", object: "two", caseId: "blocked" })).rejects.toBeTruthy();
-    const third = await audit.append({ user: "u", action: "third", object: "three" });
-
-    const events = await audit.readAll();
-    expect(events).toHaveLength(3);
-    expect(events[1]?.prev_hash).toBe(first.event_hash);
-    expect(third.prev_hash).toBe(events[1]?.event_hash);
-    expect(await audit.verify()).toEqual({ ok: true, count: 3 });
   });
 
   it("reconcile 找出有产物却缺 case.create 审计的孤儿专题", async () => {

@@ -8,6 +8,7 @@ import { RuntimeAgent, RUNTIME_VERSION } from "mini-agent";
 
 import type { AppServices } from "./app.js";
 import { createApp } from "./app.js";
+import { acquireDataRootLock } from "./data/data-root-lock.js";
 import { seedDemoWorkspace } from "./demo/seed.js";
 
 // Loopback only — never 0.0.0.0. (零外发红线，§7.1)
@@ -37,6 +38,19 @@ async function main(): Promise<void> {
 
   const app = createApp();
   const services = app.locals.services as AppServices;
+
+  // 数据根独占锁：同一数据根不得两进程并发写，否则审计哈希链会分叉（§4.1）。
+  const lock = await acquireDataRootLock(services.paths.root);
+
+  // 启动前完整校验审计哈希链：断链即拒绝启动（§7.2），避免在断链上继续追加。
+  try {
+    await services.audit.initialize();
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(error instanceof Error ? error.message : String(error));
+    await lock.release();
+    process.exit(1);
+  }
 
   if (process.env.MINI_AGENT_DEMO === "1") {
     const seeded = await seedDemoWorkspace(services.paths, services.audit);
@@ -73,10 +87,17 @@ async function main(): Promise<void> {
   });
 
   const shutdown = (): void => {
-    server.close(() => process.exit(0));
+    server.close(() => {
+      void lock.release().finally(() => process.exit(0));
+    });
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
 
-void main();
+main().catch((error) => {
+  // 启动期致命错误（如数据根被占用）：打印清晰信息并非零退出，不抛裸栈。
+  // eslint-disable-next-line no-console
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});

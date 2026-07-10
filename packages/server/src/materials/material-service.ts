@@ -371,7 +371,9 @@ export class MaterialService {
           caseId,
           detail: { caseId, message },
         })
-        .catch(() => undefined);
+        // 错误路径审计失败：记录但不掩盖原始错误——上下文加工本就尽力而为，原错误已落 note/降级。
+        // eslint-disable-next-line no-console
+        .catch((auditErr) => console.error(`审计写入失败 material.context case:${caseId}（原始错误：${message}）:`, auditErr));
     }
   }
 
@@ -457,7 +459,9 @@ export class MaterialService {
         caseId,
         detail: { caseId, materialId: material.id, phase: "ingest-degrade", modality, reason: "media-processing-failed" },
       })
-      .catch(() => undefined);
+      // 错误路径审计失败：记录但不掩盖降级结果（素材已落 pending，尽力而为返回）。
+      // eslint-disable-next-line no-console
+      .catch((auditErr) => console.error(`审计写入失败 material.process ingest-degrade material:${material.id}:`, auditErr));
     return degraded;
   }
 
@@ -610,7 +614,10 @@ export class MaterialService {
           caseId,
           detail: { caseId, materialId, reason: "embed-failed", message },
         })
-        .catch(() => undefined);
+        // 错误路径审计失败：记录但不掩盖原始错误——索引本就是 BM25 之上的增强（见上方红线），
+        // 原 embed 错误已落 note，绝不因“审计写失败”而改回抛错阻断摄入。
+        // eslint-disable-next-line no-console
+        .catch((auditErr) => console.error(`审计写入失败 material.index case:${caseId}（原始错误：${message}）:`, auditErr));
       return { indexed: false, note: `${INDEX_DEGRADED_NOTE}：${message}` };
     }
   }

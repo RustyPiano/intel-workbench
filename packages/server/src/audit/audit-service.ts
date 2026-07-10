@@ -9,8 +9,8 @@ import { sha256, shortId } from "../util/hash.js";
  * 审计哈希链（工程方案 §7.2）。append-only、单写者串行、可独立校验。
  *
  * - `payload_hash = H(规范化事件内容)`，`event_hash = H(payload_hash + prev_hash)`。
- * - 全局 `audit/audit.jsonl` 为权威；若事件关联专题，再镜像一行到
- *   `cases/<id>/audit.log`（本地筛选副本）。
+ * - 全局 `audit/audit.jsonl` 是**唯一权威链**；专题视图是它的按 caseId 投影
+ *   （见 `readCaseEvents`），不再落 `cases/<id>/audit.log` 镜像，杜绝双写与链外副本。
  * - 命名与 Citation 的 `content_hash` 刻意区分（§7.2）。
  */
 
@@ -42,14 +42,17 @@ export interface AppendInput {
   object: string;
   result?: AuditResult;
   detail?: Record<string, unknown>;
-  /** 关联专题：额外镜像一行到 `cases/<id>/audit.log`。 */
+  /**
+   * 关联专题标记。事件仍只写全局权威链；此字段供 `readCaseEvents` 投影时识别归属
+   * （落在 `detail.caseId` 或 `object: case:<id>` 上）。不再触发任何镜像写。
+   */
   caseId?: string;
 }
 
 export interface VerifyResult {
   ok: boolean;
   count: number;
-  /** 断链事件下标（从 0 起），仅 ok=false 时有。 */
+  /** 断链所在行号（从 1 起），仅 ok=false 时有。 */
   brokenAt?: number;
   reason?: string;
 }
@@ -93,14 +96,8 @@ export class AuditService {
     const line = `${JSON.stringify(event)}\n`;
     await mkdir(path.dirname(this.paths.auditFile), { recursive: true });
     await appendFile(this.paths.auditFile, line, "utf8");
-    // 全局日志是权威链：一旦追加成功就立即推进链头。专题镜像后续失败
-    // 可以让本次 append 报错，但不得让下一条事件继续引用旧 prev_hash。
+    // 全局日志是唯一权威链：追加成功即推进链头。
     this.lastHash = event_hash;
-    if (input.caseId) {
-      const caseLog = this.paths.caseAuditLog(input.caseId);
-      await mkdir(path.dirname(caseLog), { recursive: true });
-      await appendFile(caseLog, line, "utf8");
-    }
     return event;
   }
 
@@ -113,9 +110,14 @@ export class AuditService {
     return this.readLog(this.paths.auditFile);
   }
 
-  /** 读某专题的审计镜像 `cases/<id>/audit.log`（§7.2 本地筛选副本）；无则空。 */
+  /**
+   * 某专题的审计视图：全局权威链按 caseId 投影（§7.2，取代旧的 `cases/<id>/audit.log` 镜像）。
+   * 归属判定 = 事件 `detail.caseId` 命中，或 `object` 为 `case:<id>`（专题级动作，如
+   * `case.create`/`review.mark`/`contradiction.detect` 等不带 `detail.caseId` 者）。
+   */
   async readCaseEvents(caseId: string): Promise<AuditEvent[]> {
-    return this.readLog(this.paths.caseAuditLog(caseId));
+    const target = `case:${caseId}`;
+    return (await this.readAll()).filter((e) => e.detail?.caseId === caseId || e.object === target);
   }
 
   private async readLog(file: string): Promise<AuditEvent[]> {
@@ -132,25 +134,60 @@ export class AuditService {
       .map((l) => JSON.parse(l) as AuditEvent);
   }
 
-  /** 重算全链，定位首个断点（工程方案 §7.2，`GET /api/audit/verify`）。 */
+  /**
+   * 重算全链，逐行解析定位首个断点（工程方案 §7.2，`GET /api/audit/verify`）。
+   * 畸形 JSON 行不再抛异常：返回带精确 1-based 行号的失败结果，避免调用方直落 500。
+   * 文件不存在/空链视为合法（全新数据根）。
+   */
   async verify(): Promise<VerifyResult> {
-    const events = await this.readAll();
+    let raw: string;
+    try {
+      raw = await readFile(this.paths.auditFile, "utf8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, count: 0 };
+      throw e;
+    }
+    const lines = raw.split("\n");
     let prev = GENESIS;
-    for (let i = 0; i < events.length; i++) {
-      const e = events[i];
+    let count = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.length === 0) continue; // 尾部换行等空行不入链
+      const brokenAt = i + 1; // 1-based 行号
+      let e: AuditEvent;
+      try {
+        e = JSON.parse(line) as AuditEvent;
+      } catch {
+        return { ok: false, count, brokenAt, reason: "审计行不是合法 JSON（无法解析）" };
+      }
       const payload = sha256(stableStringify(payloadOf(e)));
       if (payload !== e.payload_hash) {
-        return { ok: false, count: events.length, brokenAt: i, reason: "事件内容被篡改（payload_hash 不匹配）" };
+        return { ok: false, count, brokenAt, reason: "事件内容被篡改（payload_hash 不匹配）" };
       }
       if (e.prev_hash !== prev) {
-        return { ok: false, count: events.length, brokenAt: i, reason: "链接断裂（prev_hash 不匹配）" };
+        return { ok: false, count, brokenAt, reason: "链接断裂（prev_hash 不匹配）" };
       }
       if (sha256(payload + prev) !== e.event_hash) {
-        return { ok: false, count: events.length, brokenAt: i, reason: "event_hash 不匹配" };
+        return { ok: false, count, brokenAt, reason: "event_hash 不匹配" };
       }
       prev = e.event_hash;
+      count++;
     }
-    return { ok: true, count: events.length };
+    return { ok: true, count };
+  }
+
+  /**
+   * 启动前完整校验一次哈希链（工程方案 §7.2）。断链/畸形行 → 抛出带精确行号与恢复提示
+   * 的错误，由入口拒绝启动。空链或文件不存在视为合法（全新数据根）。
+   */
+  async initialize(): Promise<void> {
+    const result = await this.verify();
+    if (!result.ok) {
+      throw new Error(
+        `审计哈希链校验未通过：${this.paths.auditFile} 第 ${result.brokenAt} 行 —— ${result.reason}。` +
+          `请人工修复该行后重启，或清理/重置数据根（删除 audit/audit.jsonl 后重新播种）。`,
+      );
+    }
   }
 
   /** 对账：列出有产物却缺 `case.create` 审计的孤儿专题（§5.4）。 */

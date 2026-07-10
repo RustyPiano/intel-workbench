@@ -20,7 +20,7 @@ export interface CreateFindingInput {
   confidence?: number;
 }
 
-export type PromotionReason = "not-supported" | "no-valid-citation" | "already-promoted";
+export type PromotionReason = "not-supported" | "no-valid-citation" | "already-promoted" | "claim-not-found";
 
 export type CreateFindingResult =
   | { ok: true; finding: Finding }
@@ -69,8 +69,10 @@ export class FindingService {
     const inquiry = (await this.loadInquiries(caseId)).find((item) => item.id === inquiryId);
     const claim = inquiry?.claims.find((item) => item.id === claimId);
     if (!claim) {
+      // 伪造晋升（inquiryId/claimId 指向不存在的结论）：与其它晋升判定一致回结构化 reason，
+      // 使路由响应携带 promotion.reason（而非裸 404），供调用方区分"引用不存在"这一伪造路径。
       await this.auditCreateDeny(actor, caseId, "claim-not-found");
-      throw new AppError(404, "对应的问答结论不存在");
+      return { ok: false, status: 404, reason: "claim-not-found" };
     }
 
     // already-promoted：同一 (inquiryId, claimId) 已晋升过。

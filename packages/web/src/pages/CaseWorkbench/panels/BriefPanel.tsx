@@ -3,33 +3,34 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   cancelJob,
   getBrief,
-  refreshBrief,
   updateCase,
-  type ApiAutoInquiryItemStatus,
-  type ApiAutoInquiryProgress,
   type ApiBrief,
   type ApiBriefContradiction,
   type ApiBriefOverviewSentence,
   type ApiCitation,
+  type InquiryBatchItem,
+  type WorkflowStepStatus,
 } from "../../../api";
 import { useSession } from "../../../state/session";
-import { useWorkbenchContext } from "../../CaseWorkbench";
+import { hasRunningWorkflowStep, useWorkbenchContext } from "../../CaseWorkbench";
 import { CitationChips } from "../components/CitationChips";
 import { CoverageMeter } from "../components/CoverageMeter";
 import { FrameCiteView } from "../components/FrameCiteView";
-import { TaskOverview } from "../components/TaskOverview";
+import { WorkflowStrip } from "../components/WorkflowStrip";
 import { useExtractionJob } from "../hooks/useExtractionJob";
 import {
   CONTRADICTION_SCOPE_LABELS,
   ELEMENT_TYPE_LABELS,
   scrollWorkbenchBodyIntoView,
+  statusTile,
 } from "../components/helpers";
 
 /**
- * 研判简报（阶段三 M2 / 计划 D1）：进入专题的落地视图。头部并入任务阶段条（复用
- * TaskOverview）+ autopilot 开关 + 刷新；六个板块（概览 / 时间线 / 关键实体 / 未处置矛盾 /
+ * 研判简报（阶段三 M2 / 计划 D1，R2 起为确定性投影）：进入专题的落地视图。头部并入流程状态条
+ * （WorkflowStrip）+ autopilot 开关 + 刷新；六个板块（概览 / 时间线 / 关键实体 / 未处置矛盾 /
  * 待核问题 / 报告覆盖度）各自深链到对应 Tab。概览段由服务端 LLM 生成并逐句绑定引用，
- * 引用可点回素材原文；模型不可用时降级为纯统计简报，页面明示。
+ * 引用可点回素材原文；模型不可用或素材过少时概览句为空，页面显示中性空态（不再靠 degraded 标志区分原因）。
+ * 简报自身不再周期轮询：加载一次 + 窗口 focus 刷新 + workflow 步骤从 running 转终态时刷新 + 手动刷新按钮。
  */
 
 function BriefSection({
@@ -77,10 +78,8 @@ function OverviewBlock({ brief, onFrame, caseId }: { brief: ApiBrief; onFrame: (
   return (
     <BriefSection title="案情概览" caseId={caseId} tab="materials" tabLabel="回到素材">
       <div className="brief-overview__caveat">AI 依据原文生成，仅供研判参考，需人工复核；下方每句均可点引用回原文核对。</div>
-      {brief.degraded ? (
-        <div className="brief-empty">AI 概览暂不可用（文本模型未配置或本次生成失败），当前为纯统计简报。各板块统计与线索仍如实展示。</div>
-      ) : brief.overview.length === 0 ? (
-        <div className="brief-empty">本次未生成可回溯的概览句（素材过少或未能逐句绑定原文）。</div>
+      {brief.overview.length === 0 ? (
+        <div className="brief-empty">本次未生成可回溯的概览句（模型未配置、生成失败，或素材过少无法逐句绑定原文）。</div>
       ) : (
         <ol className="brief-overview__list">
           {brief.overview.map((s: ApiBriefOverviewSentence, i) => (
@@ -122,7 +121,7 @@ function ContradictionCard({ c, onFrame }: { c: ApiBriefContradiction; onFrame: 
   );
 }
 
-const AUTO_INQUIRY_STATUS_LABEL: Record<ApiAutoInquiryItemStatus, string> = {
+const AUTO_INQUIRY_STATUS_LABEL: Record<InquiryBatchItem["status"], string> = {
   pending: "待跑",
   running: "进行中",
   candidate: "已产生候选",
@@ -130,10 +129,18 @@ const AUTO_INQUIRY_STATUS_LABEL: Record<ApiAutoInquiryItemStatus, string> = {
   failed: "失败",
 };
 
+const WORKFLOW_STEP_STATUS_LABEL: Record<WorkflowStepStatus, string> = {
+  idle: "待启动",
+  running: "研判进行中",
+  succeeded: "研判完成",
+  failed: "运行失败",
+  cancelled: "已取消",
+};
+
 /**
  * 自动研判批处理进度（阶段三 M3）：整体进度 + 逐题状态徽章；运行中提供取消按钮；
- * 已产生候选的问题深链到「结论核验」Tab（候选结论在那里入池复核）。数据源为简报轮询
- * 携带的 autoInquiry（durable，读 auto-inquiry.json），跨服务重启仍可见。
+ * 已产生候选的问题深链到「结论核验」Tab（候选结论在那里入池复核）。数据源为 CaseWorkbench 下发的
+ * status.workflow.data.steps.inquiries（R2 起 workflow.json 单一来源，取代旧 auto-inquiry.json 投影）。
  */
 function AutoInquiryProgressBlock({
   progress,
@@ -144,7 +151,7 @@ function AutoInquiryProgressBlock({
   onRestart,
   onOpenFindings,
 }: {
-  progress: ApiAutoInquiryProgress;
+  progress: { status: WorkflowStepStatus; items: InquiryBatchItem[] };
   canManage: boolean;
   cancelling: boolean;
   restarting: boolean;
@@ -152,20 +159,15 @@ function AutoInquiryProgressBlock({
   onRestart: () => void;
   onOpenFindings: () => void;
 }) {
-  const statusLabel = progress.status === "running"
-    ? "研判进行中"
-    : progress.status === "cancelled"
-      ? "已取消"
-      : progress.status === "failed"
-        ? "运行失败"
-        : "研判完成";
+  const statusLabel = WORKFLOW_STEP_STATUS_LABEL[progress.status];
+  const completed = progress.items.filter((item) => item.status === "done" || item.status === "candidate").length;
   const canRestart = progress.status === "cancelled" || progress.status === "failed" || progress.items.some((item) => item.status === "failed");
   return (
     <div className="auto-inquiry">
       <div className="auto-inquiry__head">
         <span className="auto-inquiry__title">自动研判</span>
         <span className="auto-inquiry__status">
-          {statusLabel} · {progress.completed}/{progress.total}
+          {statusLabel} · {completed}/{progress.items.length}
         </span>
         <span className="auto-inquiry__spacer" />
         {canManage && progress.status === "running" ? (
@@ -214,16 +216,21 @@ function AutoInquiryProgressBlock({
 export function BriefPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
-  const { canManage } = useWorkbenchContext();
+  const { caseInfo, canManage, status: caseStatus, refreshStatus } = useWorkbenchContext();
   const navigate = useNavigate();
   const [brief, setBrief] = useState<ApiBrief | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [cancellingBatch, setCancellingBatch] = useState(false);
   const [restartingBatch, setRestartingBatch] = useState(false);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
   const briefRequestRef = useRef<{ caseId: string; promise: Promise<ApiBrief> } | null>(null);
+
+  useEffect(() => {
+    setAutopilot(Boolean(caseInfo?.autopilot));
+  }, [caseInfo?.autopilot]);
 
   /**
    * 简报包含真模型概览，不允许轮询、StrictMode 或手动刷新叠加发起同一请求。
@@ -236,7 +243,7 @@ export function BriefPanel() {
 
     const promise = (async () => {
       if (current?.caseId === caseId && force) await current.promise.catch(() => undefined);
-      return force ? refreshBrief(caseId, signal) : getBrief(caseId, false, signal);
+      return getBrief(caseId, signal);
     })();
     briefRequestRef.current = { caseId, promise };
     void promise.finally(() => {
@@ -254,34 +261,27 @@ export function BriefPanel() {
     });
   }, [loadBrief]);
 
-  const autoInquiryJob = useExtractionJob(caseId ?? "", "auto-inquiry", syncBrief);
+  const onAutoInquiryDone = useCallback(() => {
+    refreshStatus();
+  }, [refreshStatus]);
+  const autoInquiryJob = useExtractionJob(caseId ?? "", "auto-inquiry", onAutoInquiryDone);
 
+  // 加载一次 + 窗口 focus 时补拉；简报不再自行周期轮询。
   useEffect(() => {
     if (!user || !caseId) return;
-    let alive = true;
-    let timer: number | null = null;
-    const controller = new AbortController();
-    const poll = async () => {
-      try {
-        const next = await loadBrief(false, controller.signal);
-        if (!alive) return;
-        setBrief(next);
-        setError(null);
-      } catch (e) {
-        if (alive && (e as Error).name !== "AbortError") setError((e as Error).message);
-      } finally {
-        // 上一次完成后再计时，避免慢模型请求与下一轮重叠。
-        if (alive) timer = window.setTimeout(() => void poll(), 8000);
-      }
-    };
-    // 延后到下一个 task，React StrictMode 的探测性 effect 会在发请前被清理。
-    timer = window.setTimeout(() => void poll(), 0);
-    return () => {
-      alive = false;
-      controller.abort();
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [user, caseId, loadBrief]);
+    syncBrief();
+    const onFocus = () => syncBrief();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [user, caseId, syncBrief]);
+
+  // workflow 步骤从 running 转为终态时刷新一次简报（观察 CaseWorkbench 下发的 status 变化）。
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    const running = hasRunningWorkflowStep(caseStatus);
+    if (wasRunningRef.current && !running) syncBrief();
+    wasRunningRef.current = running;
+  }, [caseStatus, syncBrief]);
 
   const handleRefresh = async () => {
     if (!caseId || refreshing) return;
@@ -297,12 +297,13 @@ export function BriefPanel() {
   };
 
   const handleToggleAutopilot = async () => {
-    if (!caseId || !brief || !canManage || autopilotBusy) return;
+    if (!caseId || !caseInfo || !canManage || autopilotBusy) return;
     setAutopilotBusy(true);
     setError(null);
     try {
-      const updated = await updateCase(caseId, { autopilot: !brief.autopilot });
-      setBrief((current) => current ? { ...current, autopilot: updated.autopilot ?? !current.autopilot } : current);
+      const updated = await updateCase(caseId, { autopilot: !autopilot });
+      setAutopilot(Boolean(updated.autopilot));
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -327,9 +328,8 @@ export function BriefPanel() {
     setCancellingBatch(true);
     setError(null);
     try {
-      // 复用 jobs 通用取消端点；随即重拉简报以尽快反映取消态（简报轮询亦会补更新）。
       await cancelJob(caseId, "auto-inquiry");
-      setBrief(await loadBrief());
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -343,7 +343,7 @@ export function BriefPanel() {
     setError(null);
     try {
       await autoInquiryJob.start();
-      setBrief(await loadBrief());
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -354,26 +354,37 @@ export function BriefPanel() {
   if (!caseId) return null;
 
   const generatedAt = brief ? new Date(brief.generatedAt).toLocaleTimeString() : "";
+  const materialsTile = statusTile(caseStatus, (d) => d.materials, (m) => ({
+    main: `${m.processed}/${m.total}`,
+    hint: m.failed > 0 ? `${m.failed} 失败` : "已加工 / 总数",
+  }));
+  const inquiriesStep = caseStatus.status === "ready" && caseStatus.data.workflow.state === "ready"
+    ? caseStatus.data.workflow.data.steps.inquiries
+    : null;
 
   return (
     <div className="brief">
       <div className="brief-controls">
         <div className="brief-controls__status">
-          {brief ? (
+          {caseInfo ? (
             <>
-              <span className={`brief-autopilot-dot ${brief.autopilot ? "brief-autopilot-dot--on" : "brief-autopilot-dot--off"}`} />
-              <span>自动流水线：{brief.autopilot ? "运行中" : "已暂停"}</span>
-              <span className="brief-controls__sep">·</span>
-              <span className="brief-controls__muted">概览生成于 {generatedAt}{brief.degraded ? " · 已降级" : ""}</span>
+              <span className={`brief-autopilot-dot ${autopilot ? "brief-autopilot-dot--on" : "brief-autopilot-dot--off"}`} />
+              <span>自动流水线：{autopilot ? "运行中" : "已暂停"}</span>
             </>
           ) : (
             <span className="brief-controls__muted">加载中…</span>
           )}
+          {brief ? (
+            <>
+              <span className="brief-controls__sep">·</span>
+              <span className="brief-controls__muted">概览生成于 {generatedAt}</span>
+            </>
+          ) : null}
         </div>
         <div className="brief-controls__actions">
           {canManage ? (
-            <button type="button" className="btn btn--ghost btn--sm" onClick={handleToggleAutopilot} disabled={!brief || autopilotBusy}>
-              {autopilotBusy ? "处理中…" : brief?.autopilot ? "暂停自动推进" : "开启自动推进"}
+            <button type="button" className="btn btn--ghost btn--sm" onClick={handleToggleAutopilot} disabled={!caseInfo || autopilotBusy}>
+              {autopilotBusy ? "处理中…" : autopilot ? "暂停自动推进" : "开启自动推进"}
             </button>
           ) : null}
           <button type="button" className="btn btn--ghost btn--sm" onClick={handleRefresh} disabled={refreshing}>
@@ -382,8 +393,8 @@ export function BriefPanel() {
         </div>
       </div>
 
-      {/* 阶段条并入简报头部（复用 TaskOverview：起草/确认检查点/标记阶段等交互一并保留）。 */}
-      <TaskOverview caseId={caseId} enabled={Boolean(user && caseId)} canManage={canManage} />
+      {/* 流程状态条（取代 TaskOverview）：数据源为 status.workflow，本组件不重复轮询。 */}
+      <WorkflowStrip caseId={caseId} canManage={canManage} autoInquiryJob={autoInquiryJob} />
 
       {error ? <div className="brief-error">{error}</div> : null}
       {autoInquiryJob.error ? <div className="brief-error">{autoInquiryJob.error}</div> : null}
@@ -393,14 +404,8 @@ export function BriefPanel() {
           <section className="brief-stats" aria-label="素材与加工统计">
             <div className="brief-stat">
               <span>素材</span>
-              <strong>{brief.materials.done}/{brief.materials.total}</strong>
-              <small>
-                {[
-                  brief.materials.processing > 0 ? `${brief.materials.processing} 加工中` : "",
-                  brief.materials.needsConfig > 0 ? `${brief.materials.needsConfig} 需配置` : "",
-                  brief.materials.failed > 0 ? `${brief.materials.failed} 失败` : "",
-                ].filter(Boolean).join("，") || "已加工 / 总数"}
-              </small>
+              <strong>{materialsTile.main}</strong>
+              <small>{materialsTile.hint}</small>
             </div>
             <div className="brief-stat">
               <span>关键实体</span>
@@ -481,9 +486,9 @@ export function BriefPanel() {
           </BriefSection>
 
           <BriefSection title="待核问题" count={brief.openQuestions.length} caseId={caseId} tab="inquiry" tabLabel="去补充核验">
-            {brief.autoInquiry && brief.autoInquiry.total > 0 ? (
+            {inquiriesStep && inquiriesStep.items.length > 0 ? (
               <AutoInquiryProgressBlock
-                progress={brief.autoInquiry}
+                progress={inquiriesStep}
                 canManage={canManage}
                 cancelling={cancellingBatch}
                 restarting={restartingBatch}

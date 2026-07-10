@@ -10,6 +10,7 @@ import {
   type TimelinePoint,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
 import {
@@ -59,6 +60,7 @@ const ELEMENT_TYPE_ICONS: Record<ElementType, React.ReactNode> = {
 export function ElementsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
+  const { refreshStatus } = useWorkbenchContext();
   const [elements, setElements] = useState<ApiElement[] | null>(null);
   const [view, setView] = useState<"list" | "graph" | "timeline">("list");
   const [activeCat, setActiveCat] = useState<ElementType | "all">("all");
@@ -88,7 +90,8 @@ export function ElementsPanel() {
   const handleExtract = async () => {
     if (!user || !caseId) return;
     setError(null);
-    startExtraction();
+    await startExtraction();
+    refreshStatus();
   };
 
   const all = elements ?? [];

@@ -88,7 +88,7 @@ export function MaterialsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const { user } = useSession();
-  const { canManage } = useWorkbenchContext();
+  const { canManage, refreshStatus } = useWorkbenchContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [materials, setMaterials] = useState<ApiMaterial[] | null>(null);
@@ -227,6 +227,7 @@ export function MaterialsPanel() {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
       refresh();
+      refreshStatus();
       if (firstOk) setActiveId(firstOk);
     }
   };
@@ -239,6 +240,7 @@ export function MaterialsPanel() {
     try {
       await reindexMaterial(caseId, mid);
       refresh();
+      refreshStatus();
       if (activeIdRef.current === mid) {
         const next = await getMaterialContent(mid);
         if (activeIdRef.current === mid) setContent(next);
@@ -263,6 +265,7 @@ export function MaterialsPanel() {
         setContent(null);
       }
       refresh();
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -281,6 +284,7 @@ export function MaterialsPanel() {
       const material = await processMaterial(caseId, mid);
       patchLocalMaterial(mid, material);
       refresh();
+      refreshStatus();
       if (activeIdRef.current === mid) {
         const next = await getMaterialContent(mid);
         if (activeIdRef.current === mid) setContent(next);

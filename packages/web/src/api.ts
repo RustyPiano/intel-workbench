@@ -329,60 +329,6 @@ export interface ApiReport {
   rendered: boolean;
 }
 
-export type TaskRunStatus = "active" | "done" | "failed";
-export type TaskStageStatus = "pending" | "active" | "done" | "failed" | "skipped";
-export type TaskAdvanceStatus = "done" | "failed" | "skipped";
-
-export interface ApiTaskStageDef {
-  key: string;
-  name: string;
-  checkpoint?: boolean;
-}
-
-export interface ApiTaskTemplate {
-  id: string;
-  name: string;
-  stages: ApiTaskStageDef[];
-}
-
-export interface ApiTaskStageState {
-  key: string;
-  name: string;
-  status: TaskStageStatus;
-  checkpoint?: boolean;
-  confirmedBy?: string;
-  confirmedAt?: string;
-}
-
-export interface ApiTaskRun {
-  id: string;
-  caseId: string;
-  templateId: string;
-  status: TaskRunStatus;
-  stages: ApiTaskStageState[];
-  createdAt: string;
-  completedAt?: string;
-  failedAt?: string;
-  updatedAt?: string;
-  failureReason?: string;
-}
-
-export interface ApiTaskRunOverview {
-  currentStage: ApiTaskStageState | null;
-  completedStageCount: number;
-  totalStageCount: number;
-  pendingCheckpointCount: number;
-  materials: { total: number } & MaterialStatusCounts;
-  highSeverityContradictionCount: number;
-  reportStatus: ReportStatus | null;
-}
-
-export interface ApiTaskRunSnapshot {
-  template: ApiTaskTemplate;
-  run: ApiTaskRun;
-  overview: ApiTaskRunOverview;
-}
-
 export interface DraftReportInput {
   title: string;
   body?: string;
@@ -983,21 +929,7 @@ export function applySuggestedFinding(caseId: string, suggestionId: string): Pro
 
 export interface ApiBriefOverviewSentence {
   text: string;
-  chunk_id: string;
-  material_id: string;
-  material_name: string;
-  quote: string;
   citation: ApiCitation;
-}
-
-export interface ApiBriefMaterialStats {
-  total: number;
-  pending: number;
-  processing: number;
-  done: number;
-  failed: number;
-  needsConfig: number;
-  byModality: Record<Modality, number>;
 }
 
 export interface ApiBriefProcessingStats {
@@ -1027,27 +959,6 @@ export interface ApiBriefContradiction {
   acknowledgement_status: ContradictionAcknowledgementStatus | null;
 }
 
-/** 自动研判批处理进度（阶段三 M3）：每题状态 + 整体进度，实时读 auto-inquiry.json。 */
-export type ApiAutoInquiryItemStatus = "pending" | "running" | "candidate" | "done" | "failed";
-export interface ApiAutoInquiryItem {
-  question: string;
-  status: ApiAutoInquiryItemStatus;
-  inquiryId?: string;
-  inquiryStatus?: "answered" | "insufficient" | "error";
-  candidateCount?: number;
-  error?: string;
-}
-export interface ApiAutoInquiryProgress {
-  status: "running" | "done" | "cancelled" | "failed";
-  total: number;
-  completed: number;
-  currentIndex: number | null;
-  items: ApiAutoInquiryItem[];
-  startedAt: string;
-  updatedAt: string;
-  finishedAt?: string;
-}
-
 /** 报告五节覆盖度（阶段三 M4 / D4）：固定五节，每节满足与否 + 人话明细 + 前端引导。 */
 export type CoverageSectionKey = "background" | "timeline" | "contradiction" | "conclusion" | "open-items";
 export interface ApiCoverageSection {
@@ -1066,30 +977,21 @@ export interface ApiReportCoverage {
 export interface ApiBrief {
   caseId: string;
   generatedAt: string;
-  degraded: boolean;
   fingerprint: string;
   overview: ApiBriefOverviewSentence[];
-  materials: ApiBriefMaterialStats;
   processing: ApiBriefProcessingStats;
   timeline: TimelinePoint[];
   entities: ApiBriefEntity[];
   contradictions: ApiBriefContradiction[];
   openQuestions: ApiQuestionSuggestion[];
-  task: ApiTaskRunSnapshot | null;
-  autopilot: boolean;
-  /** 自动研判批处理进度（阶段三 M3，未跑过则 null）。 */
-  autoInquiry: ApiAutoInquiryProgress | null;
   /** 报告五节覆盖度（阶段三 M4，现算）。 */
   coverage: ApiReportCoverage;
 }
 
-/** 取研判简报（命中新鲜缓存则直接返回；`refresh` 强制重算）。 */
-export function getBrief(caseId: string, refresh = false, signal?: AbortSignal): Promise<ApiBrief> {
-  const qs = refresh ? "?refresh=1" : "";
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/brief${qs}`, { headers: headers(), signal }).then((r) => unwrap<ApiBrief>(r, "brief"));
+/** 取研判简报（确定性投影，R2 起不再支持 refresh 强制重算）。 */
+export function getBrief(caseId: string, signal?: AbortSignal): Promise<ApiBrief> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/brief`, { headers: headers(), signal }).then((r) => unwrap<ApiBrief>(r, "brief"));
 }
-
-export const refreshBrief = (caseId: string, signal?: AbortSignal) => getBrief(caseId, true, signal);
 
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 
@@ -1179,53 +1081,62 @@ export function generateAutoDraft(caseId: string): Promise<DraftReportInput> {
   }).then((r) => unwrap<DraftReportInput>(r, "draft"));
 }
 
-// ---- 任务编排（Batch D） ----
+// ---- 专题状态聚合（R2 冻结契约：GET /cases/:id/status）----
 
-export async function getCurrentTaskRun(caseId: string): Promise<ApiTaskRunSnapshot | null> {
-  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/current`, { headers: headers() });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; snapshot?: ApiTaskRunSnapshot | null };
-  if (!res.ok || body.ok === false) {
-    noteStatus(res);
-    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
-  }
-  return body.snapshot ?? null;
+/** 三态区块：ready 携带数据；not_started 尚未产生数据；error 服务端读取失败（绝不代为归零）。 */
+export type StatusSection<T> = ({ state: "ready" } & T) | { state: "not_started" } | { state: "error"; message: string };
+
+export type WorkflowStepStatus = "idle" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface WorkflowStep {
+  status: WorkflowStepStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
 }
 
-export async function createTaskRun(caseId: string): Promise<ApiTaskRunSnapshot> {
-  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs`, { method: "POST", headers: headers(true), body: "{}" });
-  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
-  if (!res.ok || body.ok === false) {
-    noteStatus(res);
-    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
-  }
-  return { template: body.template, run: body.run, overview: body.overview };
+export interface InquiryBatchItem {
+  question: string;
+  status: "pending" | "running" | "candidate" | "done" | "failed";
+  error?: string;
+  inquiryId?: string;
 }
 
-export async function advanceTaskStage(caseId: string, runId: string, stageKey: string, status: TaskAdvanceStatus): Promise<ApiTaskRunSnapshot> {
-  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageKey)}/advance`, {
-    method: "POST",
-    headers: headers(true),
-    body: JSON.stringify({ status }),
-  });
-  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
-  if (!res.ok || body.ok === false) {
-    noteStatus(res);
-    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
-  }
-  return { template: body.template, run: body.run, overview: body.overview };
+export interface ArtifactApproval {
+  artifactHash: string;
+  approvedBy: string;
+  approvedAt: string;
 }
 
-export async function confirmTaskStage(caseId: string, runId: string, stageKey: string): Promise<ApiTaskRunSnapshot> {
-  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageKey)}/confirm`, {
+export interface WorkflowState {
+  inputHash: string;
+  steps: {
+    elements: WorkflowStep;
+    contradictions: WorkflowStep;
+    inquiries: WorkflowStep & { items: InquiryBatchItem[] };
+  };
+  checkpoints: { entities?: ArtifactApproval; contradictions?: ArtifactApproval };
+}
+
+export interface CaseStatusPayload {
+  materials: StatusSection<{ total: number; processed: number; failed: number }>;
+  workflow: StatusSection<{ data: WorkflowState }>;
+  contradictions: StatusSection<{ total: number; openHighConfidence: number }>;
+  findings: StatusSection<{ total: number; approved: number; pending: number }>;
+  report: StatusSection<{ status: ReportStatus; coverage: { covered: number; total: number } }>;
+  audit: StatusSection<{ count: number }>;
+}
+
+export function getCaseStatus(caseId: string): Promise<CaseStatusPayload> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/status`, { headers: headers() }).then((r) => unwrap<CaseStatusPayload>(r, "status"));
+}
+
+/** 确认要素/矛盾检查点（需 succeeded 步骤产出的产物哈希匹配）；返回最新 workflow 状态。 */
+export function confirmWorkflowCheckpoint(caseId: string, key: "entities" | "contradictions"): Promise<WorkflowState> {
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/workflow/checkpoints/${encodeURIComponent(key)}/confirm`, {
     method: "POST",
     headers: headers(),
-  });
-  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
-  if (!res.ok || body.ok === false) {
-    noteStatus(res);
-    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
-  }
-  return { template: body.template, run: body.run, overview: body.overview };
+  }).then((r) => unwrap<WorkflowState>(r, "workflow"));
 }
 
 // ---- 管理后台（M5） ----

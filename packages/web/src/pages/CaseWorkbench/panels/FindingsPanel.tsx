@@ -18,6 +18,7 @@ import {
   type FindingSuggestionSource,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
 import { verdictLabel } from "../components/helpers";
@@ -44,6 +45,7 @@ function averageCitationConfidence(claim: ApiClaim): number {
 export function FindingsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
+  const { refreshStatus } = useWorkbenchContext();
   const [caseInfo, setCaseInfo] = useState<ApiCase | null>(null);
   const [findings, setFindings] = useState<ApiFinding[]>([]);
   const [inquiries, setInquiries] = useState<ApiInquiry[]>([]);
@@ -116,6 +118,7 @@ export function FindingsPanel() {
     try {
       await createFinding(caseId, { inquiryId, claimId: claim.id, confidence: averageCitationConfidence(claim) });
       await load();
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -130,6 +133,7 @@ export function FindingsPanel() {
     try {
       await reviewFinding(caseId, findingId, review_status);
       await load();
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -144,6 +148,7 @@ export function FindingsPanel() {
     try {
       await applySuggestedFinding(caseId, suggestion.id);
       await load();
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -165,6 +170,7 @@ export function FindingsPanel() {
     }
     if (failures.length > 0) setError(`部分候选加入失败：${failures[0]}`);
     await load();
+    refreshStatus();
     setBusy(null);
   };
 
@@ -176,6 +182,7 @@ export function FindingsPanel() {
     try {
       const result = await generateFindingSuggestions(caseId);
       await load();
+      refreshStatus();
       setDismissedSuggestionIds(new Set());
       if (result.inquiriesCreated > 0) {
         setGenerationNote(`已自动运行 ${result.inquiriesCreated} 个核验问题，生成 ${result.suggestions.length} 条待入池候选。`);

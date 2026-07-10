@@ -8,6 +8,7 @@ import {
   type ContradictionDetectionResult,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
 import { CONTRADICTION_SCOPE_LABELS } from "../components/helpers";
@@ -22,6 +23,7 @@ const CONTRADICTION_RULE_LABELS: Record<string, string> = {
 export function ContradictionsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
+  const { refreshStatus } = useWorkbenchContext();
   const [contradictionResult, setContradictionResult] = useState<ContradictionDetectionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
@@ -48,10 +50,11 @@ export function ContradictionsPanel() {
   }, [reloadContradictions]);
   const { job, error: jobError, start: startDetection, cancel: cancelDetection } = useExtractionJob(caseId ?? "", "contradictions", onContradictionsDone);
 
-  const handleDetect = () => {
+  const handleDetect = async () => {
     if (!user || !caseId) return;
     setError(null);
-    startDetection();
+    await startDetection();
+    refreshStatus();
   };
 
   const handleAcknowledge = async (contradictionId: string, status: Exclude<ContradictionAcknowledgementStatus, "open">) => {
@@ -62,6 +65,7 @@ export function ContradictionsPanel() {
     try {
       await acknowledgeContradiction(caseId, contradictionId, { status, note: (ackNotes[contradictionId] ?? "").trim() });
       void reloadContradictions();
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {

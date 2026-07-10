@@ -16,6 +16,7 @@ import {
   type DraftReportInput,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { CLEARANCE_LABELS } from "../../../types";
 import { CoverageMeter } from "../components/CoverageMeter";
 import {
@@ -28,6 +29,7 @@ export function ReportPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useSession();
+  const { refreshStatus } = useWorkbenchContext();
   const canReview = user?.role === "security" || user?.role === "admin";
 
   const [report, setReport] = useState<ApiReport | null>(null);
@@ -90,6 +92,7 @@ export function ReportPanel() {
       setBody(specToBody(next));
       setSelectedFindingIds([...new Set(next.spec.sections.flatMap((section) => section.finding_ids ?? []))]);
       setGeneratedSections(null);
+      refreshStatus();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -128,6 +131,7 @@ export function ReportPanel() {
       a.click();
       URL.revokeObjectURL(url);
       setReport((prev) => (prev ? { ...prev, status: out.status } : prev));
+      refreshStatus();
     } catch (e) {
       const reasons = ((e as Error & { result?: { reasons?: string[] } }).result?.reasons ?? []);
       setGateReasons(reasons);
@@ -161,6 +165,7 @@ export function ReportPanel() {
     setError(null);
     try {
       await generateFindingSuggestions(caseId);
+      refreshStatus();
       navigate(`/cases/${encodeURIComponent(caseId)}/findings`);
     } catch (e) {
       setError((e as Error).message);

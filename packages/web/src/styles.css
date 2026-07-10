@@ -1359,6 +1359,34 @@ a {
   color: var(--danger-light);
   font-size: 12px;
 }
+.task-overview__checkpoints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.task-overview__checkpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.task-overview__checkpoint-row button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.task-overview__checkpoint-row button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .tabs {
   display: flex;
   align-items: center;

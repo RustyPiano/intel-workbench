@@ -6,9 +6,10 @@ import {
   type MaterialContent,
   type ApiElement,
   type ApiReport,
-  type ApiTaskStageState,
-  type ApiTaskRunSnapshot,
+  type CaseStatusPayload,
+  type StatusSection,
 } from "../../../api";
+import type { LoadState } from "../../../types";
 
 export function scrollWorkbenchBodyIntoView() {
   window.setTimeout(() => {
@@ -211,26 +212,6 @@ export function mentionSources(el: ApiElement): string {
   return [...new Set(el.mentions.map((m) => m.material_name))].join("、");
 }
 
-export const TASK_STATUS_LABELS: Record<ApiTaskStageState["status"], string> = {
-  pending: "待处理",
-  active: "当前",
-  done: "完成",
-  failed: "失败",
-  skipped: "跳过",
-};
-
-export const TASK_STAGE_DISPLAY_NAMES: Record<string, string> = {
-  "proposition-extraction": "补充核验取证",
-  "contradiction-detection": "矛盾核验",
-  assessment: "结论核验",
-  "report-generation": "报告起草",
-};
-
-export function taskStageName(stage?: Pick<ApiTaskStageState, "key" | "name"> | null): string {
-  if (!stage) return "";
-  return TASK_STAGE_DISPLAY_NAMES[stage.key] ?? stage.name;
-}
-
 export const REPORT_STATUS_LABELS: Record<ApiReport["status"], string> = {
   draft: "草稿",
   in_review: "待复核",
@@ -238,46 +219,26 @@ export const REPORT_STATUS_LABELS: Record<ApiReport["status"], string> = {
   exported: "已导出",
 };
 
-export const TASK_STAGE_HINTS: Record<string, string> = {
-  "material-ingest": "先把本专题相关文档、音频、视频或图片汇入素材区。",
-  "quality-check": "确认素材已完成解析，失败或待配置的素材先处理掉。",
-  "evidence-units": "系统会把素材切成可引用片段，后续结论都从这里溯源。",
-  "entity-merge": "检查人物、组织、地点、装备等要素是否归并合理。",
-  "proposition-extraction": "去补充核验生成带引用的事实答案，转入核验池并人工核准后才可供报告使用。",
-  "contradiction-detection": "对比不同素材里的说法，处理冲突后再进入结论核验。",
-  assessment: "把问答答案和核验结果转入核验池，人工核准后才供报告引用。",
-  "report-generation": "基于已核准结论生成报告。",
-  "review-export": "复核通过后才能导出，导出动作会进入审计链。",
-};
-
-export const TASK_STAGE_TAB_PATHS: Record<string, string> = {
-  "material-ingest": "materials",
-  "quality-check": "materials",
-  "evidence-units": "materials",
-  "entity-merge": "elements",
-  "proposition-extraction": "inquiry",
-  "contradiction-detection": "contradictions",
-  assessment: "findings",
-  "report-generation": "report",
-  "review-export": "report",
-};
-
-export const MANUAL_STAGE_KEYS = new Set(["proposition-extraction", "assessment"]);
-
-export function stageHint(stage?: ApiTaskStageState | null): string {
-  if (!stage) return "还没有启动核验任务。先汇入素材，再启动流程。";
-  return TASK_STAGE_HINTS[stage.key] ?? "按当前阶段要求完成检查后继续。";
+export interface StatusTile {
+  main: string;
+  hint: string;
 }
 
-export function nextTaskAction(snapshot: ApiTaskRunSnapshot | null, creating: boolean, confirming: boolean): string {
-  const current = snapshot?.overview.currentStage;
-  if (!snapshot) return creating ? "正在启动核验任务…" : "点击「开始核验任务」，系统会按素材、证据、矛盾、报告顺序推进。";
-  if (snapshot.run.status === "done") return "流程已完成，报告已导出并写入审计链。";
-  if (snapshot.run.status === "failed") return "流程已失败，请查看失败阶段并处理后重新启动。";
-  if (current?.checkpoint && current.status === "active") return confirming ? "正在确认检查点…" : "当前阶段需要人工确认。检查无误后点击「确认检查点」。";
-  if (current?.key === "proposition-extraction" && current.status === "active") return "在补充核验选择示例问题并发送，让 AI 输出带引用的事实答案。";
-  if (current?.status === "active" && MANUAL_STAGE_KEYS.has(current.key)) return "当前阶段需要人工判断。完成后用阶段卡片里的「标记完成」继续。";
-  return "当前阶段由系统处理。完成后会自动进入下一步。";
+/**
+ * 三态区块 → 展示用 tile：loading/error（外层 LoadState）与 not_started/error（内层
+ * StatusSection）统一折叠成 { main, hint }；error 与 not_started 绝不显示假 0 值。
+ */
+export function statusTile<T>(
+  page: LoadState<CaseStatusPayload>,
+  pick: (data: CaseStatusPayload) => StatusSection<T>,
+  render: (value: StatusSection<T> & { state: "ready" }) => StatusTile,
+): StatusTile {
+  if (page.status === "loading") return { main: "…", hint: "加载中" };
+  if (page.status === "error") return { main: "—", hint: `状态不可读取：${page.message}` };
+  const section = pick(page.data);
+  if (section.state === "error") return { main: "—", hint: `状态不可读取：${section.message}` };
+  if (section.state === "not_started") return { main: "未开始", hint: "" };
+  return render(section);
 }
 
 export const CONTRADICTION_SCOPE_LABELS = {

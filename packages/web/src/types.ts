@@ -25,3 +25,6 @@ export interface SessionUser {
   clearance: Clearance;
   mustChangePassword?: boolean;
 }
+
+/** 单一状态源加载态：loading/ready/error 三态，错误绝不折叠为空值或零值。 */
+export type LoadState<T> = { status: "loading" } | { status: "ready"; data: T } | { status: "error"; message: string };

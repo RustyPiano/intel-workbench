@@ -18,7 +18,6 @@ import { MaterialService } from "../src/materials/material-service.js";
 import type { LlmDeps } from "../src/model/structured.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import type { QuestionSuggestion } from "../src/suggestion/suggestion-service.js";
-import { TaskService } from "../src/task/task-service.js";
 
 /**
  * BriefService 测试（阶段三 M2 / D1·D5）。聚合部分只读落盘产物，用 fixture 直写
@@ -34,11 +33,6 @@ const stubSuggestions = {
   suggestQuestions: async (): Promise<QuestionSuggestion[]> => [
     { category: "basic", question: "这些材料涉及哪些关键人物？", rationale: "梳理人物", priority: 5 },
   ],
-};
-
-/** 默认无自动研判进度（未跑过批处理）；需要时各用例可覆写。 */
-const stubAutoInquiry = {
-  getProgress: async () => null,
 };
 
 function scriptedAdapter(content: () => string, calls?: { n: number }): ModelAdapter {
@@ -61,7 +55,6 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
   let elementGraph: ElementGraphService;
   let contradictions: ContradictionService;
   let findings: FindingService;
-  let tasks: TaskService;
   let caseId: string;
   let chunk: Chunk;
 
@@ -76,7 +69,6 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
     findings = new FindingService(paths, audit, cases);
     elementGraph = new ElementGraphService(elements);
     contradictions = new ContradictionService(paths, audit, cases, materials, baseLlm);
-    tasks = new TaskService(paths, audit, cases);
 
     caseId = (await cases.create(OPERATOR, { name: "简报专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, caseId, [{ filename: "intel.txt", content: "目标甲于码头出现。随后驶离港口。" }]);
@@ -142,7 +134,7 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
   function makeBrief(content: () => string, calls?: { n: number }, adapterNull = false, customAdapter?: ModelAdapter): BriefService {
     const guard = new OfflineGuard(["stub.local"], audit);
     const llm: LlmDeps = { adapter: adapterNull ? null : (customAdapter ?? scriptedAdapter(content, calls)), guard, modelEndpoint: adapterNull ? "" : "https://stub.local/v1" };
-    return new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, stubSuggestions, stubAutoInquiry, llm);
+    return new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, stubSuggestions, llm);
   }
 
   it("聚合六板块数据面：概览+统计+时间线+实体+未处置矛盾+待核问题", async () => {
@@ -170,7 +162,6 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
     // 覆盖度点亮（阶段三 M4）：本 fixture 满足背景+结论 2 节，时间线/矛盾/未决事项 3 节缺口。
     expect(brief.coverage).toMatchObject({ satisfiedCount: 2, totalSections: 5 });
     expect(brief.coverage.sections.map((s) => s.satisfied)).toEqual([true, false, false, true, false]);
-    expect(brief.task).toBeNull();
   });
 
   it("概览逐句校验：丢弃编造引文、坏 chunk_id 与空引文，仅保留可回溯句", async () => {

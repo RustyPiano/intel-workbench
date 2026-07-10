@@ -5,6 +5,7 @@ import { buildElementGraph } from "../analysis/element-graph.js";
 import type { DataPaths } from "../data/paths.js";
 import type { CaseManifest, Contradiction, ContradictionAcknowledgement, Element, Finding } from "../domain/types.js";
 import { readContradictionAcknowledgements, readFindings } from "../finding/finding-store.js";
+import { readWorkflowState, type InquiryBatchItem, type WorkflowStepStatus } from "../workflow/types.js";
 
 /**
  * 报告覆盖率仪表（阶段三 M4 / 计划 D4）。报告模板固定五节——背景与素材概况 / 关键时间线 /
@@ -39,12 +40,10 @@ export interface ReportCoverage {
   sections: CoverageSection[];
 }
 
-/** 自动研判进度只取判定「未决事项」所需的最小字段（durable，读 auto-inquiry.json）。 */
-interface AutoInquiryLite {
-  status?: "running" | "done" | "cancelled";
-  total?: number;
-  completed?: number;
-  items?: { status?: string }[];
+/** 自动研判进度：读 workflow.json 的 steps.inquiries（唯一执行状态，R2）。 */
+interface InquiryStep {
+  status: WorkflowStepStatus;
+  items: InquiryBatchItem[];
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -68,12 +67,12 @@ async function loadContradictions(paths: DataPaths, caseId: string): Promise<Con
 /** 计算本专题的报告五节覆盖度。manifest 由调用方经密级闸门（cases.get）取得后传入。 */
 export async function computeCoverage(paths: DataPaths, caseId: string, manifest: CaseManifest): Promise<ReportCoverage> {
   const dir = paths.caseDir(caseId);
-  const [elements, contradictions, acks, findings, autoInquiry] = await Promise.all([
+  const [elements, contradictions, acks, findings, workflow] = await Promise.all([
     readJson<Element[]>(path.join(dir, "elements.json")),
     loadContradictions(paths, caseId),
     readContradictionAcknowledgements(paths, caseId),
     readFindings(paths, caseId),
-    readJson<AutoInquiryLite>(path.join(dir, "auto-inquiry.json")),
+    readWorkflowState(paths.workflowFile(caseId)),
   ]);
 
   const sections: CoverageSection[] = [
@@ -81,7 +80,7 @@ export async function computeCoverage(paths: DataPaths, caseId: string, manifest
     timelineSection(Array.isArray(elements) ? elements : []),
     contradictionSection(contradictions, acks),
     conclusionSection(findings),
-    openItemsSection(autoInquiry),
+    openItemsSection(workflow?.steps.inquiries ?? null),
   ];
   return {
     satisfiedCount: sections.filter((section) => section.satisfied).length,
@@ -161,19 +160,20 @@ function conclusionSection(findings: Finding[]): CoverageSection {
 }
 
 /**
- * 未决事项：无「悬空」待核问题。口径以 M3 自动研判批次为准——批次已跑完（非 running）且每题都已
- * 闭环（产生候选 candidate 或已问完 done）；仍处于 pending/running/failed 的题目视为悬空。批次从未
- * 运行（progress 缺失）则视为未闭环，引导用户运行自动研判把待核问题跑完。
+ * 未决事项：无「悬空」待核问题。口径以自动研判批次为准——批次已跑完（inquiries 步骤非 running）
+ * 且每题都已闭环（产生候选 candidate 或已问完 done）；仍处于 pending/running/failed 的题目视为悬空。
+ * 步骤从未运行（workflow 缺失或 inquiries=idle）则视为未闭环，引导用户运行自动研判把待核问题跑完。
  */
-function openItemsSection(progress: AutoInquiryLite | null): CoverageSection {
+function openItemsSection(inquiries: InquiryStep | null): CoverageSection {
   const action = { tab: "inquiry", label: "补充核验待核问题" };
-  if (!progress) {
+  if (!inquiries || inquiries.status === "idle") {
     return { key: "open-items", title: "未决事项", satisfied: false, detail: "自动研判尚未运行，待核问题未闭环", action: { tab: "inquiry", label: "运行自动研判" } };
   }
-  const items = Array.isArray(progress.items) ? progress.items : [];
+  const items = inquiries.items;
   const total = items.length;
-  if (progress.status === "running") {
-    return { key: "open-items", title: "未决事项", satisfied: false, detail: `自动研判进行中（${progress.completed ?? 0}/${total}）`, action };
+  if (inquiries.status === "running") {
+    const completed = items.filter((item) => item.status === "candidate" || item.status === "done" || item.status === "failed").length;
+    return { key: "open-items", title: "未决事项", satisfied: false, detail: `自动研判进行中（${completed}/${total}）`, action };
   }
   const dangling = items.filter((item) => item.status === "pending" || item.status === "running" || item.status === "failed").length;
   const satisfied = dangling === 0;

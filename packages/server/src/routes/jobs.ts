@@ -1,20 +1,16 @@
 import { Router } from "express";
 
-import type { ContradictionService } from "../analysis/contradiction-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import { AppError } from "../domain/identity.js";
-import type { ElementService } from "../elements/element-service.js";
-import type { AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
-import type { Job, JobProgress, JobRegistry } from "../jobs/job-registry.js";
+import type { Job, JobRegistry } from "../jobs/job-registry.js";
+import type { WorkflowService } from "../workflow/workflow-service.js";
 
 type JobKind = "elements" | "contradictions" | "auto-inquiry";
 
 export interface JobsRouterDeps {
   registry: JobRegistry;
-  elements: ElementService;
-  contradictions: ContradictionService;
-  autoInquiry: AutoInquiryService;
+  workflow: WorkflowService;
   cases: CaseService;
   audit: AuditService;
 }
@@ -25,15 +21,8 @@ export function createJobsRouter(deps: JobsRouterDeps): Router {
   router.post("/:id/jobs/:kind/start", async (req, res) => {
     await deps.cases.get(req.identity, req.params.id);
     const kind = parseKind(req.params.kind);
-    const actor = req.identity;
-    const caseId = req.params.id;
-    const runner = (ctx: { signal: AbortSignal; setProgress(patch: Partial<JobProgress>): void }) => {
-      const onProgress = (p: { done: number; total: number }) => ctx.setProgress({ phase: kind, done: p.done, total: p.total });
-      if (kind === "elements") return deps.elements.extract(actor, caseId, { signal: ctx.signal, onProgress });
-      if (kind === "contradictions") return deps.contradictions.detect(actor, caseId, { signal: ctx.signal, onProgress });
-      return deps.autoInquiry.run(actor, caseId, ctx);
-    };
-    const job = deps.registry.start<unknown>(req.params.id, kind, runner);
+    // 经 WorkflowService 启动：标记对应步骤 running 并在结束时回写终态（手动 job 同样回写）。
+    const job = await deps.workflow.startJob(req.identity, req.params.id, kind);
     res.status(202).json({ ok: true, job: serializeJob(job) });
   });
 

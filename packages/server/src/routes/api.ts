@@ -9,7 +9,6 @@ import type { ElementGraphService } from "../analysis/element-graph-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { ElementService } from "../elements/element-service.js";
 import type { FindingService } from "../finding/finding-service.js";
-import type { AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import type { InquiryService } from "../inquiry/inquiry-service.js";
 import type { JobRegistry } from "../jobs/job-registry.js";
 import type { MaterialService } from "../materials/material-service.js";
@@ -17,7 +16,7 @@ import type { OverviewService } from "../overview/overview-service.js";
 import type { ReportService } from "../report/report-service.js";
 import type { ReviewService } from "../review/review-service.js";
 import type { SuggestionService } from "../suggestion/suggestion-service.js";
-import type { TaskService } from "../task/task-service.js";
+import type { WorkflowService } from "../workflow/workflow-service.js";
 import { createAdminRouter } from "./admin.js";
 import { createAuditRouter } from "./audit.js";
 import { createAuthRouter } from "./auth.js";
@@ -34,7 +33,7 @@ import { createOverviewRouter } from "./overview.js";
 import { createReviewRouter } from "./review.js";
 import { createReportsRouter } from "./reports.js";
 import { createSuggestionsRouter } from "./suggestions.js";
-import { createTaskRouter } from "./tasks.js";
+import { createWorkflowRouter } from "./workflow.js";
 
 /**
  * API 装配（工程方案 §5）。M1–M5 + 鉴权全部接通：登录/会话、专题 CRUD、
@@ -61,11 +60,10 @@ export interface ApiServices {
   contradictions: ContradictionService;
   reports: ReportService;
   review: ReviewService;
-  tasks: TaskService;
+  workflow: WorkflowService;
   admin: AdminService;
   suggestions: SuggestionService;
   briefs: BriefService;
-  autoInquiry: AutoInquiryService;
 }
 
 export function createApiRouter(services: ApiServices): Router {
@@ -89,10 +87,7 @@ export function createApiRouter(services: ApiServices): Router {
         "GET/PATCH /api/cases/:id",
         "GET /api/overview",
         "GET/POST /api/cases/:id/materials",
-        "POST /api/cases/:id/task-runs",
-        "GET /api/cases/:id/task-runs/current",
-        "GET /api/cases/:id/task-runs/:runId",
-        "POST /api/cases/:id/task-runs/:runId/stages/:stageKey/{advance,confirm}",
+        "POST /api/cases/:id/workflow/checkpoints/:key/confirm",
         "POST /api/cases/:id/materials/:mid/{process,reindex}",
         "DELETE /api/cases/:id/materials/:mid",
         "GET /api/cases/:id/audit",
@@ -130,9 +125,9 @@ export function createApiRouter(services: ApiServices): Router {
   router.use("/auth", createAuthRouter(services.auth));
   router.use("/overview", createOverviewRouter(services.overview));
   router.use("/cases", createCasesRouter(services.cases, services.materials, services.audit));
-  router.use("/cases", createTaskRouter(services.tasks));
+  router.use("/cases", createWorkflowRouter(services.workflow));
   router.use("/cases", createInquiriesRouter(services.inquiries));
-  router.use("/cases", createJobsRouter({ registry: services.jobRegistry, elements: services.elements, contradictions: services.contradictions, autoInquiry: services.autoInquiry, cases: services.cases, audit: services.audit }));
+  router.use("/cases", createJobsRouter({ registry: services.jobRegistry, workflow: services.workflow, cases: services.cases, audit: services.audit }));
   router.use("/cases", createElementsRouter(services.elements));
   router.use("/cases", createFindingsRouter(services.findings));
   router.use("/cases", createElementGraphRouter(services.elementGraph));

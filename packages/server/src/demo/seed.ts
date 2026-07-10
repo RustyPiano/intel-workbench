@@ -7,9 +7,11 @@ import type { DataPaths } from "../data/paths.js";
 import type { AuditEvent, CaseManifest, Chunk, Citation, Contradiction, ContradictionAcknowledgement, Element, Finding, Inquiry, Material, ReportRecord } from "../domain/types.js";
 import { DEMO_MATERIALS, type DemoMaterialInput } from "./port-anomaly-materials.js";
 import { chunkToCitation } from "../inquiry/citation.js";
-import { countCandidates, type AutoInquiryItem, type AutoInquiryProgress } from "../inquiry/auto-inquiry-service.js";
+import { countCandidates } from "../inquiry/auto-inquiry-service.js";
 import { chunkText, normalize } from "../materials/material-service.js";
 import { citationId } from "../report/report-service.js";
+import type { InquiryBatchItem, WorkflowState } from "../workflow/types.js";
+import { materialInputHash } from "../workflow/workflow-service.js";
 
 export const DEMO_CASE_ID = "port-anomaly-verification";
 const RESTRICTED_CASE_ID = "restricted-review-sample";
@@ -174,9 +176,9 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   const built = DEMO_MATERIALS.map(buildMaterial);
   const previousManifest = await readManifest(paths, DEMO_CASE_ID);
   // autopilot 字段保持缺省（视为开启）：seed 直接写盘，不经素材摄入流程，不会触发
-  // AutopilotService.onMaterialsSettled；即便后续人工往本专题追加素材触发它，三个执行体的
-  // 产物（elements.json / contradictions.result.json / auto-inquiry.json）都已在盘上，
-  // 会被幂等跳过（阶段三 M1 语义），不会重新调用模型。故无需显式置 autopilot:false。
+  // WorkflowService.onMaterialsSettled；即便后续人工往本专题追加素材触发它，workflow.json 里
+  // 三个步骤均 succeeded 且指纹匹配当前素材、产物在盘，会被幂等跳过，不会重新调用模型。
+  // 故无需显式置 autopilot:false。
   const manifest: CaseManifest = {
     id: DEMO_CASE_ID,
     name: "港口异常活动线索核验（模拟数据）",
@@ -428,30 +430,25 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
   ];
   await writeJsonl(path.join(caseDir, "inquiries.jsonl"), inquiries);
 
-  // 预置一批已完成的自动研判批次：题目取自上面四条已种问答记录，candidateCount 复用
-  // AutoInquiryService.countCandidates 同一口径计算，避免与真实批处理口径漂移（阶段三 M5）。
-  // 让简报「待核问题」板块与报告覆盖率「未决事项」节开箱即显示已闭环的批次，而非空态。
-  const autoInquiryItems: AutoInquiryItem[] = inquiries.map((inquiry) => {
-    const candidateCount = countCandidates(inquiry);
-    return {
-      question: inquiry.question,
-      status: candidateCount > 0 ? "candidate" : "done",
-      inquiryId: inquiry.id,
-      inquiryStatus: inquiry.status,
-      candidateCount,
-    };
-  });
-  const autoInquiry: AutoInquiryProgress = {
-    status: "done",
-    total: autoInquiryItems.length,
-    completed: autoInquiryItems.length,
-    currentIndex: null,
-    items: autoInquiryItems,
-    startedAt: now,
-    updatedAt: now,
-    finishedAt: now,
+  // 预置唯一执行状态 workflow.json（R2）：要素/矛盾步骤 succeeded（产物已在盘），自动研判步骤
+  // succeeded 且 items 取自上面四条已种问答记录（candidateCount 用 countCandidates 同口径判 candidate/done）。
+  // 让简报「待核问题」板块与报告覆盖率「未决事项」节开箱即显示已闭环的批次，而非空态。检查点留空由人工确认。
+  // （完整重写属 R3；此处只写合法契约。）
+  const inquiryItems: InquiryBatchItem[] = inquiries.map((inquiry) => ({
+    question: inquiry.question,
+    status: countCandidates(inquiry) > 0 ? "candidate" : "done",
+    inquiryId: inquiry.id,
+  }));
+  const workflow: WorkflowState = {
+    inputHash: materialInputHash(manifest.materials),
+    steps: {
+      elements: { status: "succeeded", startedAt: now, finishedAt: now },
+      contradictions: { status: "succeeded", startedAt: now, finishedAt: now },
+      inquiries: { status: "succeeded", startedAt: now, finishedAt: now, items: inquiryItems },
+    },
+    checkpoints: {},
   };
-  await writeJson(path.join(caseDir, "auto-inquiry.json"), autoInquiry);
+  await writeJson(paths.workflowFile(DEMO_CASE_ID), workflow);
 
   const findings: Finding[] = [
     {
@@ -575,9 +572,9 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
     { user: "operator", action: "element.extract", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: elements.length, seeded: true } },
     { user: "operator", action: "contradiction.detect", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, count: contradictions.length, status: "succeeded", seeded: true } },
     ...acks.map((ack): AuditAppendInput => ({ user: ack.by, action: "contradiction.acknowledge", object: `contradiction:${ack.contradiction_id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, contradictionId: ack.contradiction_id, status: ack.status, note: ack.note, seeded: true } })),
-    { user: "operator", action: "auto-inquiry.batch", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, total: autoInquiryItems.length, seeded: true } },
+    { user: "operator", action: "auto-inquiry.batch", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, total: inquiryItems.length, seeded: true } },
     ...inquiries.map((inquiry): AuditAppendInput => ({ user: "operator", action: "inquiry.create", object: `inquiry:${inquiry.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, inquiryId: inquiry.id, status: inquiry.status, seeded: true } })),
-    { user: "operator", action: "auto-inquiry.done", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, status: autoInquiry.status, total: autoInquiryItems.length, completed: autoInquiry.completed, candidates: autoInquiryItems.filter((item) => item.status === "candidate").length, seeded: true } },
+    { user: "operator", action: "auto-inquiry.done", object: `case:${DEMO_CASE_ID}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, status: "done", total: inquiryItems.length, completed: inquiryItems.length, candidates: inquiryItems.filter((item) => item.status === "candidate").length, seeded: true } },
     ...findings.flatMap((finding): AuditAppendInput[] => [
       { user: "operator", action: "finding.create", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, seeded: true } },
       { user: "security", action: "finding.review", object: `finding:${finding.id}`, caseId: DEMO_CASE_ID, detail: { caseId: DEMO_CASE_ID, findingId: finding.id, review_status: "approved", seeded: true } },

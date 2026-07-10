@@ -11,13 +11,27 @@ import type { Citation, Contradiction, ContradictionAcknowledgement, Element, Fi
 import { MaterialService } from "../src/materials/material-service.js";
 import { computeCoverage, type CoverageSection, type CoverageSectionKey } from "../src/report/coverage.js";
 import { ReportService } from "../src/report/report-service.js";
+import type { InquiryBatchItem, WorkflowState, WorkflowStepStatus } from "../src/workflow/types.js";
 
 /**
  * 报告覆盖率仪表测试（阶段三 M4 / D4）。computeCoverage 是只读纯函数，用 fixture 直写
  * elements.json / contradictions.result.json / contradiction-acks.json / findings.json /
- * auto-inquiry.json 驱动五节判定。核验：各节满足/不满足口径、缺口明细文案、无数据专题
+ * workflow.json 驱动五节判定。核验：各节满足/不满足口径、缺口明细文案、无数据专题
  * 不抛错、ReportService.getCoverage 委派 + 密级闸门。
  */
+
+/** 构造仅关心 inquiries 步骤的合法 workflow.json（其余步骤置 succeeded 以过契约校验）。 */
+function workflowWith(status: WorkflowStepStatus, statuses: InquiryBatchItem["status"][]): WorkflowState {
+  return {
+    inputHash: "test-hash",
+    steps: {
+      elements: { status: "succeeded" },
+      contradictions: { status: "succeeded" },
+      inquiries: { status, items: statuses.map((s, i) => ({ question: `q${i}`, status: s })) },
+    },
+    checkpoints: {},
+  };
+}
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
 const TOPSECRET: Identity = { id: "boss", name: "boss", role: "operator", clearance: "topsecret" };
@@ -139,16 +153,16 @@ describe("报告覆盖率仪表（阶段三 M4）", () => {
   });
 
   it("未决事项：批次进行中/悬空题目缺口，全部闭环满足", async () => {
-    // 进行中。
-    await writeCaseJson("auto-inquiry.json", { status: "running", total: 3, completed: 1, currentIndex: 1, items: [{ status: "done" }, { status: "running" }, { status: "pending" }], startedAt: "t", updatedAt: "t" });
+    // 进行中（completed 由 items 派生：done/candidate/failed 计为已完成）。
+    await writeCaseJson("workflow.json", workflowWith("running", ["done", "running", "pending"]));
     expect(section((await coverage()).sections, "open-items")).toMatchObject({ satisfied: false, detail: "自动研判进行中（1/3）" });
 
-    // 已跑完但有失败/未跑题 → 悬空。
-    await writeCaseJson("auto-inquiry.json", { status: "done", total: 2, completed: 2, currentIndex: null, items: [{ status: "candidate" }, { status: "failed" }], startedAt: "t", updatedAt: "t" });
+    // 已跑完但有失败题 → 悬空。
+    await writeCaseJson("workflow.json", workflowWith("failed", ["candidate", "failed"]));
     expect(section((await coverage()).sections, "open-items")).toMatchObject({ satisfied: false, detail: "1/2 个待核问题仍悬空（未产生候选或失败）" });
 
     // 全部闭环（candidate/done）→ 满足。
-    await writeCaseJson("auto-inquiry.json", { status: "done", total: 2, completed: 2, currentIndex: null, items: [{ status: "candidate" }, { status: "done" }], startedAt: "t", updatedAt: "t" });
+    await writeCaseJson("workflow.json", workflowWith("succeeded", ["candidate", "done"]));
     expect(section((await coverage()).sections, "open-items")).toMatchObject({ satisfied: true, detail: "2 个待核问题均已闭环" });
   });
 
@@ -157,7 +171,7 @@ describe("报告覆盖率仪表（阶段三 M4）", () => {
     await writeCaseJson("contradictions.result.json", { status: "succeeded", contradictions: [highContradiction("ct-1", 0.9)], groundedPropositions: [], processedChunks: 1, totalChunks: 1, truncated: false, warnings: [] });
     await writeCaseJson("contradiction-acks.json", [{ id: "a1", case_id: caseId, contradiction_id: "ct-1", status: "resolved", note: "", by: "sec", at: "t" }]);
     await writeCaseJson("findings.json", [finding("f1", "approved")]);
-    await writeCaseJson("auto-inquiry.json", { status: "done", total: 1, completed: 1, currentIndex: null, items: [{ status: "candidate" }], startedAt: "t", updatedAt: "t" });
+    await writeCaseJson("workflow.json", workflowWith("succeeded", ["candidate"]));
 
     const cov = await coverage();
     expect(cov.satisfiedCount).toBe(5);

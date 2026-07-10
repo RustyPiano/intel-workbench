@@ -249,7 +249,7 @@ export class MaterialService {
 
   /**
    * 自动流水线钩子（阶段三 M1）。在素材状态转换的收口处（ingest / ingestStream / 显式
-   * process 完成后）通知，由 AutopilotService 判定是否全部素材达终态并自动推进核验流水线。
+   * process 完成后）通知，由 WorkflowService 判定是否全部素材达终态并自动推进核验流水线。
    * 启动崩溃清扫走 CaseService.sweepInterrupted（不经此路径），故不触发自动分析（避免开机风暴）。
    */
   private autopilotHook?: (actor: Identity, caseId: string) => void;

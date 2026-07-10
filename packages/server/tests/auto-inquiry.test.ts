@@ -21,6 +21,11 @@ import { MaterialService } from "../src/materials/material-service.js";
 import { PromptService } from "../src/prompt/prompt-service.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 import { SuggestionService, type QuestionSuggestion } from "../src/suggestion/suggestion-service.js";
+import type { InquiryBatchItem } from "../src/workflow/types.js";
+import type { InquiryProgressSink } from "../src/workflow/workflow-service.js";
+
+/** 无副作用 sink（大多数用例不关心进度回写去向）。 */
+const noopSink: InquiryProgressSink = { setInquiryItems: async () => {} };
 
 /**
  * AutoInquiryService 测试（阶段三 M3 / 计划 D3）。
@@ -80,7 +85,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(questions), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(questions), inquiries, noopSink);
 
     const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
 
@@ -101,7 +106,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(questions), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(questions), inquiries, noopSink);
 
     const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
 
@@ -118,7 +123,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲?", "乙？"]), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(["甲?", "乙？"]), inquiries, noopSink);
 
     await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
 
@@ -135,7 +140,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲？", "乙？", "丙？"]), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(["甲？", "乙？", "丙？"]), inquiries, noopSink);
 
     await expect(auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal))).rejects.toMatchObject({
       result: { status: "failed", items: [{ status: "done" }, { status: "failed", error: "模型不可达" }, { status: "done" }] },
@@ -155,7 +160,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲？"]), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(["甲？"]), inquiries, noopSink);
 
     const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
 
@@ -176,7 +181,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         return answered(q);
       },
     };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲？", "乙？", "丙？"]), inquiries);
+    const auto = new AutoInquiryService(audit, stubSuggestions(["甲？", "乙？", "丙？"]), inquiries, noopSink);
 
     const progress = await auto.run(OPERATOR, caseId, jobCtx(controller.signal));
 
@@ -186,15 +191,16 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
     expect(progress.items[1]!.status).toBe("pending");
   });
 
-  it("空题集（无可跑问题）→ 批次直接完成，进度落盘可查", async () => {
+  it("空题集（无可跑问题）→ 批次直接完成，进度经 sink 回写", async () => {
     const inquiries = { list: async () => [], ask: async () => answered("x") };
-    const auto = new AutoInquiryService(paths, audit, stubSuggestions([]), inquiries);
+    let captured: InquiryBatchItem[] | null = null;
+    const sink: InquiryProgressSink = { setInquiryItems: async (_c, items) => { captured = items; } };
+    const auto = new AutoInquiryService(audit, stubSuggestions([]), inquiries, sink);
 
     const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
 
     expect(progress).toMatchObject({ status: "done", total: 0, items: [] });
-    const persisted = await auto.getProgress(caseId);
-    expect(persisted).toMatchObject({ status: "done", total: 0 });
+    expect(captured).toEqual([]); // 空题集也经 sink 回写空 items
   });
 
   it("集成：出题 → 批跑 → 结构化候选入池（脚本化模型模式）", async () => {
@@ -227,7 +233,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
         { filename: "gate.txt", content: "门岗登记记录车辆 2 辆。OCR 识别记录车辆 4 辆。" },
       ]);
 
-      const auto = new AutoInquiryService(paths, audit2, stubSuggestions(["门岗登记与OCR识别车辆数是否一致？"]), inquiries);
+      const auto = new AutoInquiryService(audit2, stubSuggestions(["门岗登记与OCR识别车辆数是否一致？"]), inquiries, noopSink);
       const progress = await auto.run(OPERATOR, gateCaseId, jobCtx(new AbortController().signal));
 
       // 该题产生结构化候选。

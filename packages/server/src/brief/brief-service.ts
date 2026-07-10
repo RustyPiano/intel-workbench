@@ -19,7 +19,6 @@ import type {
 import type { ElementService } from "../elements/element-service.js";
 import { findingsFilePath } from "../finding/finding-store.js";
 import type { FindingService } from "../finding/finding-service.js";
-import type { AutoInquiryProgress, AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import { chunkToCitation } from "../inquiry/citation.js";
 import { fuzzyLocate } from "../inquiry/intel-harness.js";
 import type { MaterialService } from "../materials/material-service.js";
@@ -27,7 +26,6 @@ import { readSlotConfigs, useMockMedia, type SlotConfigs } from "../model/slot-c
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { computeCoverage, type ReportCoverage } from "../report/coverage.js";
 import type { QuestionSuggestion, SuggestionService } from "../suggestion/suggestion-service.js";
-import type { TaskRunSnapshot, TaskService } from "../task/task-service.js";
 import { writeFileAtomic } from "../util/atomic.js";
 import { sha256 } from "../util/hash.js";
 
@@ -130,12 +128,8 @@ interface BriefSnapshot {
 /** GET /cases/:id/brief 的完整响应：缓存快照 + 每次现算的实时字段。 */
 export interface CaseBrief extends BriefSnapshot {
   caseId: string;
-  /** 阶段条与运行状态（实时，不进指纹）。无运行则 null。 */
-  task: TaskRunSnapshot | null;
   /** autopilot 是否开启（`autopilot !== false`，实时）。 */
   autopilot: boolean;
-  /** 自动研判批处理进度（阶段三 M3，实时读 auto-inquiry.json，不进指纹）。未跑过则 null。 */
-  autoInquiry: AutoInquiryProgress | null;
   /** 报告五节覆盖度（阶段三 M4，现算，不进指纹）。 */
   coverage: ReportCoverage;
 }
@@ -181,9 +175,7 @@ export class BriefService {
     private readonly elementGraph: Pick<ElementGraphService, "graph">,
     private readonly contradictions: Pick<ContradictionService, "getResult">,
     private readonly findings: Pick<FindingService, "list">,
-    private readonly tasks: Pick<TaskService, "getCurrentRun">,
     private readonly suggestions: Pick<SuggestionService, "suggestQuestions">,
-    private readonly autoInquiry: Pick<AutoInquiryService, "getProgress">,
     private readonly llm: LlmDeps,
   ) {}
 
@@ -198,18 +190,12 @@ export class BriefService {
       ? cached
       : await this.recomputeSingleflight(actor, caseId, manifest, fingerprint, cached);
 
-    // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、自动研判进度、报告覆盖度。
-    const [task, autoInquiry, coverage] = await Promise.all([
-      this.tasks.getCurrentRun(actor, caseId),
-      this.autoInquiry.getProgress(caseId),
-      computeCoverage(this.paths, caseId, manifest),
-    ]);
+    // 实时字段每次现算叠加（不进缓存/指纹）：autopilot 开关、报告覆盖度。
+    const coverage = await computeCoverage(this.paths, caseId, manifest);
     return {
       ...snapshot,
       caseId,
-      task,
       autopilot: manifest.autopilot !== false,
-      autoInquiry,
       coverage,
     };
   }

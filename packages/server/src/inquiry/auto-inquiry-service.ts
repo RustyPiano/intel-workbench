@@ -1,12 +1,9 @@
-import { mkdir, readFile } from "node:fs/promises";
-import path from "node:path";
-
 import type { AuditService } from "../audit/audit-service.js";
-import type { DataPaths } from "../data/paths.js";
 import type { AuditResult, Identity, Inquiry } from "../domain/types.js";
 import type { JobContext } from "../jobs/job-registry.js";
 import type { SuggestionService } from "../suggestion/suggestion-service.js";
-import { writeFileAtomic } from "../util/atomic.js";
+import type { InquiryBatchItem } from "../workflow/types.js";
+import type { InquiryProgressSink } from "../workflow/workflow-service.js";
 import type { InquiryService } from "./inquiry-service.js";
 
 /**
@@ -17,11 +14,11 @@ import type { InquiryService } from "./inquiry-service.js";
  *
  * 顺序执行、默认每案上限 8 题（`MINI_AGENT_AUTO_INQUIRY_MAX` 可调）；AbortSignal 贯通到
  * 底层 agent（`ask` 的 signal 直达 conversation.send）；单题失败记录后继续下一题，不中断批次；
- * 取消中止整批。进度落盘 `cases/<id>/auto-inquiry.json` 供简报轮询（每请求现算，不进 brief 指纹）。
+ * 取消中止整批。逐题进度经 WorkflowService（唯一写者）回写 workflow.json 的 steps.inquiries.items。
  *
  * 审计双轨（D6，与 M1 一致）：本服务的批处理事件（`auto-inquiry.*`）与底层 `inquiry.create`
- * 均以触发者真实身份记账（操作链）；作为流水线执行体被 AutopilotService 调用时，后者另以
- * `system-autopilot` 记 `autopilot.advance/fail`（决策链）。
+ * 均以触发者真实身份记账（操作链）；作为流水线执行体被 WorkflowService 预跑时，后者另以
+ * `system-autopilot` 记 `workflow.advance/fail`（决策链）。
  */
 
 const DEFAULT_MAX = 8;
@@ -44,7 +41,7 @@ export interface AutoInquiryItem {
   attempts?: number;
 }
 
-/** 批处理进度（落 `cases/<id>/auto-inquiry.json`）。 */
+/** 批处理进度（内存态；逐题 items 经 WorkflowService 回写 workflow.json）。 */
 export interface AutoInquiryProgress {
   status: "running" | "done" | "cancelled" | "failed";
   total: number;
@@ -99,27 +96,28 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** AutoInquiryItem → workflow 冻结契约 InquiryBatchItem（仅保留契约字段）。 */
+function toBatchItems(items: AutoInquiryItem[]): InquiryBatchItem[] {
+  return items.map((item) => ({
+    question: item.question,
+    status: item.status,
+    ...(item.error ? { error: item.error } : {}),
+    ...(item.inquiryId ? { inquiryId: item.inquiryId } : {}),
+  }));
+}
+
 export class AutoInquiryService {
   constructor(
-    private readonly paths: DataPaths,
     private readonly audit: AuditService,
     private readonly suggestions: Pick<SuggestionService, "suggestQuestionsWithLLM">,
     private readonly inquiries: Pick<InquiryService, "ask" | "list">,
+    /** 进度回写 sink（WorkflowService；唯一写者，避免双写 workflow.json）。 */
+    private readonly sink: InquiryProgressSink,
   ) {}
 
-  /** 读批处理进度（供简报现算叠加 / 轮询）。缺失或损坏返回 null。 */
-  async getProgress(caseId: string): Promise<AutoInquiryProgress | null> {
-    try {
-      const parsed = JSON.parse(await readFile(this.file(caseId), "utf8")) as AutoInquiryProgress;
-      return parsed && Array.isArray(parsed.items) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-
   /**
-   * 运行一批自动研判。作为 JobRegistry 的 `auto-inquiry` job 执行体 / AutopilotService 的第三个
-   * 执行体调用。出题 → 逐题顺序问答 → 落盘进度。ctx.signal 取消即中止批次并标记 cancelled。
+   * 运行一批自动研判。作为 JobRegistry 的 `auto-inquiry` job 执行体 / WorkflowService 预跑的第三个
+   * 执行体调用。出题 → 逐题顺序问答 → 经 sink 回写进度。ctx.signal 取消即中止批次并标记 cancelled。
    */
   async run(actor: Identity, caseId: string, ctx: JobContext): Promise<AutoInquiryProgress> {
     const max = readMax();
@@ -150,7 +148,7 @@ export class AutoInquiryService {
       startedAt: now(),
       updatedAt: now(),
     };
-    await this.write(caseId, progress);
+    await this.sink.setInquiryItems(caseId, toBatchItems(progress.items));
     ctx.setProgress({ phase: "auto-inquiry", done: 0, total: questions.length });
     await this.auditBatch(actor, caseId, "auto-inquiry.batch", "ok", { total: questions.length, max });
 
@@ -163,7 +161,7 @@ export class AutoInquiryService {
       item.status = "running";
       progress.currentIndex = i;
       progress.updatedAt = now();
-      await this.write(caseId, progress);
+      await this.sink.setInquiryItems(caseId, toBatchItems(progress.items));
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
         item.attempts = attempt;
@@ -183,7 +181,7 @@ export class AutoInquiryService {
             progress.status = "cancelled";
             progress.currentIndex = null;
             progress.updatedAt = now();
-            await this.write(caseId, progress);
+            await this.sink.setInquiryItems(caseId, toBatchItems(progress.items));
             break;
           }
           item.error = message(e);
@@ -202,14 +200,14 @@ export class AutoInquiryService {
       progress.currentIndex = null;
       progress.updatedAt = now();
       ctx.setProgress({ phase: "auto-inquiry", done: progress.completed, total: questions.length });
-      await this.write(caseId, progress);
+      await this.sink.setInquiryItems(caseId, toBatchItems(progress.items));
     }
 
     if (progress.status === "running") progress.status = progress.items.some((item) => item.status === "failed") ? "failed" : "done";
     progress.currentIndex = null;
     progress.finishedAt = now();
     progress.updatedAt = now();
-    await this.write(caseId, progress);
+    await this.sink.setInquiryItems(caseId, toBatchItems(progress.items));
     await this.auditBatch(actor, caseId, "auto-inquiry.done", progress.status === "failed" ? "error" : "ok", {
       status: progress.status,
       total: progress.total,
@@ -219,16 +217,6 @@ export class AutoInquiryService {
     });
     if (progress.status === "failed") throw new AutoInquiryBatchError(progress);
     return progress;
-  }
-
-  private file(caseId: string): string {
-    return path.join(this.paths.caseDir(caseId), "auto-inquiry.json");
-  }
-
-  private async write(caseId: string, progress: AutoInquiryProgress): Promise<void> {
-    const file = this.file(caseId);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFileAtomic(file, `${JSON.stringify(progress, null, 2)}\n`);
   }
 
   private async auditBatch(actor: Identity, caseId: string, action: string, result: AuditResult, detail: Record<string, unknown>): Promise<void> {

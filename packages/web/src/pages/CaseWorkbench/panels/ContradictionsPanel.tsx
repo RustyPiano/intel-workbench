@@ -4,7 +4,6 @@ import {
   acknowledgeContradiction,
   listContradictions,
   type ApiCitation,
-  type ApiClaim,
   type ContradictionAcknowledgementStatus,
   type ContradictionDetectionResult,
 } from "../../../api";
@@ -19,10 +18,6 @@ const CONTRADICTION_RULE_LABELS: Record<string, string> = {
   "numeric-mismatch": "数值冲突",
   "opposite-status": "状态相反",
 };
-
-function citedClaim(text: string, citation: ApiCitation): ApiClaim {
-  return { text, type: "fact", status: "verified", citations: [citation] };
-}
 
 export function ContradictionsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
@@ -153,7 +148,7 @@ export function ContradictionsPanel() {
                     <small>归一值：{claim.normalized_value}</small>
                   ) : null}
                 </div>
-                <CitationChips claim={citedClaim(claim.text, claim.citation)} onFrame={setFrameCite} />
+                <CitationChips citations={[claim.citation]} onFrame={setFrameCite} />
               </div>
             ))}
             {propositions.length > 20 ? <div className="proposition-more">仅显示前 20 条</div> : null}
@@ -221,14 +216,14 @@ export function ContradictionsPanel() {
                     <div className="contradiction-claim__label">陈述 A</div>
                     <div>
                       {item.claim_a.text}
-                      <CitationChips claim={citedClaim(item.claim_a.text, item.claim_a.citation)} onFrame={setFrameCite} />
+                      <CitationChips citations={[item.claim_a.citation]} onFrame={setFrameCite} />
                     </div>
                   </div>
                   <div className="contradiction-claim">
                     <div className="contradiction-claim__label">陈述 B</div>
                     <div>
                       {item.claim_b.text}
-                      <CitationChips claim={citedClaim(item.claim_b.text, item.claim_b.citation)} onFrame={setFrameCite} />
+                      <CitationChips citations={[item.claim_b.citation]} onFrame={setFrameCite} />
                     </div>
                   </div>
                 </div>

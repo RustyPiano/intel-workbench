@@ -20,7 +20,7 @@ import {
 import { useSession } from "../../../state/session";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
-import { supportStatusLabel } from "../components/helpers";
+import { verdictLabel } from "../components/helpers";
 
 const FINDING_STATUS_LABELS: Record<ApiFinding["review_status"], string> = {
   draft: "待复核",
@@ -35,14 +35,8 @@ const SUGGESTION_SOURCE_LABELS: Record<FindingSuggestionSource, string> = {
   "inquiry-structured": "结构化研判",
 };
 
-function isPromotableClaim(claim: ApiClaim): boolean {
-  if (claim.citations.length === 0) return false;
-  if (claim.support_status === "unsupported") return false;
-  return claim.support_status === "supported" || claim.support_status === "support-unverified" || claim.status === "verified";
-}
-
 function averageCitationConfidence(claim: ApiClaim): number {
-  const citations = claim.citations.filter((citation) => citation.support_status !== "unsupported");
+  const citations = claim.citations.filter((citation) => citation.verdict === "supports");
   if (citations.length === 0) return 0.5;
   return citations.reduce((sum, citation) => sum + citation.confidence, 0) / citations.length;
 }
@@ -104,8 +98,9 @@ export function FindingsPanel() {
   const createTitle = canCreate ? "加入核验池，等待人工复核" : "仅专题创建者或管理员可加入核验池";
   const reviewTitle = canReview ? "核准后可进入报告复核" : "仅保密员或管理员可复核核验池条目";
   const inquiryPath = caseId ? `/cases/${encodeURIComponent(caseId)}/inquiry` : "../inquiry";
+  // 只按服务端派生的 support 字段筛选展示；最终晋升资格由 POST 响应的 promotion 判定，前端不复制规则。
   const claimRows = inquiries.flatMap((inquiry) =>
-    inquiry.claims.map((claim, index) => ({ inquiry, claim, ref: `${inquiry.id}:${index}` })).filter((row) => isPromotableClaim(row.claim)),
+    inquiry.claims.map((claim) => ({ inquiry, claim, ref: claim.id })).filter((row) => row.claim.support === "supported"),
   );
   const visibleSuggestions = findingSuggestions.filter((s) => !dismissedSuggestionIds.has(s.id));
   const knownConclusionTexts = new Set([
@@ -114,12 +109,12 @@ export function FindingsPanel() {
   ]);
   const availableClaimRows = claimRows.filter(({ claim }) => !knownConclusionTexts.has(claim.text.trim()));
 
-  const handleCreate = async (claim: ApiClaim, ref: string) => {
+  const handleCreate = async (inquiryId: string, claim: ApiClaim) => {
     if (!caseId || busy) return;
-    setBusy(`create:${ref}`);
+    setBusy(`create:${claim.id}`);
     setError(null);
     try {
-      await createFinding(caseId, { claim, confidence: averageCitationConfidence(claim) });
+      await createFinding(caseId, { inquiryId, claimId: claim.id, confidence: averageCitationConfidence(claim) });
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -304,19 +299,19 @@ export function FindingsPanel() {
               <div style={{ color: "var(--text-dim)", fontSize: "12px" }}>置信度 {Math.round(finding.confidence * 100)}%</div>
               <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
                 支持引用
-                <CitationChips claim={{ text: finding.conclusion, type: "fact", status: "verified", citations: finding.supporting_citations }} onFrame={setFrameCite} />
+                <CitationChips citations={finding.supporting_citations} onFrame={setFrameCite} />
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
                 {finding.supporting_citations.map((citation, index) => (
                   <span key={`${citation.material_id}:${citation.content_hash}:${index}`}>
-                    引用 {index + 1} 支持状态：{citation.support_status ? supportStatusLabel(citation.support_status) : "未标注"}
+                    引用 {index + 1} 支持性：{verdictLabel(citation.verdict)}
                   </span>
                 ))}
               </div>
               {finding.opposing_citations.length > 0 ? (
                 <div style={{ fontSize: "13px", lineHeight: "1.7", color: "var(--text-dim)" }}>
                   相反引用
-                  <CitationChips claim={{ text: finding.conclusion, type: "fact", status: "verified", citations: finding.opposing_citations }} onFrame={setFrameCite} />
+                  <CitationChips citations={finding.opposing_citations} onFrame={setFrameCite} />
                 </div>
               ) : null}
               <div style={{ display: "flex", gap: "8px" }}>
@@ -346,13 +341,13 @@ export function FindingsPanel() {
             {claimRows.length > 0 ? "可用问答答案已在左侧待入池候选或核验池中。" : "左侧可自动发现候选结论；也可以手动补充核验生成带引用答案。"}
           </div>
         ) : (
-          availableClaimRows.map(({ claim, ref }) => (
+          availableClaimRows.map(({ inquiry, claim, ref }) => (
             <div key={ref} style={{ borderBottom: "1px solid var(--border)", paddingBottom: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
               <div style={{ fontSize: "13px", lineHeight: "1.6" }}>
                 {claim.text}
-                <CitationChips claim={claim} onFrame={setFrameCite} />
+                <CitationChips citations={claim.citations} onFrame={setFrameCite} />
               </div>
-              <button type="button" className="btn btn--primary" style={{ padding: "5px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canCreate} title={createTitle} onClick={() => handleCreate(claim, ref)}>
+              <button type="button" className="btn btn--primary" style={{ padding: "5px 10px", fontSize: "12px" }} disabled={Boolean(busy) || !canCreate} title={createTitle} onClick={() => handleCreate(inquiry.id, claim)}>
                 {busy === `create:${ref}` ? "转入中…" : "转入核验池"}
               </button>
             </div>

@@ -1,6 +1,6 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { type ApiCitation, type ApiClaim } from "../../../api";
-import { playCitedSegment, supportStatusLabel } from "./helpers";
+import { type ApiCitation } from "../../../api";
+import { playCitedSegment, verdictLabel } from "./helpers";
 
 function docCitationFocus(citation: ApiCitation): string | null {
   const params = new URLSearchParams({ material: citation.material_id });
@@ -21,20 +21,19 @@ function docCitationFocus(citation: ApiCitation): string | null {
   return params.toString();
 }
 
-export function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c: ApiCitation) => void }) {
+export function CitationChips({ citations, onFrame }: { citations: ApiCitation[]; onFrame: (c: ApiCitation) => void }) {
   const navigate = useNavigate();
   const { id: caseId } = useParams<{ id: string }>();
-  if (claim.citations.length === 0) return null;
+  if (citations.length === 0) return null;
   return (
     <span className="citation-list">
-      {claim.citations.map((c, i) => {
+      {citations.map((c, i) => {
         // 音频引用带时间码 → 点击回听片段；视频/图像带 bbox/时间码 → 点击取帧框选（硬验收，§4.3/§6）。
         const audioTc = c.modality === "audio" ? c.locator.timecode : undefined;
         const framed = (c.modality === "video" || c.modality === "image") && Boolean(c.locator.bbox || c.locator.timecode);
         const docFocus = c.modality === "doc" && caseId ? docCitationFocus(c) : null;
         const quote = c.quote ?? c.snippet;
-        const supportStatus = c.support_status ?? c.support_label;
-        const supportLabel = supportStatusLabel(supportStatus);
+        const supportLabel = verdictLabel(c.verdict);
         const support = supportLabel ? ` · 支持性：${supportLabel}` : "";
         const loc = c.locator.timecode
           ? ` · 时间：${c.locator.timecode}秒${c.locator.speaker ? ` · 说话人：${c.locator.speaker}` : ""}`

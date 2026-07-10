@@ -67,13 +67,14 @@ async function createCaseWithDocs(fixture: Fixture, name: string, docs: { filena
   return caseId;
 }
 
-function stableInquiry(inquiry: Inquiry): Omit<Inquiry, "id" | "ts"> {
+function stableInquiry(inquiry: Inquiry) {
   return {
     user: inquiry.user,
     question: inquiry.question,
     status: inquiry.status,
     answer: inquiry.answer,
-    claims: inquiry.claims,
+    // claim id 是每次生成随机分配的稳定标识，两次独立问答必然不同，比较时剥离。
+    claims: inquiry.claims.map(({ id: _claimId, ...rest }) => rest),
   };
 }
 

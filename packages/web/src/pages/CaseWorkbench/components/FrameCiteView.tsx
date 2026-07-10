@@ -1,12 +1,12 @@
 import { type ApiCitation } from "../../../api";
 import { BboxImage } from "./BboxImage";
-import { parseTimecode, supportStatusLabel } from "./helpers";
+import { parseTimecode, verdictLabel } from "./helpers";
 
 export function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: () => void }) {
   const tc = parseTimecode(cite.locator.timecode);
   const frameT = cite.modality === "video" && tc ? tc[0] : undefined;
   const quote = cite.quote ?? cite.snippet;
-  const support = cite.support_status ?? cite.support_label;
+  const support = verdictLabel(cite.verdict);
   const boxes = cite.locator.bbox ? [{ bbox: cite.locator.bbox, label: quote }] : [];
   const artifactHash = cite.locator.artifact_hash;
   return (
@@ -24,7 +24,7 @@ export function FrameCiteView({ cite, onClose }: { cite: ApiCitation; onClose: (
         </button>
       </div>
       <BboxImage materialId={cite.material_id} frameT={frameT} boxes={boxes} />
-      {support ? <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>支持性：{supportStatusLabel(support)}</div> : null}
+      {support ? <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>支持性：{support}</div> : null}
       <div style={{ fontSize: "12px", color: "var(--text)" }}>{quote}</div>
       {artifactHash ? (
         <button

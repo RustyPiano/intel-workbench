@@ -50,7 +50,7 @@ export function resolveValidCitations(
 }
 
 /**
- * 结论支持度聚合（Batch A：原 support_status 聚合语义改名迁移）。
+ * 结论支持度聚合。
  * hashGrounded=false（存在未接地引用）直接判 unsupported；否则全 supports → supported，
  * 全非 supports/pending → unsupported，其余（混入 pending）→ pending。
  */

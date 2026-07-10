@@ -402,7 +402,7 @@ export class ReportService {
         } else if (finding.review_status !== "approved") {
           reasons.add("finding:not-approved");
         } else if (!this.isReportableFinding(finding)) {
-          reasons.add("citation:support-unverified");
+          reasons.add("citation:unjudged");
         } else {
           sectionFindings.push(finding);
           reportFindings.set(finding.id, finding);
@@ -462,7 +462,7 @@ export class ReportService {
     let hasValidSpan = false;
     for (const citation of finding.supporting_citations) {
       if (citation.verdict !== "supports") {
-        reasons.add("citation:support-unverified");
+        reasons.add("citation:unjudged");
         continue;
       }
       const validation = this.validateCitation(citation, chunks);

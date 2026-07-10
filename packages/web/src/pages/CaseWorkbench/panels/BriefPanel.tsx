@@ -11,7 +11,6 @@ import {
   type ApiBriefContradiction,
   type ApiBriefOverviewSentence,
   type ApiCitation,
-  type ApiClaim,
 } from "../../../api";
 import { useSession } from "../../../state/session";
 import { useWorkbenchContext } from "../../CaseWorkbench";
@@ -32,11 +31,6 @@ import {
  * 待核问题 / 报告覆盖度）各自深链到对应 Tab。概览段由服务端 LLM 生成并逐句绑定引用，
  * 引用可点回素材原文；模型不可用时降级为纯统计简报，页面明示。
  */
-
-/** 概览句 / 矛盾陈述复用 CitationChips：把单条引用包成最小 claim 交给现有溯源芯片。 */
-function citationClaim(text: string, citation: ApiCitation): ApiClaim {
-  return { text, type: "fact", status: "verified", citations: [citation] };
-}
 
 function BriefSection({
   title,
@@ -92,7 +86,7 @@ function OverviewBlock({ brief, onFrame, caseId }: { brief: ApiBrief; onFrame: (
           {brief.overview.map((s: ApiBriefOverviewSentence, i) => (
             <li key={i} className="brief-overview__item">
               <span className="brief-overview__text">{s.text}</span>
-              <CitationChips claim={citationClaim(s.text, s.citation)} onFrame={onFrame} />
+              <CitationChips citations={[s.citation]} onFrame={onFrame} />
             </li>
           ))}
         </ol>
@@ -116,12 +110,12 @@ function ContradictionCard({ c, onFrame }: { c: ApiBriefContradiction; onFrame: 
       <div className="brief-contradiction__claim">
         <span className="brief-contradiction__tag">说法 A</span>
         <span>{c.claim_a.text}</span>
-        <CitationChips claim={citationClaim(c.claim_a.text, c.claim_a.citation)} onFrame={onFrame} />
+        <CitationChips citations={[c.claim_a.citation]} onFrame={onFrame} />
       </div>
       <div className="brief-contradiction__claim">
         <span className="brief-contradiction__tag">说法 B</span>
         <span>{c.claim_b.text}</span>
-        <CitationChips claim={citationClaim(c.claim_b.text, c.claim_b.citation)} onFrame={onFrame} />
+        <CitationChips citations={[c.claim_b.citation]} onFrame={onFrame} />
       </div>
       {c.rationale ? <div className="brief-contradiction__rationale">{c.rationale}</div> : null}
     </div>

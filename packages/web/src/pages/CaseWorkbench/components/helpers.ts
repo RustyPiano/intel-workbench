@@ -1,6 +1,7 @@
 import {
   fetchMaterialRawUrl,
   type ApiCitation,
+  type ApiClaim,
   type ApiMaterial,
   type MaterialContent,
   type ApiElement,
@@ -15,16 +16,24 @@ export function scrollWorkbenchBodyIntoView() {
   }, 0);
 }
 
-export const SUPPORT_STATUS_LABELS: Record<NonNullable<ApiCitation["support_status"]>, string> = {
-  supported: "已支撑",
-  "support-unverified": "待复核支撑",
-  unsupported: "不支撑",
+export const CITATION_VERDICT_LABELS: Record<ApiCitation["verdict"], string> = {
+  supports: "支撑",
+  contradicts: "相矛盾",
+  mentions: "仅提及",
+  context: "背景信息",
+  pending: "待裁判",
 };
 
-export function supportStatusLabel(status?: string): string {
-  if (!status) return "";
-  return SUPPORT_STATUS_LABELS[status as NonNullable<ApiCitation["support_status"]>] ?? status;
+export function verdictLabel(verdict?: ApiCitation["verdict"]): string {
+  if (!verdict) return "";
+  return CITATION_VERDICT_LABELS[verdict] ?? verdict;
 }
+
+export const CLAIM_SUPPORT_LABELS: Record<ApiClaim["support"], string> = {
+  supported: "已支撑",
+  pending: "待支撑裁判",
+  unsupported: "不支撑",
+};
 
 /** 解析时间码 "start-end"（秒）→ [start, end]（二期 P2.3a）。 */
 export function parseTimecode(tc?: string): [number, number] | null {

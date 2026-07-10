@@ -17,12 +17,12 @@ import { useSession } from "../../../state/session";
 import { CitationChips } from "../components/CitationChips";
 import { FrameCiteView } from "../components/FrameCiteView";
 import { InquiryRunView } from "../components/inquiry/InquiryRunView";
-import { supportStatusLabel } from "../components/helpers";
+import { CLAIM_SUPPORT_LABELS } from "../components/helpers";
 
 function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: ApiInquiry; onFrame: (c: ApiCitation) => void; reviewedRefs: Set<string>; onReview: (ref: string) => void }) {
   const claims = inquiry.claims || [];
   if (inquiry.status !== "answered") {
-    const unverified = claims.filter((c) => c.status === "unverified");
+    const unverified = claims.filter((c) => c.support !== "supported");
     const isError = inquiry.status === "error";
     const textColor = isError ? "var(--danger-light)" : "var(--warn-light)";
     return (
@@ -48,7 +48,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
                 return (
                   <div key={i} style={{ marginTop: "4px" }}>
                     · {c.text}
-                    {c.support_status ? <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "6px" }}>{supportStatusLabel(c.support_status)}</span> : null}
+                    <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "6px" }}>{CLAIM_SUPPORT_LABELS[c.support]}</span>
                     {reviewedRefs.has(ref)
                       ? <span style={{ color: "#4caf50", fontSize: "11px", marginLeft: "6px" }}>✓ 已校对</span>
                       : <button type="button" className="btn btn--ghost" style={{ padding: "1px 8px", fontSize: "11px", marginLeft: "6px" }} onClick={() => onReview(ref)}>点此校对</button>
@@ -62,7 +62,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
       </div>
     );
   }
-  const verified = claims.filter((c) => c.status === "verified" || c.support_status === "support-unverified");
+  const verified = claims.filter((c) => c.support === "supported" || c.support === "pending");
   return (
     <div style={{ fontSize: "13px", lineHeight: "1.7" }}>
       {verified.map((c, i) => {
@@ -70,8 +70,8 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
         return (
           <div key={i} style={{ marginBottom: "6px" }}>
             {i + 1}. {c.text}
-            {c.support_status === "support-unverified" ? (
-              <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>{supportStatusLabel(c.support_status)}</span>
+            {c.support === "pending" ? (
+              <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>{CLAIM_SUPPORT_LABELS[c.support]}</span>
             ) : null}
             {c.type === "inference" ? (
               <>
@@ -82,7 +82,7 @@ function InquiryAnswer({ inquiry, onFrame, reviewedRefs, onReview }: { inquiry: 
                 }
               </>
             ) : null}
-            <CitationChips claim={c} onFrame={onFrame} />
+            <CitationChips citations={c.citations} onFrame={onFrame} />
           </div>
         );
       })}

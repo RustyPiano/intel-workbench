@@ -4,7 +4,6 @@ import {
   getElementGraph,
   listElements,
   type ApiCitation,
-  type ApiClaim,
   type ApiElement,
   type ElementGraph,
   type ElementType,
@@ -292,11 +291,9 @@ function ElementGraphView({ caseId }: { caseId: string }) {
     positions.set(node.id, { x: 410 + Math.cos(angle) * 290, y: 310 + Math.sin(angle) * 230 });
   });
   const selectedEdge = graph.edges.find((edge) => `${edge.source}__${edge.target}` === selectedEdgeKey) ?? null;
-  const selectedClaim: ApiClaim | null = selectedEdge
+  const selectedEdgeDetail = selectedEdge
     ? {
         text: `${nodeById.get(selectedEdge.source)?.name ?? selectedEdge.source} × ${nodeById.get(selectedEdge.target)?.name ?? selectedEdge.target}（共现 ${selectedEdge.weight} 次）`,
-        type: "fact",
-        status: "verified",
         citations: selectedEdge.citations,
       }
     : null;
@@ -358,13 +355,13 @@ function ElementGraphView({ caseId }: { caseId: string }) {
               ) : null}
             </div>
           </div>
-          {selectedClaim ? (
+          {selectedEdgeDetail ? (
             <div className="graph-selection graph-edge-detail" ref={edgeDetailRef}>
               <div className="graph-selection__head">
-                <strong>{selectedClaim.text}</strong>
+                <strong>{selectedEdgeDetail.text}</strong>
                 <span>共现证据</span>
               </div>
-              <CitationChips claim={selectedClaim} onFrame={setFrameCite} />
+              <CitationChips citations={selectedEdgeDetail.citations} onFrame={setFrameCite} />
               <small>这些引用说明两个要素在同一片段中一起出现；是否构成有效判断，需要打开素材原文核对。</small>
             </div>
           ) : null}
@@ -514,7 +511,6 @@ function ElementGraphView({ caseId }: { caseId: string }) {
 }
 
 function TimelinePointRow({ point, accentBorder, onFrame }: { point: TimelinePoint; accentBorder: string; onFrame: (c: ApiCitation) => void }) {
-  const claim: ApiClaim = { text: point.label, type: "fact", status: "verified", citations: point.citations };
   return (
     <div style={{ borderLeft: `2px solid ${accentBorder}`, padding: "8px 0 8px 14px", display: "flex", flexDirection: "column", gap: "8px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
@@ -532,7 +528,7 @@ function TimelinePointRow({ point, accentBorder, onFrame }: { point: TimelinePoi
       ) : null}
       <div style={{ fontSize: "12px", color: "var(--text-dim)" }}>
         出处
-        <CitationChips claim={claim} onFrame={onFrame} />
+        <CitationChips citations={point.citations} onFrame={onFrame} />
       </div>
     </div>
   );

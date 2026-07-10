@@ -168,15 +168,17 @@ export interface ApiCitation {
   quote_char_start?: number;
   quote_char_end?: number;
   quote_hash?: string;
-  support_label?: "supports" | "mentions" | "contradicts" | "context-only" | "unknown";
-  support_status?: "supported" | "support-unverified" | "unsupported";
+  /** 支持性裁判结果（单一判定链）：cite 产出即 pending，LLM 裁判后写实际判定。 */
+  verdict: "supports" | "contradicts" | "mentions" | "context" | "pending";
 }
 
 export interface ApiClaim {
+  /** 服务端分配的稳定 id，晋升 Finding 时作为 claimId 传回。 */
+  id: string;
   text: string;
   type: "fact" | "inference";
-  status: "verified" | "unverified";
-  support_status?: "supported" | "support-unverified" | "unsupported";
+  /** 服务端从引用 verdict 聚合派生，前端只展示、不复算。 */
+  support: "supported" | "pending" | "unsupported";
   citations: ApiCitation[];
 }
 
@@ -292,6 +294,8 @@ export interface ApiFinding {
   reviewed_by?: string;
   reviewed_at?: string;
   open_questions: string[];
+  /** 晋升来源（问答 claim 晋升时记录，用于服务端 already-promoted 判定）。 */
+  source_claim?: { inquiryId: string; claimId: string };
 }
 
 export type ReportStatus = "draft" | "in_review" | "approved" | "exported";
@@ -869,12 +873,26 @@ export function listFindings(caseId: string): Promise<ApiFinding[]> {
   );
 }
 
-export function createFinding(caseId: string, input: { claim?: ApiClaim; conclusion?: string; supporting_citations?: ApiCitation[]; opposing_citations?: ApiCitation[]; confidence?: number }): Promise<ApiFinding> {
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/findings`, {
+const PROMOTION_REASON_LABELS: Record<string, string> = {
+  "not-supported": "该结论未通过支持性裁判，不能转入核验池",
+  "no-valid-citation": "该结论没有有效的支撑引用，不能转入核验池",
+  "already-promoted": "该结论已转入过核验池",
+};
+
+/** 晋升只传 (inquiryId, claimId)：服务端重新加载 claim、重校验引用并重算支持性，前端不再复制规则。 */
+export async function createFinding(caseId: string, input: { inquiryId: string; claimId: string; confidence?: number }): Promise<ApiFinding> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/findings`, {
     method: "POST",
     headers: headers(true),
     body: JSON.stringify(input),
-  }).then((r) => unwrap<ApiFinding>(r, "finding"));
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; finding?: ApiFinding; promotion?: { eligible: boolean; reason?: string }; message?: string };
+  if (!res.ok || body.ok === false || !body.finding) {
+    noteStatus(res);
+    const reason = body.promotion?.reason;
+    throw new Error((reason && PROMOTION_REASON_LABELS[reason]) || body.message || `请求失败（HTTP ${res.status}）`);
+  }
+  return body.finding;
 }
 
 export function reviewFinding(caseId: string, findingId: string, review_status: Extract<FindingReviewStatus, "approved" | "rejected">): Promise<ApiFinding> {

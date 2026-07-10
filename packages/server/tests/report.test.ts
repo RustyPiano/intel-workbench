@@ -67,7 +67,8 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       { filename: "legacy.txt", content: `前情。${conclusion}后续。` },
     ]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    const citation = chunkToCitation(chunk, "legacy.txt", 0.9);
+    // 本测试验证 no-span 导出闸；引用置为已裁判 supports，避免先被"未裁判引用不可报告"过滤。
+    const citation = { ...chunkToCitation(chunk, "legacy.txt", 0.9), verdict: "supports" as const };
     const finding: Finding = {
       id: "f-legacy",
       caseId,
@@ -439,7 +440,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       .resolves.toMatchObject({ spec: { classification: "绝密" } });
   });
 
-  it("旧数据中含 support-unverified 引用的 Finding 不进入报告候选", async () => {
+  it("含未裁判引用的 Finding 不进入报告候选", async () => {
     await materials.ingest(OPERATOR, caseId, [{ filename: "unverified.txt", content: "待核线索。" }]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
     const citation = { ...chunkToCitation(chunk, "unverified.txt", 0.8, "待核线索。"), verdict: "pending" as const };

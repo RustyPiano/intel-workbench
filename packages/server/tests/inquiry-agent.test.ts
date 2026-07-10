@@ -353,7 +353,7 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.claims[0]?.citations[0]?.quote_hash).not.toBe(inquiry.claims[1]?.citations[0]?.quote_hash);
   });
 
-  it("marks a claim support-unverified when any citation is not fully supported", async () => {
+  it("marks a claim support pending when any citation is not fully supported", async () => {
     const caseId = await createCaseWithDocs(fixture, "agent mixed support", [
       { filename: "intel.txt", content: "雷达记录到蓝色货轮。港口日志显示红色拖船。" },
     ]);
@@ -380,7 +380,7 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.submitted_findings?.[0]?.opposing_citations[0]?.verdict).toBe("contradicts");
   });
 
-  it("keeps support-unverified evidence in claims but excludes the submitted Finding candidate", async () => {
+  it("keeps pending-verdict evidence in claims but excludes the submitted Finding candidate", async () => {
     const caseId = await createCaseWithDocs(fixture, "agent 未核支持候选", [
       { filename: "gate.txt", content: "舰船线索：门岗登记记录车辆 2 辆。OCR 识别记录车辆 4 辆。" },
     ]);

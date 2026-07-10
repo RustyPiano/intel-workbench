@@ -39,3 +39,7 @@ __pycache__/
 !.mini-agent/sessions/
 !.mini-agent/logs/
 !.mini-agent/artifacts/
+
+# 数据根独占锁（运行期生成，优雅退出即删）
+/.workbench.lock
+/packages/server/.workbench.lock

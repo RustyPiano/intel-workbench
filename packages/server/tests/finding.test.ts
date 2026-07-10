@@ -139,6 +139,23 @@ describe("FindingService", () => {
     await expect(findings.create(OPERATOR, caseId, { claim })).rejects.toMatchObject({ status: 400 });
   });
 
+  it("rejects support-unverified claim and citation promotion", async () => {
+    const cite = await validCitation();
+    const claim: InquiryClaim = {
+      text: "待核结论",
+      type: "fact",
+      status: "unverified",
+      support_status: "support-unverified",
+      citations: [{ ...cite, support_status: "support-unverified" }],
+    };
+
+    await expect(findings.create(OPERATOR, caseId, { claim })).rejects.toMatchObject({ status: 400 });
+    await expect(findings.create(OPERATOR, caseId, {
+      conclusion: "待核结论",
+      supporting_citations: [{ ...cite, support_status: "support-unverified" }],
+    })).rejects.toMatchObject({ status: 400 });
+  });
+
   it("T6: finding create denied for non-owner/non-admin and records deny audit", async () => {
     const cite = await validCitation();
 

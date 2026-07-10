@@ -12,7 +12,7 @@ export function useExtractionJob(
   caseId: string,
   kind: JobKind,
   onDone: () => void,
-): { job: ApiJob | null; error: string | null; start: () => void; cancel: () => void } {
+): { job: ApiJob | null; error: string | null; start: () => Promise<void>; cancel: () => Promise<void> } {
   const [job, setJob] = useState<ApiJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -106,35 +106,31 @@ export function useExtractionJob(
     };
   }, [applyJob, caseId, clearPolling, kind, startPolling]);
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     if (!caseId || jobRef.current?.state === "running") return;
     const generation = generationRef.current;
-    void (async () => {
-      clearPolling();
-      setError(null);
-      try {
-        const next = await startJob(caseId, kind);
-        if (!aliveRef.current || generation !== generationRef.current) return;
-        applyJob(next);
-        if (next.state === "running") startPolling();
-      } catch (e) {
-        if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
-      }
-    })();
+    clearPolling();
+    setError(null);
+    try {
+      const next = await startJob(caseId, kind);
+      if (!aliveRef.current || generation !== generationRef.current) return;
+      applyJob(next);
+      if (next.state === "running") startPolling();
+    } catch (e) {
+      if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
+    }
   }, [applyJob, caseId, clearPolling, kind, startPolling]);
 
-  const cancel = useCallback(() => {
+  const cancel = useCallback(async () => {
     if (!caseId || jobRef.current?.state !== "running") return;
     const generation = generationRef.current;
-    void (async () => {
-      setError(null);
-      try {
-        await cancelJob(caseId, kind);
-        if (aliveRef.current && generation === generationRef.current && jobRef.current?.state === "running" && !timerRef.current) startPolling();
-      } catch (e) {
-        if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
-      }
-    })();
+    setError(null);
+    try {
+      await cancelJob(caseId, kind);
+      if (aliveRef.current && generation === generationRef.current && jobRef.current?.state === "running" && !timerRef.current) startPolling();
+    } catch (e) {
+      if (aliveRef.current && generation === generationRef.current) setError((e as Error).message);
+    }
   }, [caseId, kind, startPolling]);
 
   return { job, error, start, cancel };

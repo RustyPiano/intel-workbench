@@ -135,15 +135,26 @@ function formatElementSummaries(elements: readonly ElementSummary[]): string {
 interface RawLLMQuestion {
   question?: unknown;
   rationale?: unknown;
+  evidence_quotes?: unknown;
 }
 
-/** 从 `generateJson` 解析结果中取出 `questions` 数组，容忍缺字段/坏类型（丢弃而非抛错）。 */
-function parseLLMQuestions(raw: Record<string, unknown>): QuestionSuggestion[] {
+const UNSUPPORTED_PREMISE = /篡改|冒充|串通|掩盖|伪造|走私|内鬼|作案|违法/;
+const OPEN_QUESTION = /如何|哪些|为什么|为何|何种|怎样|什么证据|有何/;
+
+/** LLM 问题必须带可逐字回查的摘要引文；无依据的指控性前提直接丢弃。 */
+function parseLLMQuestions(raw: Record<string, unknown>, evidenceText: string): QuestionSuggestion[] {
   const list = Array.isArray(raw.questions) ? (raw.questions as RawLLMQuestion[]) : [];
   const result: QuestionSuggestion[] = [];
   for (const item of list) {
     const question = typeof item?.question === "string" ? item.question.trim() : "";
     if (!question) continue;
+    if (question.includes("是否") || question.includes("可能") || !OPEN_QUESTION.test(question)) continue;
+    const evidenceQuotes = Array.isArray(item?.evidence_quotes)
+      ? item.evidence_quotes.filter((quote): quote is string => typeof quote === "string").map((quote) => quote.trim()).filter(Boolean)
+      : [];
+    if (evidenceQuotes.length === 0 || evidenceQuotes.some((quote) => !evidenceText.includes(quote))) continue;
+    const accusation = question.match(UNSUPPORTED_PREMISE)?.[0];
+    if (accusation && !evidenceQuotes.some((quote) => quote.includes(accusation))) continue;
     const rationale = typeof item?.rationale === "string" ? item.rationale.trim() : "";
     result.push({ category: "analysis", question, rationale, priority: PRIORITY.analysis });
     if (result.length >= MAX_LLM_QUESTIONS) break;
@@ -248,6 +259,8 @@ export class SuggestionService {
       const source = nodeById.get(edge.source);
       const target = nodeById.get(edge.target);
       if (!source || !target) continue;
+      // 时间与时间的共现不构成可回答的实体关系，时间脉络由 timeline 建议负责。
+      if (source.type === "time" || target.type === "time") continue;
       suggestions.push({
         category: "relationship",
         question: `${source.name}与${target.name}是什么关系？`,
@@ -286,8 +299,9 @@ export class SuggestionService {
     let llmSuggestions: QuestionSuggestion[] = [];
     try {
       const agentContext = await this.context.buildContext(actor, caseId, "suggest-questions");
+      const materialSummaries = formatMaterialSummaries(agentContext.materials);
       const prompt = await this.prompts.getPrompt(actor, "suggest-questions", {
-        material_summaries: formatMaterialSummaries(agentContext.materials),
+        material_summaries: materialSummaries,
         elements: formatElementSummaries(agentContext.elements),
       });
       const guardedAdapter = guardModelAdapter(this.llm.adapter, this.llm.guard, {
@@ -300,7 +314,7 @@ export class SuggestionService {
         timeoutMs: LLM_QUESTION_TIMEOUT_MS,
         thinking: "disabled",
       });
-      llmSuggestions = parseLLMQuestions(raw);
+      llmSuggestions = parseLLMQuestions(raw, materialSummaries);
       await this.audit.append({
         user: actor.id,
         action: "suggestion.questions.llm",

@@ -21,7 +21,7 @@
 **阅读时间**: 10 分钟
 
 ### 2. 实施报告（详细参考）
-**文件**: `docs/reports/2026-07-03-phase1-2-implementation-report.md`  
+**文件**: `docs/archive/2026-07-03-phase1-2-implementation-report.md`
 **内容**: 完整的实施细节、代码变更统计、测试覆盖、部署指南  
 **阅读时间**: 20 分钟
 
@@ -31,7 +31,7 @@
 **阅读时间**: 15 分钟
 
 ### 4. 实施路线图（进度追踪）
-**文件**: `docs/decisions/implementation-roadmap.md`  
+**文件**: `docs/archive/implementation-roadmap-2026-07-03.md`
 **内容**: 三阶段计划、任务分解、质量检查点  
 **阅读时间**: 10 分钟
 
@@ -171,7 +171,7 @@ grep -A 20 'constructor(' packages/server/src/suggestion/suggestion-service.ts
 ## 📞 需要帮助？
 
 - **架构问题**: 阅读 `docs/decisions/2026-07-03-intelligent-workflow-automation.md`
-- **实施细节**: 阅读 `docs/reports/2026-07-03-phase1-2-implementation-report.md`
+- **实施细节**: 阅读 `docs/archive/2026-07-03-phase1-2-implementation-report.md`
 - **代码位置**: 参考 `docs/HANDOVER.md` 的"项目结构"章节
 - **测试失败**: 检查 `packages/server/tests/` 下的测试文件
 

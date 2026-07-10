@@ -1,10 +1,10 @@
 # Mini Agent Runtime v1.1 Implementation Plan
 
-> Status: Completed on 2026-04-13. This file is preserved as the historical execution plan for the released v1.1 work. See [docs/releases/v1.1.0.md](docs/releases/v1.1.0.md) and [docs/explanation/spec-author-handoff-v1.1-completion-2026-04-13.md](docs/explanation/spec-author-handoff-v1.1-completion-2026-04-13.md) for the finalized outcome.
+> Status: Completed on 2026-04-13. This file is preserved as the historical execution plan for the released v1.1 work. See [docs/releases/v1.1.0.md](../../releases/v1.1.0.md) and [docs/explanation/spec-author-handoff-v1.1-completion-2026-04-13.md](../../explanation/spec-author-handoff-v1.1-completion-2026-04-13.md) for the finalized outcome.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the `v1.1` hardening scope from [docs/mini-agent-runtime-v1.1-spec.md](docs/mini-agent-runtime-v1.1-spec.md) without expanding the runtime beyond its current architecture.
+**Goal:** Implement the `v1.1` hardening scope from [docs/mini-agent-runtime-v1.1-spec.md](../../mini-agent-runtime-v1.1-spec.md) without expanding the runtime beyond its current architecture.
 
 **Architecture:** Keep the current v1 runtime structure intact and treat `v1.1` as a delta pass. The work should tighten contracts in the existing session/tool/CLI layers, then add maintainer-facing docs and a first-skill readiness package on top of the current baseline.
 
@@ -16,53 +16,53 @@
 
 ### Runtime / session
 
-- [src/runtime/types.ts](src/runtime/types.ts): session entry shapes, session status types
-- [src/runtime/session.ts](src/runtime/session.ts): loader, corruption detection, recover mode
-- [src/runtime/agent.ts](src/runtime/agent.ts): resume rules
-- [src/runtime/loop.ts](src/runtime/loop.ts): session error semantics
+- [src/runtime/types.ts](../../../packages/core/src/runtime/types.ts): session entry shapes, session status types
+- [src/runtime/session.ts](../../../packages/core/src/runtime/session.ts): loader, corruption detection, recover mode
+- [src/runtime/agent.ts](../../../packages/core/src/runtime/agent.ts): resume rules
+- [src/runtime/loop.ts](../../../packages/core/src/runtime/loop.ts): session error semantics
 
 ### Tools
 
-- [src/tools/types.ts](src/tools/types.ts): normalized tool result envelope
-- [src/tools/index.ts](src/tools/index.ts): runtime-level validation, timeout, abort semantics
-- [src/tools/read.ts](src/tools/read.ts): bounded read contract
-- [src/tools/write.ts](src/tools/write.ts): artifact/meta normalization
-- [src/tools/edit.ts](src/tools/edit.ts): edit normalization and diagnostics
-- [src/tools/bash.ts](src/tools/bash.ts): artifact/log/tail contract
-- [src/tools/activate-skill.ts](src/tools/activate-skill.ts): activation envelope normalization
+- [src/tools/types.ts](../../../packages/core/src/tools/types.ts): normalized tool result envelope
+- [src/tools/index.ts](../../../packages/core/src/tools/index.ts): runtime-level validation, timeout, abort semantics
+- [src/tools/read.ts](../../../packages/core/src/tools/read.ts): bounded read contract
+- [src/tools/write.ts](../../../packages/core/src/tools/write.ts): artifact/meta normalization
+- [src/tools/edit.ts](../../../packages/core/src/tools/edit.ts): edit normalization and diagnostics
+- [src/tools/bash.ts](../../../packages/core/src/tools/bash.ts): artifact/log/tail contract
+- [src/tools/activate-skill.ts](../../../packages/core/src/tools/activate-skill.ts): activation envelope normalization
 
 ### CLI / config / provider diagnostics
 
-- [src/cli/main.ts](src/cli/main.ts): `doctor`, `session show --recover`, clearer CLI errors
-- [src/runtime/config.ts](src/runtime/config.ts): smoke-path config surface
-- [src/model/openai-compatible.ts](src/model/openai-compatible.ts): provider error categorization
+- [src/cli/main.ts](../../../packages/core/src/cli/main.ts): `doctor`, `session show --recover`, clearer CLI errors
+- [src/runtime/config.ts](../../../packages/core/src/runtime/config.ts): smoke-path config surface
+- [src/model/openai-compatible.ts](../../../packages/core/src/model/openai-compatible.ts): provider error categorization
 
 ### Docs
 
-- [docs/mini-agent-v1.1-entry-gate.md](docs/mini-agent-v1.1-entry-gate.md): gate status and scope boundary
-- [docs/mini-agent-runtime-v1.1-spec.md](docs/mini-agent-runtime-v1.1-spec.md): delta spec
-- [docs/reference/session-format.md](docs/reference/session-format.md): new reference
-- [docs/reference/tool-contracts.md](docs/reference/tool-contracts.md): new reference
-- [docs/reference/model-adapter.md](docs/reference/model-adapter.md): new reference
-- [docs/how-to/write-a-skill.md](docs/how-to/write-a-skill.md): new maintainer how-to
+- [docs/mini-agent-v1.1-entry-gate.md](../../mini-agent-v1.1-entry-gate.md): gate status and scope boundary
+- [docs/mini-agent-runtime-v1.1-spec.md](../../mini-agent-runtime-v1.1-spec.md): delta spec
+- [docs/reference/session-format.md](../../reference/session-format.md): new reference
+- [docs/reference/tool-contracts.md](../../reference/tool-contracts.md): new reference
+- [docs/reference/model-adapter.md](../../reference/model-adapter.md): new reference
+- [docs/how-to/write-a-skill.md](../../how-to/write-a-skill.md): new maintainer how-to
 
 ### Skill readiness
 
-- [fixtures/intel-bulletin/source-note.md](fixtures/intel-bulletin/source-note.md): sample input
-- [fixtures/intel-bulletin/expected-report.md](fixtures/intel-bulletin/expected-report.md): acceptance output
-- [tests/integration/intel-bulletin-readiness.test.ts](tests/integration/intel-bulletin-readiness.test.ts): readiness verification
+- [fixtures/intel-bulletin/sources/brief.md](../../../fixtures/intel-bulletin/sources/brief.md): sample input
+- [fixtures/intel-bulletin/expected-report.md](../../../fixtures/intel-bulletin/expected-report.md): acceptance output
+- [tests/integration/intel-bulletin-readiness.test.ts](../../../packages/core/tests/integration/intel-bulletin-readiness.test.ts): readiness verification
 
 ---
 
 ### Task 1: Session Grammar And Recover Mode
 
 **Files:**
-- Modify: [src/runtime/types.ts](src/runtime/types.ts)
-- Modify: [src/runtime/session.ts](src/runtime/session.ts)
-- Modify: [src/runtime/agent.ts](src/runtime/agent.ts)
-- Modify: [src/cli/main.ts](src/cli/main.ts)
-- Test: [tests/unit/session.test.ts](tests/unit/session.test.ts)
-- Test: [tests/integration/runtime-loop.test.ts](tests/integration/runtime-loop.test.ts)
+- Modify: [src/runtime/types.ts](../../../packages/core/src/runtime/types.ts)
+- Modify: [src/runtime/session.ts](../../../packages/core/src/runtime/session.ts)
+- Modify: [src/runtime/agent.ts](../../../packages/core/src/runtime/agent.ts)
+- Modify: [src/cli/main.ts](../../../packages/core/src/cli/main.ts)
+- Test: [tests/unit/session.test.ts](../../../packages/core/tests/unit/session.test.ts)
+- Test: [tests/integration/runtime-loop.test.ts](../../../packages/core/tests/integration/runtime-loop.test.ts)
 
 - [ ] **Step 1: Write failing tests for loader status and recover mode**
 
@@ -84,7 +84,7 @@ Expected: failures for missing `status`, missing recover mode, and missing `sess
 
 - [ ] **Step 3: Add session health types and loader mode**
 
-Define the new session loader surface in [src/runtime/types.ts](src/runtime/types.ts) and [src/runtime/session.ts](src/runtime/session.ts):
+Define the new session loader surface in [src/runtime/types.ts](../../../packages/core/src/runtime/types.ts) and [src/runtime/session.ts](../../../packages/core/src/runtime/session.ts):
 
 ```ts
 export type SessionHealth = "valid" | "degraded" | "corrupted";
@@ -101,7 +101,7 @@ Implement longest-valid-prefix recovery for `loadSession(id, { mode: "recover" }
 
 - [ ] **Step 4: Thread strict vs recover behavior into agent and CLI**
 
-Add `session show --recover` parsing in [src/cli/main.ts](src/cli/main.ts), and keep resume on strict mode in [src/runtime/agent.ts](src/runtime/agent.ts).
+Add `session show --recover` parsing in [src/cli/main.ts](../../../packages/core/src/cli/main.ts), and keep resume on strict mode in [src/runtime/agent.ts](../../../packages/core/src/runtime/agent.ts).
 
 ```ts
 const session = await store.loadSession(command[2], {
@@ -132,19 +132,19 @@ git commit -m "feat(session): add health states and recover mode"
 ### Task 2: Normalize The Tool Execution Contract
 
 **Files:**
-- Modify: [src/tools/types.ts](src/tools/types.ts)
-- Modify: [src/tools/index.ts](src/tools/index.ts)
-- Modify: [src/tools/read.ts](src/tools/read.ts)
-- Modify: [src/tools/write.ts](src/tools/write.ts)
-- Modify: [src/tools/edit.ts](src/tools/edit.ts)
-- Modify: [src/tools/bash.ts](src/tools/bash.ts)
-- Modify: [src/tools/activate-skill.ts](src/tools/activate-skill.ts)
-- Modify: [src/runtime/loop.ts](src/runtime/loop.ts)
-- Test: [tests/unit/tool-registry.test.ts](tests/unit/tool-registry.test.ts)
-- Test: [tests/unit/read.test.ts](tests/unit/read.test.ts)
-- Test: [tests/unit/bash.test.ts](tests/unit/bash.test.ts)
-- Test: [tests/unit/write.test.ts](tests/unit/write.test.ts)
-- Test: [tests/unit/edit.test.ts](tests/unit/edit.test.ts)
+- Modify: [src/tools/types.ts](../../../packages/core/src/tools/types.ts)
+- Modify: [src/tools/index.ts](../../../packages/core/src/tools/index.ts)
+- Modify: [src/tools/read.ts](../../../packages/core/src/tools/read.ts)
+- Modify: [src/tools/write.ts](../../../packages/core/src/tools/write.ts)
+- Modify: [src/tools/edit.ts](../../../packages/core/src/tools/edit.ts)
+- Modify: [src/tools/bash.ts](../../../packages/core/src/tools/bash.ts)
+- Modify: [src/tools/activate-skill.ts](../../../packages/core/src/tools/activate-skill.ts)
+- Modify: [src/runtime/loop.ts](../../../packages/core/src/runtime/loop.ts)
+- Test: [tests/unit/tool-registry.test.ts](../../../packages/core/tests/unit/tool-registry.test.ts)
+- Test: [tests/unit/read.test.ts](../../../packages/core/tests/unit/read.test.ts)
+- Test: [tests/unit/bash.test.ts](../../../packages/core/tests/unit/bash.test.ts)
+- Test: [tests/unit/write.test.ts](../../../packages/core/tests/unit/write.test.ts)
+- Test: [tests/unit/edit.test.ts](../../../packages/core/tests/unit/edit.test.ts)
 
 - [ ] **Step 1: Write failing tests for the v1.1 envelope shape**
 
@@ -170,7 +170,7 @@ Expected: failures because the current envelope still uses `kind`/`data` rather 
 
 - [ ] **Step 3: Introduce the normalized result type**
 
-In [src/tools/types.ts](src/tools/types.ts), move the contract toward the v1.1 draft:
+In [src/tools/types.ts](../../../packages/core/src/tools/types.ts), move the contract toward the v1.1 draft:
 
 ```ts
 export interface ToolArtifact {
@@ -190,7 +190,7 @@ export interface ToolExecutionResult<T = unknown> {
 
 - [ ] **Step 4: Update all built-in tools and loop serialization**
 
-Map previous `data` fields into `meta`, convert artifact `kind` to `type`, and keep `content` as the model-facing summary string. Update [src/runtime/loop.ts](src/runtime/loop.ts) so session replay persists the normalized envelope consistently.
+Map previous `data` fields into `meta`, convert artifact `kind` to `type`, and keep `content` as the model-facing summary string. Update [src/runtime/loop.ts](../../../packages/core/src/runtime/loop.ts) so session replay persists the normalized envelope consistently.
 
 - [ ] **Step 5: Re-run the targeted tests and full verification**
 
@@ -215,10 +215,10 @@ git commit -m "feat(tools): normalize v1.1 tool contract"
 ### Task 3: Upgrade CLI And Doctor Diagnostics
 
 **Files:**
-- Modify: [src/cli/main.ts](src/cli/main.ts)
-- Modify: [src/runtime/config.ts](src/runtime/config.ts)
-- Modify: [src/model/openai-compatible.ts](src/model/openai-compatible.ts)
-- Create: [tests/unit/cli-doctor.test.ts](tests/unit/cli-doctor.test.ts)
+- Modify: [src/cli/main.ts](../../../packages/core/src/cli/main.ts)
+- Modify: [src/runtime/config.ts](../../../packages/core/src/runtime/config.ts)
+- Modify: [src/model/openai-compatible.ts](../../../packages/core/src/model/openai-compatible.ts)
+- Create: [tests/unit/cli-doctor.test.ts](../../../packages/core/tests/unit/cli-doctor.test.ts)
 
 - [ ] **Step 1: Write failing tests for grouped doctor output**
 
@@ -242,7 +242,7 @@ Expected: FAIL because the current `doctor` output is still flat.
 
 - [ ] **Step 3: Add smoke-path config surface and grouped output**
 
-Extend [src/runtime/config.ts](src/runtime/config.ts) with optional smoke settings:
+Extend [src/runtime/config.ts](../../../packages/core/src/runtime/config.ts) with optional smoke settings:
 
 ```ts
 smokeProvider?: string;
@@ -250,7 +250,7 @@ smokeModel?: string;
 smokeBaseURL?: string;
 ```
 
-Then group `doctor` output in [src/cli/main.ts](src/cli/main.ts) by:
+Then group `doctor` output in [src/cli/main.ts](../../../packages/core/src/cli/main.ts) by:
 
 - runtime basics
 - model/provider config
@@ -260,7 +260,7 @@ Then group `doctor` output in [src/cli/main.ts](src/cli/main.ts) by:
 
 - [ ] **Step 4: Preserve clear provider error categories**
 
-Keep the recent provider-detail surfacing in [src/model/openai-compatible.ts](src/model/openai-compatible.ts), but add category mapping for quota/auth/network/malformed-response paths.
+Keep the recent provider-detail surfacing in [src/model/openai-compatible.ts](../../../packages/core/src/model/openai-compatible.ts), but add category mapping for quota/auth/network/malformed-response paths.
 
 ```ts
 const category = inferProviderErrorCategory(error);
@@ -289,11 +289,11 @@ git commit -m "feat(cli): improve doctor and provider diagnostics"
 ### Task 4: Publish The Maintainer Reference Set
 
 **Files:**
-- Create: [docs/reference/session-format.md](docs/reference/session-format.md)
-- Create: [docs/reference/tool-contracts.md](docs/reference/tool-contracts.md)
-- Create: [docs/reference/model-adapter.md](docs/reference/model-adapter.md)
-- Create: [docs/how-to/write-a-skill.md](docs/how-to/write-a-skill.md)
-- Modify: [docs/mini-agent-runtime-v1.1-spec.md](docs/mini-agent-runtime-v1.1-spec.md)
+- Create: [docs/reference/session-format.md](../../reference/session-format.md)
+- Create: [docs/reference/tool-contracts.md](../../reference/tool-contracts.md)
+- Create: [docs/reference/model-adapter.md](../../reference/model-adapter.md)
+- Create: [docs/how-to/write-a-skill.md](../../how-to/write-a-skill.md)
+- Modify: [docs/mini-agent-runtime-v1.1-spec.md](../../mini-agent-runtime-v1.1-spec.md)
 
 - [ ] **Step 1: Draft the reference stubs from the v1.1 spec**
 
@@ -309,7 +309,7 @@ Create the four new docs with the minimum headings needed to stop the spec from 
 
 - [ ] **Step 2: Link the spec to the reference docs**
 
-Trim repeated detail in [docs/mini-agent-runtime-v1.1-spec.md](docs/mini-agent-runtime-v1.1-spec.md) where appropriate and link out to the new references.
+Trim repeated detail in [docs/mini-agent-runtime-v1.1-spec.md](../../mini-agent-runtime-v1.1-spec.md) where appropriate and link out to the new references.
 
 - [ ] **Step 3: Verify docs for consistency**
 
@@ -333,11 +333,11 @@ git commit -m "docs: add v1.1 maintainer references"
 ### Task 5: Land Intel-Bulletin Readiness Fixtures
 
 **Files:**
-- Create: [fixtures/intel-bulletin/source-note.md](fixtures/intel-bulletin/source-note.md)
-- Create: [fixtures/intel-bulletin/expected-report.md](fixtures/intel-bulletin/expected-report.md)
-- Create: [tests/integration/intel-bulletin-readiness.test.ts](tests/integration/intel-bulletin-readiness.test.ts)
-- Modify: [docs/mini-agent-v1.1-entry-gate.md](docs/mini-agent-v1.1-entry-gate.md)
-- Modify: [docs/how-to/write-a-skill.md](docs/how-to/write-a-skill.md)
+- Create: [fixtures/intel-bulletin/sources/brief.md](../../../fixtures/intel-bulletin/sources/brief.md)
+- Create: [fixtures/intel-bulletin/expected-report.md](../../../fixtures/intel-bulletin/expected-report.md)
+- Create: [tests/integration/intel-bulletin-readiness.test.ts](../../../packages/core/tests/integration/intel-bulletin-readiness.test.ts)
+- Modify: [docs/mini-agent-v1.1-entry-gate.md](../../mini-agent-v1.1-entry-gate.md)
+- Modify: [docs/how-to/write-a-skill.md](../../how-to/write-a-skill.md)
 
 - [ ] **Step 1: Create sample input and expected output fixtures**
 
@@ -381,12 +381,12 @@ Expected: PASS.
 
 - [ ] **Step 4: Update the gate doc to mark Gate E closed**
 
-Change [docs/mini-agent-v1.1-entry-gate.md](docs/mini-agent-v1.1-entry-gate.md) once the fixtures and acceptance path exist.
+Change [docs/mini-agent-v1.1-entry-gate.md](../../mini-agent-v1.1-entry-gate.md) once the fixtures and acceptance path exist.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add fixtures/intel-bulletin/source-note.md fixtures/intel-bulletin/expected-report.md tests/integration/intel-bulletin-readiness.test.ts docs/mini-agent-v1.1-entry-gate.md docs/how-to/write-a-skill.md
+git add fixtures/intel-bulletin/sources/brief.md fixtures/intel-bulletin/expected-report.md tests/integration/intel-bulletin-readiness.test.ts docs/mini-agent-v1.1-entry-gate.md docs/how-to/write-a-skill.md
 git commit -m "feat(skill): add intel-bulletin readiness fixtures"
 ```
 
@@ -395,17 +395,17 @@ git commit -m "feat(skill): add intel-bulletin readiness fixtures"
 ### Task 6: Close The Remaining Entry Gate Items
 
 **Files:**
-- Modify: [docs/mini-agent-v1.1-entry-gate.md](docs/mini-agent-v1.1-entry-gate.md)
-- Modify: [docs/explanation/spec-author-handoff-2026-04-13.md](docs/explanation/spec-author-handoff-2026-04-13.md)
-- Modify: [docs/reference/cli-and-config.md](docs/reference/cli-and-config.md)
+- Modify: [docs/mini-agent-v1.1-entry-gate.md](../../mini-agent-v1.1-entry-gate.md)
+- Modify: [docs/explanation/spec-author-handoff-2026-04-13.md](../../explanation/spec-author-handoff-2026-04-13.md)
+- Modify: [docs/reference/cli-and-config.md](../../reference/cli-and-config.md)
 
 - [ ] **Step 1: Update the gate doc from assessment to closure**
 
-When Tasks 1-5 are complete, rewrite the status lines in [docs/mini-agent-v1.1-entry-gate.md](docs/mini-agent-v1.1-entry-gate.md) so Gate B/D/E move from partial/open to closed.
+When Tasks 1-5 are complete, rewrite the status lines in [docs/mini-agent-v1.1-entry-gate.md](../../mini-agent-v1.1-entry-gate.md) so Gate B/D/E move from partial/open to closed.
 
 - [ ] **Step 2: Update the handoff summary**
 
-Add a short section to [docs/explanation/spec-author-handoff-2026-04-13.md](docs/explanation/spec-author-handoff-2026-04-13.md) noting that v1.1 gate prerequisites are now met.
+Add a short section to [docs/explanation/spec-author-handoff-2026-04-13.md](../../explanation/spec-author-handoff-2026-04-13.md) noting that v1.1 gate prerequisites are now met.
 
 - [ ] **Step 3: Verify the docs tree**
 

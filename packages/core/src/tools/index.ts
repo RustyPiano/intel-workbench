@@ -117,7 +117,22 @@ export class ToolRegistry {
     }
 
     const controller = new AbortController();
-    const handleAbort = () => controller.abort();
+    let resolveAbort: (result: ToolExecutionResult) => void = () => {};
+    const abortPromise = new Promise<ToolExecutionResult>((resolve) => {
+      resolveAbort = resolve;
+    });
+    const handleAbort = () => {
+      controller.abort();
+      resolveAbort({
+        ok: false,
+        content: `Tool ${tool.name} was cancelled during execution`,
+        error: {
+          code: "RUN_ABORTED",
+          message: `Tool ${tool.name} was cancelled during execution`,
+          retriable: true,
+        },
+      });
+    };
     ctx.signal.addEventListener("abort", handleAbort, { once: true });
 
     const perToolTimeouts: Record<string, number | undefined> = {
@@ -161,7 +176,7 @@ export class ToolRegistry {
       }) satisfies ToolExecutionResult);
 
     try {
-      return await Promise.race([executionPromise, timeoutPromise]);
+      return await Promise.race([executionPromise, timeoutPromise, abortPromise]);
     } finally {
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);

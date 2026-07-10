@@ -82,6 +82,21 @@ export interface AppServices {
   modelConfigured: boolean;
   /** OfflineGuard 当前白名单（启动日志展示）。 */
   egressAllowlist: string[];
+  /** 前端安全状态仅消费这些非敏感枚举/布尔值。 */
+  devMode: boolean;
+  networkMode: "offline" | "restricted-cloud";
+}
+
+function networkModeForAllowlist(hosts: readonly string[]): "offline" | "restricted-cloud" {
+  const hasExternalHost = hosts.some((host) => {
+    try {
+      const hostname = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      return hostname !== "localhost" && hostname !== "::1" && !hostname.startsWith("127.");
+    } catch {
+      return true;
+    }
+  });
+  return hasExternalHost ? "restricted-cloud" : "offline";
 }
 
 /**
@@ -225,11 +240,37 @@ export function createApp(options: CreateAppOptions = {}): Express {
     slots,
     modelConfigured,
     egressAllowlist: guard.allowlist,
+    devMode,
+    networkMode: networkModeForAllowlist(guard.allowlist),
   };
   app.locals.services = services;
 
   // API surface：会话鉴权（公开路由放行，其余须有效令牌）→ 路由。
-  app.use("/api", authMiddleware(auth), createApiRouter({ auth, cases, audit, materials, overview, inquiries, findings, jobRegistry, elements, elementGraph, contradictions, reports, review, tasks, admin, suggestions, briefs, autoInquiry }));
+  app.use("/api", authMiddleware(auth), createApiRouter({
+    health: {
+      devMode,
+      networkMode: networkModeForAllowlist(guard.allowlist),
+      modelConfigured,
+    },
+    auth,
+    cases,
+    audit,
+    materials,
+    overview,
+    inquiries,
+    findings,
+    jobRegistry,
+    elements,
+    elementGraph,
+    contradictions,
+    reports,
+    review,
+    tasks,
+    admin,
+    suggestions,
+    briefs,
+    autoInquiry,
+  }));
 
   // Production static hosting of the web build. In dev this is skipped.
   const webDistDir = options.webDistDir ?? defaultWebDistDir();

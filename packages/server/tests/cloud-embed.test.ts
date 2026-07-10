@@ -1,6 +1,19 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CloudEmbedAdapter, mapEmbeddingResponse } from "../src/model/cloud-embed.js";
+
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+async function close(server: Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
 
 describe("mapEmbeddingResponse（OpenAI 兼容 /embeddings → Float32 向量批）", () => {
   it("按 index 还原顺序映射为同序 Float32Array（用 Float32 可精确表示的值）", () => {
@@ -46,6 +59,7 @@ describe("CloudEmbedAdapter.embed（mock fetch，不连真服务）", () => {
     expect(fetch.mock.calls[0][0]).toBe("http://embed.local:8002/v1/embeddings");
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("error");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer k");
     expect(JSON.parse(init.body as string)).toEqual({ model: "Qwen3-Embedding-0.6B", input: ["南海舰船活动"], encoding_format: "float" });
     expect(Array.from(out[0])).toEqual([0.5, 0.25]);
@@ -58,6 +72,32 @@ describe("CloudEmbedAdapter.embed（mock fetch，不连真服务）", () => {
     await expect(
       new CloudEmbedAdapter("http://embed.local:8002/v1", { model: "m", dim: 2 }).embed(["x"]),
     ).rejects.toThrow(/500/);
+  });
+
+  it("307 不自动跟随，请求体不会外泄到重定向目标", async () => {
+    let leaked = "";
+    const sink = createServer((req, res) => {
+      req.on("data", (chunk) => { leaked += chunk.toString(); });
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json", connection: "close" });
+        res.end(JSON.stringify({ data: [{ index: 0, embedding: [1] }] }));
+      });
+    });
+    const sinkBase = await listen(sink);
+    const redirect = createServer((req, res) => {
+      req.resume();
+      res.writeHead(307, { location: `${sinkBase}/stolen`, connection: "close" });
+      res.end();
+    });
+    const redirectBase = await listen(redirect);
+
+    try {
+      await expect(new CloudEmbedAdapter(`${redirectBase}/v1`, { model: "m", dim: 1 }).embed(["TOP-SECRET-PAYLOAD"]))
+        .rejects.toThrow();
+      expect(leaked).toBe("");
+    } finally {
+      await Promise.all([close(redirect), close(sink)]);
+    }
   });
 
   it("超 MAX_BATCH(32) 自动分批，跨批按序拼接（含 index 乱序还原）", async () => {

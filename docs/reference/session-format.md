@@ -10,6 +10,14 @@ Sessions are stored under:
 .mini-agent/sessions/<timestamp>_<session-id>.jsonl
 ```
 
+While a conversation turn owns a session, an exclusive lock is stored beside the journal:
+
+```text
+.mini-agent/sessions/.<session-id>.lock
+```
+
+The lock record contains a random ownership token, process id, and creation time. A process only removes a lock it still owns. A valid live PID is never reclaimed as stale; malformed locks are reclaimed only after the configured stale interval.
+
 Each line is one JSON object. Repair reports for damaged sessions are written under:
 
 ```text
@@ -125,7 +133,13 @@ Each tool result closes one `tool_call`.
     "limit": 262144,
     "truncated": false,
     "size": 1024
-  }
+  },
+  "artifacts": [
+    {
+      "type": "log",
+      "path": ".mini-agent/artifacts/bash/call_123.log"
+    }
+  ]
 }
 ```
 
@@ -133,6 +147,7 @@ Compatibility note:
 
 - old session files may still contain `data`
 - resume logic prefers `meta` and falls back to `data`
+- `artifacts` is persisted with the result and restored when the tool transcript is replayed
 
 ### `skill_activation`
 
@@ -231,13 +246,18 @@ If the header itself is missing or invalid, recover mode still reports `corrupte
 
 The runtime resumes only through strict loading.
 
+Normal `send()` behavior acquires the session lock and reloads the latest strict journal before starting a turn. If a previous process left a declared tool call without a result, the runtime persists an interrupted tool result while still holding the lock, then rebuilds memory from the repaired entries.
+
 During resume it rebuilds:
 
 - prior conversation messages
 - prior tool results as `role: "tool"` messages
-- activated skills through `SkillRegistry.activate()`
+- activated skills into a conversation-local fork through `SkillRegistry.activate()`
+- tool result metadata, errors, and artifacts
 
 That means a resumed conversation has both the assistant tool calls and the corresponding tool-result transcript in memory.
+
+Session ids are validated before path resolution: 1–128 characters, starting with an alphanumeric character and containing only letters, numbers, `.`, `_`, or `-`.
 
 ## Run trace linkage
 

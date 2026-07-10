@@ -1,15 +1,17 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ContradictionService } from "../analysis/contradiction-service.js";
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
-import type { AuditResult, Identity } from "../domain/types.js";
+import type { AuditResult, Identity, Material } from "../domain/types.js";
 import type { ElementService } from "../elements/element-service.js";
 import type { AutoInquiryService } from "../inquiry/auto-inquiry-service.js";
 import type { JobContext, JobRegistry } from "../jobs/job-registry.js";
 import type { TaskService } from "./task-service.js";
+import { writeFileAtomic } from "../util/atomic.js";
+import { sha256 } from "../util/hash.js";
 
 /**
  * 自动流水线（阶段三 M1·M3 / 计划 D2·D3·D6）。素材全部加工完成后，由素材服务在状态转换的
@@ -29,6 +31,11 @@ interface AutopilotStep {
   kind: "elements" | "contradictions" | "auto-inquiry";
   /** 产物已在盘上 → 幂等跳过（避免重复触发重跑、与人工复核抢跑）。 */
   artifact: string;
+}
+
+interface AutopilotState {
+  inputHash: string;
+  completed: AutopilotStep["kind"][];
 }
 
 /**
@@ -95,6 +102,19 @@ export class AutopilotService {
       return;
     }
 
+    const inputHash = this.materialInputHash(materials);
+    let state = await this.loadState(caseId);
+    if (!state) {
+      // 兼容升级前已有产物：首次见到时认领当前输入；之后所有素材变更都按指纹失效。
+      const completed: AutopilotStep["kind"][] = [];
+      for (const step of STEPS) if (await this.artifactExists(caseId, step.artifact)) completed.push(step.kind);
+      state = { inputHash, completed };
+      await this.saveState(caseId, state);
+    } else if (state.inputHash !== inputHash) {
+      state = { inputHash, completed: [] };
+      await this.saveState(caseId, state);
+    }
+
     let runId: string;
     try {
       const created = await this.tasks.createRun(actor, caseId);
@@ -115,12 +135,14 @@ export class AutopilotService {
         await this.auditSystem("autopilot.stop", caseId, actor, "ok", { stage: step.stageKey, reason: "disabled" });
         return;
       }
-      if (await this.artifactExists(caseId, step.artifact)) continue; // 幂等：该执行体已跑过
+      if (state.completed.includes(step.kind) && await this.artifactExists(caseId, step.artifact)) continue;
 
       const job = this.registry.start(caseId, step.kind, (ctx) => this.runBody(step.kind, actor, caseId, ctx));
       const settled = (await this.registry.settled(caseId, step.kind)) ?? job;
 
       if (settled.state === "done") {
+        if (!state.completed.includes(step.kind)) state.completed.push(step.kind);
+        await this.saveState(caseId, state);
         await this.auditSystem("autopilot.advance", caseId, actor, "ok", { stage: step.stageKey, kind: step.kind, jobId: settled.id });
         continue;
       }
@@ -166,6 +188,37 @@ export class AutopilotService {
     } catch {
       return false;
     }
+  }
+
+  private materialInputHash(materials: Material[]): string {
+    const input = materials
+      .map((material) => ({
+        id: material.id,
+        size: material.size,
+        status: material.status,
+        chunkCount: material.chunk_count ?? 0,
+        chunkVersion: material.chunk_version ?? 0,
+        processedAt: material.processed_at ?? "",
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return sha256(JSON.stringify(input));
+  }
+
+  private stateFile(caseId: string): string {
+    return path.join(this.paths.caseDir(caseId), "autopilot-state.json");
+  }
+
+  private async loadState(caseId: string): Promise<AutopilotState | null> {
+    try {
+      const parsed = JSON.parse(await readFile(this.stateFile(caseId), "utf8")) as AutopilotState;
+      return typeof parsed.inputHash === "string" && Array.isArray(parsed.completed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async saveState(caseId: string, state: AutopilotState): Promise<void> {
+    await writeFileAtomic(this.stateFile(caseId), `${JSON.stringify(state, null, 2)}\n`);
   }
 
   private async auditSystem(action: string, caseId: string, actor: Identity, result: AuditResult, detail: Record<string, unknown>): Promise<void> {

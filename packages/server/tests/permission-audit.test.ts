@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -31,6 +31,11 @@ describe("permission deny audit", () => {
     materials = new MaterialService(paths, audit, cases);
     reports = new ReportService(paths, audit, cases);
     caseId = (await cases.create(OWNER, { name: "权限专题", clearance: "confidential" })).id;
+    await writeFile(
+      path.join(paths.caseDir(caseId), "contradictions.result.json"),
+      `${JSON.stringify({ status: "succeeded", contradictions: [], groundedPropositions: [], processedChunks: 0, totalChunks: 0, truncated: false, warnings: [] }, null, 2)}\n`,
+      "utf8",
+    );
   });
 
   afterEach(async () => {

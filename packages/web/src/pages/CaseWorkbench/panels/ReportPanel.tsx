@@ -88,6 +88,7 @@ export function ReportPanel() {
       setReport(next);
       setTitle(next.spec.title);
       setBody(specToBody(next));
+      setSelectedFindingIds([...new Set(next.spec.sections.flatMap((section) => section.finding_ids ?? []))]);
       setGeneratedSections(null);
     } catch (e) {
       setError((e as Error).message);
@@ -188,13 +189,17 @@ export function ReportPanel() {
   const findingsPath = caseId ? `/cases/${encodeURIComponent(caseId)}/findings` : "../findings";
   const submitReason = !report
     ? "先基于已核准结论生成报告。"
+    : !report.rendered
+      ? "公文渲染未完成，请先重新保存草稿。"
     : noApprovedFindings
       ? "提交前需先去结论核验，至少核准一条结论。"
       : status !== "draft"
         ? "只有草稿状态可以提交复核。"
         : "";
-  const reviewReason = noApprovedFindings
-    ? "复核前需先去结论核验，至少核准一条结论。"
+  const reviewReason = report && !report.rendered
+    ? "公文渲染未完成，不能核准。"
+    : noApprovedFindings
+      ? "复核前需先去结论核验，至少核准一条结论。"
     : status !== "in_review"
       ? "仅待复核状态可以核准。"
       : "";
@@ -214,7 +219,7 @@ export function ReportPanel() {
             {report && !report.rendered ? (
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "8px", color: "var(--danger-light)" }}>
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                公文渲染未完成，请检查服务环境
+                公文渲染未完成，已禁止提交、核准与导出
               </span>
             ) : ""}
           </span>
@@ -347,7 +352,7 @@ export function ReportPanel() {
             <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>加载报告状态…</span>
           ) : (
             <>
-              <button type="button" className="btn btn--primary" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report || status !== "draft" || noApprovedFindings} title={submitReason || "提交保密员复核"} onClick={() => run(() => submitReport(caseId!))}>
+              <button type="button" className="btn btn--primary" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report || !report.rendered || status !== "draft" || noApprovedFindings} title={submitReason || "提交保密员复核"} onClick={() => run(() => submitReport(caseId!))}>
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
                 </svg>
@@ -355,7 +360,7 @@ export function ReportPanel() {
               </button>
               {submitReason ? <span style={{ color: "var(--text-muted)", fontSize: "12px", lineHeight: "1.5" }}>{submitReason}</span> : null}
               {canReview ? (
-                <button type="button" className="btn" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || status !== "in_review" || noApprovedFindings} title={reviewReason || "核准报告"} onClick={() => run(() => approveReport(caseId!))}>
+                <button type="button" className="btn" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }} disabled={busy || !report?.rendered || status !== "in_review" || noApprovedFindings} title={reviewReason || "核准报告"} onClick={() => run(() => approveReport(caseId!))}>
                   <svg className="icon-svg" style={{ color: "var(--ok-light)" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
@@ -367,8 +372,8 @@ export function ReportPanel() {
                 type="button"
                 className={status === "approved" || status === "exported" ? "btn btn--primary" : "btn btn--danger"}
                 style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
-                disabled={busy || !report}
-                title={status === "approved" || status === "exported" ? "导出公文 .md" : "点击测试导出校验：未复核会拒绝并写审计"}
+                disabled={busy || !report || !report.rendered}
+                title={!report?.rendered ? "公文渲染未完成，禁止导出" : status === "approved" || status === "exported" ? "导出公文 .md" : "点击测试导出校验：未复核会拒绝并写审计"}
                 onClick={handleExport}
               >
                 <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

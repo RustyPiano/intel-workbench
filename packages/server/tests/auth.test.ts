@@ -68,6 +68,31 @@ describe("AuthService 登录与会话（产品 spec §8.1）", () => {
     expect((await auth.login("operator", "operator123456")).identity).toMatchObject({ id: "operator", role: "operator" });
   });
 
+  it("用户启停、角色或密级变更立即撤销旧会话", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
+    const auth = service();
+    const first = await auth.login("operator", "operator123456");
+
+    await users.update("operator", { clearance: "internal" });
+    expect(auth.resolve(first.token)).toBeNull();
+
+    const second = await auth.login("operator", "operator123456");
+    await users.update("operator", { enabled: false });
+    expect(auth.resolve(second.token)).toBeNull();
+  });
+
+  it("管理员重置口令后撤销该用户全部旧会话", async () => {
+    process.env.MINI_AGENT_DEMO = "1";
+    const auth = service();
+    const a = await auth.login("operator", "operator123456");
+    const b = await auth.login("operator", "operator123456");
+
+    await users.setPassword("operator", "operator-new-password");
+
+    expect(auth.resolve(a.token)).toBeNull();
+    expect(auth.resolve(b.token)).toBeNull();
+  });
+
   it("口令绝不明文落盘（scrypt 哈希）", async () => {
     await users.list(); // 触发 users.json 预置
     const initialPassword = await readInitialPassword();
@@ -122,11 +147,14 @@ describe("AuthService 登录与会话（产品 spec §8.1）", () => {
     await users.list();
     const initialPassword = await readInitialPassword();
     const { token } = await auth.login("admin", initialPassword);
+    const other = await auth.login("admin", initialPassword);
 
     await expect(auth.changePassword(token, initialPassword, "too-short")).rejects.toMatchObject({ status: 400 });
     await expect(auth.changePassword(token, initialPassword, initialPassword)).rejects.toMatchObject({ status: 400 });
 
     await auth.changePassword(token, initialPassword, "admin-new-password");
+    expect(auth.resolve(token)).toMatchObject({ id: "admin", mustChangePassword: false });
+    expect(auth.resolve(other.token)).toBeNull();
     const changed = await auth.login("admin", "admin-new-password");
     expect(changed.identity.mustChangePassword).toBe(false);
   });

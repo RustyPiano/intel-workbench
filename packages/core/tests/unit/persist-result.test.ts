@@ -63,6 +63,22 @@ describe("persistToolResult", () => {
     await expect(readFile(result.absPath, "utf8")).resolves.toBe('[\n  "x"\n]\n');
   });
 
+  test("does not persist a result after cancellation", async () => {
+    const root = await createWorkspace();
+    const controller = new AbortController();
+    controller.abort();
+    const output = path.join(root, "cancelled/out.json");
+
+    await expect(
+      persistToolResult({
+        ctx: { policy: createPolicyEngine({ workspaceRoot: root }), signal: controller.signal },
+        outPath: "cancelled/out.json",
+        data: { late: true },
+      }),
+    ).rejects.toMatchObject({ code: "RUN_ABORTED" });
+    await expect(readFile(output, "utf8")).rejects.toThrow();
+  });
+
   test("surfaces read-only policy failures as PATH_NOT_ALLOWED", async () => {
     const root = await createWorkspace();
 

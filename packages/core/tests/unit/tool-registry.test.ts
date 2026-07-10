@@ -138,6 +138,39 @@ describe("ToolRegistry", () => {
     expect(aborted).toBe(true);
   });
 
+  test("returns RUN_ABORTED promptly and ignores a non-cooperative tool's late success", async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    let finish!: (result: { ok: boolean; content: string }) => void;
+    const didStart = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const registry = new ToolRegistry([
+      {
+        name: "slow",
+        description: "slow",
+        inputSchema: z.object({}).strict(),
+        async execute() {
+          started();
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        },
+      } satisfies RuntimeTool,
+    ]);
+    const pending = registry.execute(
+      { id: "call_abort", name: "slow", arguments: {} },
+      { ...createContext({ toolTimeoutMs: 1_000 }), signal: controller.signal },
+    );
+    await didStart;
+
+    controller.abort();
+    const result = await pending;
+    finish({ ok: true, content: "late success" });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "RUN_ABORTED" } });
+  });
+
   test("uses the multimodal timeout budget for analyze_media", async () => {
     let aborted = false;
     const registry = new ToolRegistry([

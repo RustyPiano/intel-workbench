@@ -134,7 +134,7 @@ A/B 相互独立可先行；C 必须在 E 之前；F 依赖 B/C/E 的产物数�
 ## Batch F — 基准与文档（依赖 B/C/E）
 
 **做**：
-- 矛盾检测基准叙事**改为「持平直出 F1（1.0/0.917/0.957=0.957）+ 可溯源/全覆盖/可审计」**，明确**不**宣称精度/F1 优于直出（`docs/report/benchmark-summary.md`、`practice-report.md`、`rag-quality-decision-log.md`）。
+- 矛盾检测基准叙事**改为「持平直出 F1（1.0/0.917/0.957=0.957）+ 可溯源/全覆盖/可审计」**，明确**不**宣称精度/F1 优于直出（`docs/report/benchmark-summary.md`、`docs/archive/practice-report-2026-07-02.md`、`docs/report/rag-quality-decision-log.md`）。
 - 新增任务级/证据级指标并跑出数：结论支持率、引用定位准确率、报告引用覆盖率、（条件允许）无依据结论率、矛盾召回率、重复运行一致性、失败可见率。小标注数据集大小与「自造合成、可能与切块/Prompt 耦合」的局限。
 - 决策日志续写本轮 D26+；HANDOFF 同步。
 **验收**：基准文档无「优于直出」措辞；新指标有数有方法说明；日志/HANDOFF 更新。

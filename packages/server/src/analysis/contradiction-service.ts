@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { RUNTIME_VERSION, RuntimeAgent, type RuntimeTool, type ToolMiddleware } from "mini-agent";
@@ -17,8 +17,9 @@ import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { guardModelAdapter } from "../security/guarded-adapter.js";
 import { shortId } from "../util/hash.js";
+import { writeFileAtomic } from "../util/atomic.js";
 
-const BATCH_CHUNKS = 40;
+const BATCH_CHUNKS = 12;
 const CONCURRENCY = 4;
 const MAX_PAIRS_PER_CLUSTER = 30;
 const EXTRACT_PROMPT = DEFAULT_PROMPT_BODIES["contradiction-extract"];
@@ -29,7 +30,11 @@ interface RawClaim {
   attribute?: unknown;
   value?: unknown;
   chunk_id?: unknown;
+  modality?: unknown;
+  time?: unknown;
 }
+
+type ClaimModality = "asserted" | "planned" | "predicted";
 
 export interface GroundedClaim {
   entity: string;
@@ -38,6 +43,9 @@ export interface GroundedClaim {
   normalized_entity: string;
   normalized_attribute: string;
   normalized_value: string;
+  modality: ClaimModality;
+  time: string;
+  normalized_time: string;
   chunk_id: string;
   material_id: string;
   citation: Citation;
@@ -148,8 +156,38 @@ function citationKey(citation: Citation): string {
   return `${citation.material_id}:${citation.content_hash}:${citation.snippet}`;
 }
 
-function claimText(claim: Pick<GroundedClaim, "entity" | "attribute" | "value">): string {
-  return `${claim.entity} ${claim.attribute}: ${claim.value}`;
+function claimText(claim: Pick<GroundedClaim, "entity" | "attribute" | "value" | "time">): string {
+  return `${claim.entity} ${claim.attribute}${claim.time ? ` [${claim.time}]` : ""}: ${claim.value}`;
+}
+
+function inferClaimModality(raw: RawClaim, sourceText: string): ClaimModality {
+  if (raw.modality === "planned" || raw.modality === "predicted" || raw.modality === "asserted") return raw.modality;
+  const text = `${String(raw.attribute ?? "")} ${String(raw.value ?? "")} ${sourceText}`.toLowerCase();
+  if (/(?:计划|拟于|预定|将于|scheduled|planned|intended|due to|\bwill\b)/i.test(text)) return "planned";
+  if (/(?:预测|推测|预计|可能|predicted|forecast|expected|likely)/i.test(text)) return "predicted";
+  return "asserted";
+}
+
+function inferClaimTime(raw: RawClaim, sourceText: string): string {
+  if (typeof raw.time === "string" && raw.time.trim()) return raw.time.trim();
+  const value = typeof raw.value === "string" ? raw.value.trim() : "";
+  if (!value) return "";
+  const matchingLines = sourceText.split(/\r?\n/).filter((line) => line.includes(value));
+  const times = new Set<string>();
+  for (const line of matchingLines) {
+    const full = line.match(/\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?\b/);
+    const short = full ? null : line.match(/(?:^|\D)(\d{1,2}:\d{2})(?:\D|$)/);
+    if (full) times.add(full[0]);
+    else if (short?.[1]) times.add(short[1]);
+  }
+  return times.size === 1 ? [...times][0]! : "";
+}
+
+function comparableClaims(a: GroundedClaim, b: GroundedClaim): boolean {
+  return a.normalized_entity === b.normalized_entity
+    && a.normalized_attribute === b.normalized_attribute
+    && a.modality === b.modality
+    && a.normalized_time === b.normalized_time;
 }
 
 function pairKey(a: string, b: string): string {
@@ -168,8 +206,7 @@ function parseNumeric(value: string): number | null {
 }
 
 function cheapJudgePair(claimA: GroundedClaim, claimB: GroundedClaim): JudgeResult | null {
-  if (claimA.normalized_entity !== claimB.normalized_entity) return null;
-  if (claimA.normalized_attribute !== claimB.normalized_attribute) return null;
+  if (!comparableClaims(claimA, claimB)) return null;
   const leftNumber = parseNumeric(claimA.value);
   const rightNumber = parseNumeric(claimB.value);
   if (exactValueKey(claimA.value) === exactValueKey(claimB.value) || (leftNumber !== null && rightNumber !== null && leftNumber === rightNumber)) {
@@ -333,21 +370,8 @@ export class ContradictionService {
     if (!this.llm.adapter || !this.llm.modelEndpoint) throw new Error("文本 LLM 未配置：矛盾检测不可用");
 
     const batches = splitIntoBatches(chunks, BATCH_CHUNKS);
-    const batchResults = await mapWithConcurrency(batches, async (batch): Promise<ClaimBatchResult> => {
-      // 零外发红线：每批出站前先授权——授权失败必须显式失败，不得当作"失败批次"吞掉。
-      await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "contradiction-extract" });
-      let rawClaims: RawClaim[];
-      try {
-        rawClaims = await this.extractClaims(batch, opts.signal);
-      } catch (e) {
-        if (opts.signal?.aborted || e instanceof AppError) throw e;
-        // 仅模型/网络/解析失败 → best-effort 跳过该批，其余继续；保留原因供 warnings 透出。
-        return { claims: [], chunksCovered: 0, failed: true, error: e instanceof Error ? e.message : String(e) };
-      }
-      // 接地在 catch 之外：其内部缺陷应当显式抛出，而非被静默记成失败批次。
-      const retrievedById = new Map(batch.map((chunk) => [chunk.chunk_id, chunk]));
-      return { claims: this.groundClaims(rawClaims, retrievedById, nameById, entityAliases), chunksCovered: batch.length, failed: false };
-    }, {
+    const batchResults = await mapWithConcurrency(batches, (batch): Promise<ClaimBatchResult> =>
+      this.extractClaimBatch(actor, batch, nameById, entityAliases, opts.signal), {
       concurrency: CONCURRENCY,
       signal: opts.signal,
       onSettled: (done, total) => opts.onProgress?.({ done, total }),
@@ -376,6 +400,36 @@ export class ContradictionService {
     return contradictions;
   }
 
+  /** 完整 JSON 解析失败时二分重试；单 chunk 仍失败才记为未覆盖。 */
+  private async extractClaimBatch(
+    actor: Identity,
+    batch: Chunk[],
+    nameById: Map<string, string>,
+    entityAliases: Map<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ClaimBatchResult> {
+    try {
+      await this.llm.guard.authorize(this.llm.modelEndpoint, { user: actor.id, purpose: "contradiction-extract" });
+      const rawClaims = await this.extractClaims(batch, signal);
+      const retrievedById = new Map(batch.map((chunk) => [chunk.chunk_id, chunk]));
+      return { claims: this.groundClaims(rawClaims, retrievedById, nameById, entityAliases), chunksCovered: batch.length, failed: false };
+    } catch (e) {
+      if (signal?.aborted || e instanceof AppError) throw e;
+      if (batch.length > 1) {
+        const middle = Math.ceil(batch.length / 2);
+        const left = await this.extractClaimBatch(actor, batch.slice(0, middle), nameById, entityAliases, signal);
+        const right = await this.extractClaimBatch(actor, batch.slice(middle), nameById, entityAliases, signal);
+        return {
+          claims: [...left.claims, ...right.claims],
+          chunksCovered: left.chunksCovered + right.chunksCovered,
+          failed: left.failed || right.failed,
+          error: left.error ?? right.error,
+        };
+      }
+      return { claims: [], chunksCovered: 0, failed: true, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   private async runAgenticDetection(
     actor: Identity,
     caseId: string,
@@ -394,7 +448,7 @@ export class ContradictionService {
     let nextClaimSeq = 1;
     let pairsJudged = 0;
     let finalized = false;
-    let committed: Contradiction[] = [];
+    const committed = new Map<string, Contradiction>();
     const service = this;
 
     const readWindow = (materialId: string, startChunk = 0, limit = 3): { chunks?: { index: number; chunk: Chunk }[]; error?: string } => {
@@ -498,7 +552,7 @@ export class ContradictionService {
           const claimA = claimMap.get(claim_a_id);
           const claimB = claimMap.get(claim_b_id);
           if (!claimA || !claimB) return { ok: false, content: `未知 claim_id：${[claim_a_id, claim_b_id].filter((id) => !claimMap.has(id)).join(", ")}` };
-          if (claimA.normalized_entity !== claimB.normalized_entity) return { ok: false, content: "claim pair 实体不一致，不能比较为矛盾" };
+          if (!comparableClaims(claimA, claimB)) return { ok: false, content: "claim pair 实体不一致，或属性/事实模态不可比，不能比较为矛盾" };
           const judge = cheapJudgePair(claimA, claimB) ?? await service.judgePair(actor, claimA, claimB, ctx.signal);
           pairsJudged++;
           judgments.set(pairKey(claim_a_id, claim_b_id), judge);
@@ -507,7 +561,7 @@ export class ContradictionService {
       },
       {
         name: "commit_contradictions",
-        description: "提交最终矛盾；只能引用本轮 extract_claims_from_scope 返回的 claim_id。",
+        description: "分批提交最终矛盾；结果会累积去重，只能引用本轮 extract_claims_from_scope 返回的 claim_id。",
         inputSchema: z.object({
           contradictions: z.array(z.object({
             claim_a_id: z.string(),
@@ -525,7 +579,7 @@ export class ContradictionService {
             if (!claimA || !claimB) {
               return { ok: false, content: `未知 claim_id：${[item.claim_a_id, item.claim_b_id].filter((id) => !claimMap.has(id)).join(", ")}` };
             }
-            if (claimA.normalized_entity !== claimB.normalized_entity) return { ok: false, content: "claim pair 实体不一致，不能提交为矛盾" };
+            if (!comparableClaims(claimA, claimB)) return { ok: false, content: "claim pair 实体不一致，或属性/事实模态不可比，不能提交为矛盾" };
             const key = pairKey(item.claim_a_id, item.claim_b_id);
             let previous = judgments.get(key);
             if (!previous) {
@@ -544,9 +598,15 @@ export class ContradictionService {
               rule_name: previous?.rule_name,
             }, item.confidence === undefined ? undefined : clamp01(item.confidence)));
           }
-          committed = next;
+          for (const item of next) {
+            const key = [
+              `${item.claim_a.citation.material_id}:${item.claim_a.citation.content_hash}:${item.value_a ?? item.claim_a.text}`,
+              `${item.claim_b.citation.material_id}:${item.claim_b.citation.content_hash}:${item.value_b ?? item.claim_b.text}`,
+            ].sort().join("\0");
+            committed.set(key, item);
+          }
           finalized = true;
-          return { ok: true, content: JSON.stringify({ committed: committed.length }) };
+          return { ok: true, content: JSON.stringify({ committed: committed.size }) };
         },
       },
     ];
@@ -597,9 +657,10 @@ export class ContradictionService {
 
     await conversation.send(task, opts.signal, runOptions);
     if (!finalized) await conversation.send(repair, opts.signal, runOptions);
+    const committedContradictions = [...committed.values()];
     if (finalized) {
-      committed.sort((a, b) => b.confidence - a.confidence);
-      this.detectionStats.set(committed, {
+      committedContradictions.sort((a, b) => b.confidence - a.confidence);
+      this.detectionStats.set(committedContradictions, {
         clusters: 0,
         pairsJudged,
         batches: 0,
@@ -607,9 +668,9 @@ export class ContradictionService {
         chunksTotal: chunks.length,
         failedBatches: 0,
       });
-      this.detectionPropositions.set(committed, [...claimMap.values()]);
+      this.detectionPropositions.set(committedContradictions, [...claimMap.values()]);
     }
-    return { finalized, contradictions: committed, claims: [...claimMap.values()], pairsJudged, chunksCovered: visible.size };
+    return { finalized, contradictions: committedContradictions, claims: [...claimMap.values()], pairsJudged, chunksCovered: visible.size };
   }
 
   async get(actor: Identity, caseId: string): Promise<Contradiction[]> {
@@ -677,15 +738,6 @@ export class ContradictionService {
     };
     await saveContradictionAcknowledgement(this.paths, acknowledgement);
 
-    // P1-1 fix: Update contradictions-result.json to keep acknowledgements in sync
-    const updatedAcknowledgements = result.acknowledgements?.filter((ack) => ack.contradiction_id !== contradictionId) ?? [];
-    updatedAcknowledgements.push(acknowledgement);
-    const updatedResult: ContradictionDetectionResult = {
-      ...result,
-      acknowledgements: updatedAcknowledgements,
-    };
-    await writeFile(this.contradictionsResultFile(caseId), `${JSON.stringify(updatedResult, null, 2)}\n`, "utf8");
-
     await this.audit.append({
       user: actor.id,
       action: "contradiction.acknowledge",
@@ -700,7 +752,13 @@ export class ContradictionService {
     const context = chunks.map((chunk) => `[${chunk.chunk_id}] ${chunk.text}`).join("\n\n");
     const systemPrompt = this.promptStore ? await this.promptStore.getBody("contradiction-extract") : EXTRACT_PROMPT;
     // claim 抽取属批量机械抽取：关思考求速度/规模。授权由调用方按批完成（见 detectFromChunks）。
-    const raw = await generateJson(this.llm.adapter!, systemPrompt, `素材片段：\n${context}\n\n请只输出 JSON。`, { maxTokens: 2500, thinking: "disabled", signal });
+    const raw = await generateJson(this.llm.adapter!, systemPrompt, `素材片段：\n${context}\n\n请只输出 JSON。`, {
+      maxTokens: 8192,
+      timeoutMs: 120_000,
+      thinking: "disabled",
+      signal,
+      allowPartialJsonRepair: false,
+    });
     return Array.isArray(raw.claims) ? (raw.claims as RawClaim[]) : [];
   }
 
@@ -718,6 +776,7 @@ export class ContradictionService {
       if (!chunk) continue;
       const citation = chunkToCitation(chunk, nameById.get(chunk.material_id) ?? chunk.material_id);
       if (!validKeys.has(citationKey(citation))) continue;
+      const time = inferClaimTime(raw, chunk.text);
       grounded.push({
         entity,
         attribute,
@@ -725,10 +784,13 @@ export class ContradictionService {
         normalized_entity: normalizeEntity(entity, entityAliases),
         normalized_attribute: normalizeAttribute(attribute),
         normalized_value: normalizeValue(value),
+        modality: inferClaimModality(raw, chunk.text),
+        time,
+        normalized_time: compactKey(time),
         chunk_id: chunkId,
         material_id: chunk.material_id,
         citation,
-        text: claimText({ entity, attribute, value }),
+        text: claimText({ entity, attribute, value, time }),
       });
     }
     return grounded;
@@ -737,7 +799,7 @@ export class ContradictionService {
   private clusterClaims(claims: GroundedClaim[]): Map<string, GroundedClaim[]> {
     const clusters = new Map<string, GroundedClaim[]>();
     for (const claim of claims) {
-      const key = claim.normalized_entity;
+      const key = `${claim.normalized_entity}\0${claim.normalized_attribute}\0${claim.modality}\0${claim.normalized_time}`;
       clusters.set(key, [...(clusters.get(key) ?? []), claim]);
     }
     return clusters;
@@ -768,10 +830,15 @@ export class ContradictionService {
     const pairs: [GroundedClaim, GroundedClaim][] = [];
     for (let i = 0; i < claims.length; i++) {
       for (let j = i + 1; j < claims.length; j++) {
-        pairs.push([claims[i]!, claims[j]!]);
+        const left = claims[i]!;
+        const right = claims[j]!;
+        if (!comparableClaims(left, right)) continue;
+        // 相同值只会得到 agreement，不占有限的矛盾候选配额。
+        if (cheapJudgePair(left, right)?.relation === "agreement") continue;
+        pairs.push([left, right]);
       }
     }
-    return pairs;
+    return pairs.sort(([a1, a2], [b1, b2]) => Number(b1.material_id !== b2.material_id) - Number(a1.material_id !== a2.material_id));
   }
 
   private async judgePair(actor: Identity, claimA: GroundedClaim, claimB: GroundedClaim, signal?: AbortSignal): Promise<JudgeResult> {
@@ -782,7 +849,9 @@ export class ContradictionService {
       systemPrompt,
       [
         `claim_a: ${claimA.text}`,
+        `source_a: ${claimA.citation.snippet}`,
         `claim_b: ${claimB.text}`,
+        `source_b: ${claimB.citation.snippet}`,
         "请只输出 JSON。",
       ].join("\n"),
       // 成对矛盾判定：benchmark 实测开思考反而降召回（F1 0.909 vs 关思考 0.957，见 benchmark-summary.md），
@@ -886,8 +955,8 @@ export class ContradictionService {
   private async persist(caseId: string, result: ContradictionDetectionResult): Promise<void> {
     const file = this.contradictionsFile(caseId);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify(result.contradictions, null, 2)}\n`, "utf8");
-    await writeFile(this.contradictionsResultFile(caseId), `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    await writeFileAtomic(file, `${JSON.stringify(result.contradictions, null, 2)}\n`);
+    await writeFileAtomic(this.contradictionsResultFile(caseId), `${JSON.stringify(result, null, 2)}\n`);
   }
 
   private async auditContradictionAckDeny(actor: Identity, caseId: string, contradictionId: string, reason: string): Promise<void> {

@@ -66,6 +66,9 @@ Rules:
 - if the parent signal is already aborted, the tool does not start
 - if the parent signal aborts during execution, the child signal is aborted too
 - tools that support streaming or long-running work must observe `ctx.signal`
+- after a tool has returned, late `onUpdate` progress is ignored by the run manager
+
+The registry can deliver cancellation but cannot roll back arbitrary external side effects. Built-in write/edit/bash tools cooperate with cancellation; a third-party tool that ignores `ctx.signal` may continue its own external work even though its late result is no longer accepted by the run.
 
 ## Tool context
 
@@ -164,6 +167,7 @@ Contract:
 - optionally creates parent directories
 - refuses overwrite when `overwrite === false`
 - writes through a temporary file and `rename()` for atomic replacement
+- checks cancellation before committing the final rename
 
 `meta` fields:
 
@@ -178,6 +182,7 @@ Contract:
 - normalizes text before matching
 - rejects zero matches with `EDIT_NO_MATCH`
 - rejects ambiguous matches unless `replace_all === true`
+- writes the replacement through the same atomic, cancellation-aware path as `write`
 
 `meta` fields:
 
@@ -193,6 +198,8 @@ Contract:
 - streams partial output through `ctx.onUpdate`
 - writes the full combined output to `.mini-agent/artifacts/bash/<tool-call-id>.log`
 - keeps only bounded stdout, stderr, and combined tails in memory
+- starts the command in its own process group on supported platforms
+- on timeout or abort, sends `SIGTERM` to the group and escalates to `SIGKILL` when it does not exit
 
 `meta` fields:
 

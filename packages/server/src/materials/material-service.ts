@@ -620,7 +620,13 @@ export class MaterialService {
    * 落盘 `materials/`，不经 base64 膨胀/JSON 解析。真实音视频（动辄上百 MB）走此路径。
    * 文本文档同步切块 done；媒体 pending（待 process）。
    */
-  async ingestStream(actor: Identity, caseId: string, rawFilename: string, stream: NodeJS.ReadableStream): Promise<Material> {
+  async ingestStream(
+    actor: Identity,
+    caseId: string,
+    rawFilename: string,
+    stream: NodeJS.ReadableStream,
+    opts: { settle?: boolean } = {},
+  ): Promise<Material> {
     await this.cases.requireWriteAccess(actor, caseId, "material.ingest"); // 访问 + 密级 + 写权限校验
     const filename = path.basename(rawFilename ?? "").trim() || "未命名素材";
     const ext = extOf(filename);
@@ -663,8 +669,14 @@ export class MaterialService {
       detail: { caseId, materialId: id, filename, modality, status: base.status, via: "stream" },
     });
     const result = await this.processMediaAtIngest(actor, caseId, base);
-    this.notifyMaterialsSettled(actor, caseId);
+    if (opts.settle !== false) this.notifyMaterialsSettled(actor, caseId);
     return result;
+  }
+
+  /** 多件大文件逐个流式上传后的统一收口；避免第一件完成时提前启动自动分析。 */
+  async settleIngest(actor: Identity, caseId: string): Promise<void> {
+    await this.cases.requireWriteAccess(actor, caseId, "material.ingest");
+    this.notifyMaterialsSettled(actor, caseId);
   }
 
   /** 专题素材列表 + 加工状态（§5）。 */

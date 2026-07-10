@@ -65,6 +65,7 @@ export class RunManager {
   private status: RunStatus = "pending";
   private firstError: RunFailure | null = null;
   private finished = false;
+  private emitQueue: Promise<void> = Promise.resolve();
 
   private constructor(
     private readonly options: RunManagerOptions,
@@ -192,6 +193,7 @@ export class RunManager {
    * this path. Status remains unchanged.
    */
   async recordToolProgress(toolCall: ToolCall, partial: string): Promise<void> {
+    if (this.finished) return;
     await this.emit({
       type: "tool_progress",
       phase: "tool",
@@ -416,20 +418,24 @@ export class RunManager {
     });
   }
 
-  private async emit(input: Omit<RunEvent, "schema_version" | "event_id" | "trace_id" | "run_id" | "session_id" | "seq" | "ts">): Promise<RunEvent> {
-    this.seq += 1;
-    const event: RunEvent = {
-      schema_version: "v1.2",
-      event_id: createId("evt"),
-      trace_id: this.traceId,
-      run_id: this.runId,
-      session_id: this.options.sessionId,
-      seq: this.seq,
-      ts: new Date().toISOString(),
-      ...input,
-    };
-    await this.options.runStore.appendEvent(event);
-    this.options.eventBus.emit(event);
-    return event;
+  private emit(input: Omit<RunEvent, "schema_version" | "event_id" | "trace_id" | "run_id" | "session_id" | "seq" | "ts">): Promise<RunEvent> {
+    const pending = this.emitQueue.then(async () => {
+      this.seq += 1;
+      const event: RunEvent = {
+        schema_version: "v1.2",
+        event_id: createId("evt"),
+        trace_id: this.traceId,
+        run_id: this.runId,
+        session_id: this.options.sessionId,
+        seq: this.seq,
+        ts: new Date().toISOString(),
+        ...input,
+      };
+      await this.options.runStore.appendEvent(event);
+      this.options.eventBus.emit(event);
+      return event;
+    });
+    this.emitQueue = pending.then(() => undefined, () => undefined);
+    return pending;
   }
 }

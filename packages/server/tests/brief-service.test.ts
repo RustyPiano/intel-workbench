@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -139,9 +139,9 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
     await writeCaseJson("findings.json", [finding("f1", "approved"), finding("f2", "draft")]);
   }
 
-  function makeBrief(content: () => string, calls?: { n: number }, adapterNull = false): BriefService {
+  function makeBrief(content: () => string, calls?: { n: number }, adapterNull = false, customAdapter?: ModelAdapter): BriefService {
     const guard = new OfflineGuard(["stub.local"], audit);
-    const llm: LlmDeps = { adapter: adapterNull ? null : scriptedAdapter(content, calls), guard, modelEndpoint: adapterNull ? "" : "https://stub.local/v1" };
+    const llm: LlmDeps = { adapter: adapterNull ? null : (customAdapter ?? scriptedAdapter(content, calls)), guard, modelEndpoint: adapterNull ? "" : "https://stub.local/v1" };
     return new BriefService(paths, audit, cases, materials, elements, elementGraph, contradictions, findings, tasks, stubSuggestions, stubAutoInquiry, llm);
   }
 
@@ -219,6 +219,66 @@ describe("BriefService（阶段三 M2 研判简报聚合）", () => {
     // refresh 强制重算，即使指纹未变。
     await brief.getBrief(OPERATOR, caseId, { refresh: true });
     expect(calls.n).toBe(3);
+  });
+
+  it("同 caseId + fingerprint 的并发请求只调用一次模型", async () => {
+    const calls = { n: 0 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const adapter: ModelAdapter = {
+      name: "slow-scripted",
+      async generate() {
+        calls.n += 1;
+        await gate;
+        return {
+          message: { role: "assistant", content: JSON.stringify({ sentences: [{ text: "句", chunk_id: chunk.chunk_id, quote: chunk.text.slice(0, 4) }] }) },
+          stopReason: "end_turn",
+        };
+      },
+    };
+    const brief = makeBrief(() => "", undefined, false, adapter);
+
+    const first = brief.getBrief(OPERATOR, caseId);
+    const second = brief.getBrief(OPERATOR, caseId);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls.n).toBe(1);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a.generatedAt).toBe(b.generatedAt);
+    expect(a.overview).toHaveLength(1);
+  });
+
+  it("暂态模型降级不覆盖 last-good 缓存，并记录 lastError", async () => {
+    let fail = false;
+    const calls = { n: 0 };
+    const adapter: ModelAdapter = {
+      name: "flaky-scripted",
+      async generate() {
+        calls.n += 1;
+        if (fail) throw new Error("Run aborted by signal");
+        return {
+          message: { role: "assistant", content: JSON.stringify({ sentences: [{ text: "稳定概览", chunk_id: chunk.chunk_id, quote: chunk.text.slice(0, 4) }] }) },
+          stopReason: "end_turn",
+        };
+      },
+    };
+    const brief = makeBrief(() => "", undefined, false, adapter);
+    const good = await brief.getBrief(OPERATOR, caseId);
+    fail = true;
+
+    const degraded = await brief.getBrief(OPERATOR, caseId, { refresh: true });
+
+    expect(degraded.degraded).toBe(true);
+    expect(degraded.overview).toEqual([]);
+    expect(degraded.lastError).toContain("Run aborted by signal");
+    const onDisk = JSON.parse(await readFile(path.join(paths.caseDir(caseId), "brief.json"), "utf8")) as { degraded: boolean; overview: unknown[] };
+    expect(onDisk.degraded).toBe(false);
+    expect(onDisk.overview).toHaveLength(1);
+    const cached = await brief.getBrief(OPERATOR, caseId);
+    expect(cached.generatedAt).toBe(good.generatedAt);
+    expect(cached.overview).toHaveLength(1);
+    expect(calls.n).toBe(2);
   });
 
   it("密级不足 → getBrief 拒绝（复用 cases.get 访问闸门）", async () => {

@@ -23,7 +23,7 @@ import {
   TASK_STATUS_LABELS,
 } from "./helpers";
 
-export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: boolean }) {
+export function TaskOverview({ caseId, enabled, canManage = true }: { caseId?: string; enabled: boolean; canManage?: boolean }) {
   const [snapshot, setSnapshot] = useState<ApiTaskRunSnapshot | null>(null);
   const [visibleMaterials, setVisibleMaterials] = useState<ApiMaterial[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +61,7 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
   }, [caseId, enabled]);
 
   const handleStart = async () => {
-    if (!caseId || creating) return;
+    if (!caseId || !canManage || creating) return;
     setCreating(true);
     setError(null);
     try {
@@ -77,7 +77,7 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
 
   const handleConfirm = async () => {
     const current = snapshot?.overview.currentStage;
-    if (!caseId || !snapshot || !current?.checkpoint || confirming) return;
+    if (!caseId || !canManage || !snapshot || !current?.checkpoint || confirming) return;
     setConfirming(true);
     setError(null);
     try {
@@ -92,7 +92,7 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
   };
 
   const handleAdvance = async (stageKey: string, status: TaskAdvanceStatus) => {
-    if (!caseId || !snapshot || advancing) return;
+    if (!caseId || !canManage || !snapshot || advancing) return;
     const key = `${stageKey}:${status}`;
     setAdvancing(key);
     setError(null);
@@ -175,12 +175,12 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
               去对应板块
             </NavLink>
           ) : null}
-          {!snapshot ? (
+          {!snapshot && canManage ? (
             <button type="button" className="btn btn--primary" onClick={handleStart} disabled={creating}>
               {creating ? "启动中…" : "开始核验任务"}
             </button>
           ) : null}
-          {currentStage?.checkpoint && currentStage.status === "active" ? (
+          {canManage && currentStage?.checkpoint && currentStage.status === "active" ? (
             <button type="button" className="btn btn--primary" onClick={handleConfirm} disabled={confirming}>
               {confirming ? "确认中…" : "确认检查点"}
             </button>
@@ -198,7 +198,7 @@ export function TaskOverview({ caseId, enabled }: { caseId?: string; enabled: bo
             <span className="task-stage__name">{taskStageName(stage)}</span>
             <span className="task-stage__hint">{stageHint(stage)}</span>
             {stage.checkpoint ? <span className="task-stage__checkpoint">需人工确认</span> : null}
-            {stage.status === "active" && MANUAL_STAGE_KEYS.has(stage.key) ? (
+            {canManage && stage.status === "active" && MANUAL_STAGE_KEYS.has(stage.key) ? (
               <span className="task-stage__actions">
                 <button type="button" onClick={() => void handleAdvance(stage.key, "done")} disabled={Boolean(advancing)}>
                   {advancing === `${stage.key}:done` ? "处理中…" : "标记完成"}

@@ -140,6 +140,28 @@ describe("RunManager state machine", () => {
     expect(await readMetaStatus(runStore, manager.runId)).toBe("running");
   });
 
+  test("serializes delayed progress writes before terminal events", async () => {
+    const { manager, runStore } = await bootstrap();
+    const appendEvent = runStore.appendEvent.bind(runStore);
+    vi.spyOn(runStore, "appendEvent").mockImplementation(async (event) => {
+      if (event.type === "tool_progress") await new Promise((resolve) => setTimeout(resolve, 25));
+      return appendEvent(event);
+    });
+
+    const progress = manager.recordToolProgress(makeToolCall("bash"), "slow write");
+    await manager.recordAssistantCompleted(makeAssistantMessage());
+    await manager.complete();
+    await progress;
+    await manager.recordToolProgress(makeToolCall("bash"), "too late");
+
+    const trace = await runStore.loadTrace(manager.runId);
+    expect(trace.status).toBe("valid");
+    expect(trace.events.at(-1)?.type).toBe("run_completed");
+    expect(trace.events.map((event) => event.seq)).toEqual(
+      [...trace.events.map((event) => event.seq)].sort((left, right) => left - right),
+    );
+  });
+
   test("duration is computed against startedAtMs with fake timers", async () => {
     vi.useFakeTimers();
     const startInstant = new Date("2026-05-18T00:00:00.000Z").getTime();

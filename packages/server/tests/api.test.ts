@@ -66,7 +66,11 @@ describe("API 接线（鉴权 + M1）", () => {
 
   it("health 公开可用（免登录）", async () => {
     const res = await fetch(`${base}/api/health`);
-    expect(await res.json()).toEqual({ ok: true });
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, devMode: true });
+    expect(typeof body.modelConfigured).toBe("boolean");
+    expect(body.networkMode).toBe("offline");
+    expect(Object.keys(body).sort()).toEqual(["devMode", "modelConfigured", "networkMode", "ok"].sort());
   });
 
   it("未登录访问受保护路由 → 401", async () => {
@@ -119,6 +123,20 @@ describe("API 接线（鉴权 + M1）", () => {
 
   it("作业员无权查审计 → 403", async () => {
     const res = await fetch(`${base}/api/audit`, { headers: authHeaders(operatorToken) });
+    expect(res.status).toBe(403);
+  });
+
+  it("低密级保密员不得读取全局审计", async () => {
+    const created = await fetch(`${base}/api/admin/users`, {
+      method: "POST",
+      headers: authHeaders(adminToken, true),
+      body: JSON.stringify({ id: "security-low", name: "低密级保密员", role: "security", clearance: "internal", password: "security-low-password" }),
+    });
+    expect(created.status).toBe(201);
+    const token = (await (await login("security-low", "security-low-password")).json()).token;
+
+    const res = await fetch(`${base}/api/audit`, { headers: authHeaders(token) });
+
     expect(res.status).toBe(403);
   });
 

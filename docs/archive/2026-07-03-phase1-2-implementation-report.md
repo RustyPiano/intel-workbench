@@ -1,5 +1,7 @@
 # 智能工作流自动化实施报告（Phase 1-2）
 
+> **历史存档（2026-07-03）**：本文记录建议服务/上下文/提示词体系的一次阶段快照，测试数字和“下一步”均不代表当前版本。
+
 **报告日期**: 2026-07-03  
 **项目周期**: 2026-07-03 至 2026-07-03（1 天集中实施）  
 **状态**: Phase 1-2 完成，Phase 3（FeedbackService）未实施、已放弃（2026-07-07 核实，全仓 grep 零命中）  
@@ -455,7 +457,7 @@ ReportService
 ### A. 决策文档
 
 - [智能工作流自动化决策文档](../decisions/2026-07-03-intelligent-workflow-automation.md)
-- [实施路线图](../decisions/implementation-roadmap.md)
+- [实施路线图（归档）](./implementation-roadmap-2026-07-03.md)
 
 ### B. 提示词模板
 

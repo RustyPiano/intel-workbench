@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -8,7 +8,7 @@ import { AuditService } from "../src/audit/audit-service.js";
 import { ContradictionService } from "../src/analysis/contradiction-service.js";
 import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
-import type { Chunk, Contradiction, Finding, Identity } from "../src/domain/types.js";
+import type { Chunk, Citation, Contradiction, Finding, Identity } from "../src/domain/types.js";
 import { FindingService } from "../src/finding/finding-service.js";
 import { chunkToCitation } from "../src/inquiry/citation.js";
 import { MaterialService } from "../src/materials/material-service.js";
@@ -40,6 +40,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
     contradictions = new ContradictionService(paths, audit, cases, materials, { adapter: null, guard: { authorize: async () => undefined } as unknown as OfflineGuard, modelEndpoint: "" } satisfies LlmDeps);
     reports = new ReportService(paths, audit, cases);
     caseId = (await cases.create(OPERATOR, { name: "报告专题", clearance: "internal" })).id;
+    await seedCompleteContradictions();
   });
 
   afterEach(async () => {
@@ -57,6 +58,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       supporting_citations: [citation],
       confidence: 0.9,
     });
+    await seedCompleteContradictions();
     return findings.review(SECURITY, caseId, finding.id, { review_status: "approved" });
   }
 
@@ -79,7 +81,17 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       open_questions: [],
     };
     await writeFile(path.join(paths.caseDir(caseId), "findings.json"), `${JSON.stringify([finding], null, 2)}\n`, "utf8");
+    await seedCompleteContradictions();
     return finding;
+  }
+
+  async function seedCompleteContradictions(items: Array<{ id?: string; confidence?: number }> = []): Promise<void> {
+    const count = materials ? (await materials.loadCaseChunks(caseId)).length : 0;
+    await writeFile(
+      path.join(paths.caseDir(caseId), "contradictions.result.json"),
+      `${JSON.stringify({ status: "succeeded", contradictions: items, groundedPropositions: [], processedChunks: count, totalChunks: count, truncated: false, warnings: [] }, null, 2)}\n`,
+      "utf8",
+    );
   }
 
   async function approveReportFromFinding(finding: Finding): Promise<void> {
@@ -148,7 +160,13 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       coverage_status: "covered",
     });
     expect((await reports.submit(OPERATOR, caseId)).status).toBe("in_review");
-    expect((await reports.approve(SECURITY, caseId)).status).toBe("approved");
+    const approved = await reports.approve(SECURITY, caseId);
+    expect(approved.status).toBe("approved");
+    expect(approved.revision).toBeGreaterThan(0);
+    expect(approved.submittedRevision).toBe(approved.revision);
+    expect(approved.approvedRevision).toBe(approved.revision);
+    expect(approved.submittedContentHash).toBe(approved.contentHash);
+    expect(approved.approvedContentHash).toBe(approved.contentHash);
 
     const exported = await reports.export(OPERATOR, caseId);
     expect(exported.status).toBe("exported");
@@ -170,6 +188,9 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
     await reports.approve(SECURITY, caseId);
     const rec = await reports.draft(OPERATOR, caseId, { title: "通报（修订）", body: "新正文" });
     expect(rec.status).toBe("draft");
+    expect(rec.submittedRevision).toBeUndefined();
+    expect(rec.approvedRevision).toBeUndefined();
+    expect(rec.reviewed_by).toBeUndefined();
   });
 
   it("关键结论可由 referenced Finding 的 span citation 覆盖，即使 citation_ids 为空", async () => {
@@ -293,11 +314,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
   it("T8: unresolved high-severity contradiction blocks export; resolved 后放行", async () => {
     const finding = await approvedFinding();
     await approveReportFromFinding(finding);
-    await writeFile(
-      path.join(paths.caseDir(caseId), "contradictions.result.json"),
-      `${JSON.stringify({ status: "succeeded", contradictions: [{ id: "ct-1", confidence: 0.75 }] }, null, 2)}\n`,
-      "utf8",
-    );
+    await seedCompleteContradictions([{ id: "ct-1", confidence: 0.75 }]);
 
     await expectExportRejected("contradiction:high-severity-unresolved");
     await contradictions.acknowledge(SECURITY, caseId, "ct-1", { status: "resolved", note: "人工复核已解释来源差异" });
@@ -320,6 +337,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       confidence: 0.9,
     };
     await writeFile(path.join(paths.caseDir(caseId), "contradictions.json"), `${JSON.stringify([contradiction], null, 2)}\n`, "utf8");
+    await rm(path.join(paths.caseDir(caseId), "contradictions.result.json"), { force: true });
 
     await expectExportRejected("contradiction:high-severity-unresolved");
   });
@@ -346,11 +364,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
         coverage_status: "uncovered",
       }],
     });
-    await writeFile(
-      path.join(paths.caseDir(caseId), "contradictions.result.json"),
-      `${JSON.stringify({ status: "succeeded", contradictions: [{ id: "ct-2", confidence: 0.9 }] }, null, 2)}\n`,
-      "utf8",
-    );
+    await seedCompleteContradictions([{ id: "ct-2", confidence: 0.9 }]);
 
     const reasons = await expectExportRejected("coverage:uncited-fact");
     expect(reasons).toEqual(expect.arrayContaining([
@@ -359,5 +373,102 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       "contradiction:high-severity-unresolved",
     ]));
     expect(new Set(reasons).size).toBe(reasons.length);
+  });
+
+  it("渲染失败删除旧 Markdown，且禁止提交", async () => {
+    const first = await reports.draft(OPERATOR, caseId, { title: "旧报告", body: "旧正文" });
+    expect(first.rendered).toBe(true);
+    const savedScript = process.env.WORKBENCH_BULLETIN_SCRIPT;
+    process.env.WORKBENCH_BULLETIN_SCRIPT = path.join(root, "missing-renderer.py");
+    try {
+      const second = await reports.draft(OPERATOR, caseId, { title: "新报告", body: "新正文" });
+      expect(second).toMatchObject({ status: "draft", rendered: false, revision: (first.revision ?? 0) + 1 });
+      expect(second.contentHash).toBeUndefined();
+      await expect(access(path.join(paths.caseDir(caseId), "report", "bulletin.md"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(reports.submit(OPERATOR, caseId)).rejects.toMatchObject({ status: 409 });
+    } finally {
+      if (savedScript === undefined) delete process.env.WORKBENCH_BULLETIN_SCRIPT;
+      else process.env.WORKBENCH_BULLETIN_SCRIPT = savedScript;
+    }
+  });
+
+  it("审批前或审批后正文被替换都会 409 fail-closed", async () => {
+    const finding = await approvedFinding();
+    await reports.draft(OPERATOR, caseId, { title: "通报", finding_ids: [finding.id] });
+    await reports.submit(OPERATOR, caseId);
+    const markdown = path.join(paths.caseDir(caseId), "report", "bulletin.md");
+    const original = await readFile(markdown, "utf8");
+    await writeFile(markdown, `${original}\n未经提交的修改`, "utf8");
+    await expect(reports.approve(SECURITY, caseId)).rejects.toMatchObject({ status: 409 });
+
+    await reports.draft(OPERATOR, caseId, { title: "通报", finding_ids: [finding.id] });
+    await reports.submit(OPERATOR, caseId);
+    await reports.approve(SECURITY, caseId);
+    await writeFile(markdown, `${await readFile(markdown, "utf8")}\n未经审批的修改`, "utf8");
+    await expect(reports.export(OPERATOR, caseId)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("矛盾检测失败、截断或与当前 chunk 数不一致均禁止提交", async () => {
+    await reports.draft(OPERATOR, caseId, { title: "通报", body: "正文" });
+    const file = path.join(paths.caseDir(caseId), "contradictions.result.json");
+    for (const result of [
+      { status: "failed", processedChunks: 0, totalChunks: 0, truncated: false },
+      { status: "succeeded", processedChunks: 0, totalChunks: 1, truncated: true },
+      { status: "succeeded", processedChunks: 1, totalChunks: 1, truncated: false },
+    ]) {
+      await writeFile(file, `${JSON.stringify({ ...result, contradictions: [], groundedPropositions: [], warnings: [] })}\n`, "utf8");
+      await expect(reports.submit(OPERATOR, caseId)).rejects.toMatchObject({ status: 409 });
+    }
+  });
+
+  it("报告密级不得低于专题或所引证据最高密级", async () => {
+    await materials.ingest(OPERATOR, caseId, [{ filename: "classified.txt", content: "目标甲在码头出现。" }]);
+    const chunk = (await materials.loadCaseChunks(caseId))[0];
+    const citation = {
+      ...chunkToCitation(chunk, "classified.txt", 0.9, "目标甲在码头出现。"),
+      support_status: "supported" as const,
+      classification: "topsecret",
+    } as Citation & { classification: string };
+    const finding = await findings.create(OPERATOR, caseId, { conclusion: "目标甲在码头出现。", supporting_citations: [citation] });
+    await findings.review(SECURITY, caseId, finding.id, { review_status: "approved" });
+    await seedCompleteContradictions();
+
+    await expect(reports.draft(OPERATOR, caseId, { title: "低密级通报", classification: "机密", finding_ids: [finding.id] }))
+      .rejects.toMatchObject({ status: 400 });
+    await expect(reports.draft(OPERATOR, caseId, { title: "正确密级通报", finding_ids: [finding.id] }))
+      .resolves.toMatchObject({ spec: { classification: "绝密" } });
+  });
+
+  it("旧数据中含 support-unverified 引用的 Finding 不进入报告候选", async () => {
+    await materials.ingest(OPERATOR, caseId, [{ filename: "unverified.txt", content: "待核线索。" }]);
+    const chunk = (await materials.loadCaseChunks(caseId))[0];
+    const citation = { ...chunkToCitation(chunk, "unverified.txt", 0.8, "待核线索。"), support_status: "support-unverified" as const };
+    const legacy: Finding = {
+      id: "f-unverified",
+      caseId,
+      conclusion: "待核线索。",
+      supporting_citations: [citation],
+      opposing_citations: [],
+      confidence: 0.8,
+      review_status: "approved",
+      open_questions: [],
+    };
+    await writeFile(path.join(paths.caseDir(caseId), "findings.json"), `${JSON.stringify([legacy], null, 2)}\n`, "utf8");
+
+    await expect(reports.generateAutoDraft(OPERATOR, caseId)).resolves.toMatchObject({ sections: [], finding_ids: [] });
+    await expect(reports.draft(OPERATOR, caseId, { title: "通报", finding_ids: [legacy.id] })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("同专题并发草稿串行化，最终 record/spec/Markdown 仍为同一 revision", async () => {
+    await Promise.all(Array.from({ length: 5 }, (_unused, index) => reports.draft(OPERATOR, caseId, {
+      title: `并发通报 ${index}`,
+      body: `正文 ${index}`,
+    })));
+
+    const record = await reports.get(OPERATOR, caseId);
+    expect(record?.revision).toBe(5);
+    expect(record?.contentHash).toBeTruthy();
+    await expect(reports.submit(OPERATOR, caseId)).resolves.toMatchObject({ status: "in_review", revision: 5 });
+    await expect(reports.approve(SECURITY, caseId)).resolves.toMatchObject({ status: "approved", revision: 5 });
   });
 });

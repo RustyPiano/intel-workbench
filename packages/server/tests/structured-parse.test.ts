@@ -27,6 +27,11 @@ describe("parseJsonOutput 的保守修复回退（全链路彩排回归）", () 
     });
   });
 
+  it("覆盖率敏感任务可拒绝尾部截断的部分 JSON", () => {
+    const truncated = '{"claims":[{"entity":"甲","value":"1"},{"entity":"乙","val';
+    expect(() => parseJsonOutput(truncated, { allowPartial: false })).toThrow();
+  });
+
   it("字符串内的花括号与引号不被误修", () => {
     const tricky = '{"claims":[{"text":"引文含 } 与 { 以及 \\" 转义"}]}';
     expect(parseJsonOutput(tricky)).toEqual({ claims: [{ text: '引文含 } 与 { 以及 " 转义' }] });

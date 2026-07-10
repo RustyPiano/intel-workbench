@@ -84,12 +84,22 @@ export MINI_AGENT_API_KEY=local-dev-key
 - `packages/core`：自研 Agent Runtime、CLI、工具、技能、会话与 trace 基础设施。
 - `docs`：产品规格、工程计划、运行说明、评测与交接文档。
 
+当前文档入口：
+
+- [项目状态与开发约定](AGENTS.md)
+- [文档索引](docs/README.md)
+- [项目宣称与诚实边界](docs/claims-and-limitations.md)
+- [技术总结报告](docs/report/技术总结报告-2026-07-10.md)
+- [真实模型端到端复测](docs/report/2026-07-10-real-model-e2e.md)
+- [课程答辩材料](docs/delivery/README.md)
+
 ## Verification
 
 ```bash
 pnpm typecheck
 pnpm test:run
 pnpm check
+pnpm build
 ```
 
-Codex 沙箱可能因 TCP 权限导致 `packages/server/tests/api.test.ts` 出现 null port/EPERM 假阴性，`packages/core/tests/unit/bash.test.ts` 偶发波动；以本机完整 `pnpm check` 为准。
+2026-07-10 验证结果：106 个测试文件通过、1 个跳过；927 个测试通过、3 个跳过；core/server/web 三包构建通过。三个跳过用例均依赖显式外部模型条件：两个 DashScope 在线 smoke 和一个 LLM-dependent benchmark 指标用例。

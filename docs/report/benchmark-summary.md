@@ -2,7 +2,9 @@
 
 > 一处汇总两类可复现基准：①检索质量（RAG 四变体）②原创矛盾检测 skill（锚定流水线 vs 大模型直出）。
 > 全部用真实云替身模型 + 自造带标注语料跑出，结果落盘于 `packages/server/eval/**/results/`。
-> 复现：`source dev.env.sh && npm run eval[ --variant=...]` / `npm run eval:contradiction`。
+> 复现：`source dev.env.sh && pnpm eval -- --variant=<variant>` / `pnpm eval:contradiction`。
+
+> **当前状态（2026-07-10）**：检索数字仍对应当前检索实现；下方矛盾检测数字是 2026-07-07 的历史基线。2026-07-10 实现新增 `modality/time` 约束、计划/事实分离和大 JSON 二分重试，固定标注集尚未重跑。复测前不得把 0.957 写成“当前代码 F1”。
 
 ## 1. 检索质量（RAG）
 
@@ -17,7 +19,7 @@
 
 **读数（诚实负结果）**：强 hybrid+rerank 基线在该清洁合成基准上已近饱和（R@10=0.95）。通用 RAG 增强**总体不增益**——Contextual Retrieval 仅在重排阶段微增（MRR 0.915→0.923，对齐 Anthropic「上下文利于精排」），对一阶段混合略有稀释；query rewrite / HyDE 在「本就贴合 gold 块」的 query 上过度扩展/发散，反而降分（HyDE 尤甚）。三者均已实现且 **opt-in 默认关**，价值在脏/欠定/大歧义语料而非本基准。**这是真实结论，不是失败**：它界定了技术的适用边界，并把创新拿分点上移到下面的原创分析 skill。
 
-## 2. 原创矛盾检测 skill（锚定流水线 vs 大模型直出；含 NLI 思考分流对照）
+## 2. 原创矛盾检测 skill（2026-07-07 历史基线）
 
 语料：自造带标注案卷 **≈30 切块 / 6 虚构文件 / 12 条金标矛盾对**（含跨文件「同事实异说」+ 文件内矛盾 + 干扰项）。指标=矛盾对 Precision/Recall/F1。复现 `source dev.env.sh && pnpm eval:contradiction`。
 
@@ -27,19 +29,21 @@
 | anchored（NLI 开思考） | 1.000 | 0.833 | 0.909 | 10 | 0 | 2 |
 | llm-direct（全块丢 LLM 列矛盾） | 1.000 | 0.917 | 0.957 | 11 | 0 | 1 |
 
-> **2026-07-07 复测（当前代码，含阶段三 M5 的 `parseJsonOutput` 漏逗号修复后）**：`pnpm eval:contradiction` 重跑，**anchored 关思考 F1=0.957（R=0.917）、开思考 F1=0.909（R=0.833）与上表完全复现**——M5 稳健性修复未影响精度，数字在当前代码上仍成立。本次 **llm-direct=1.000（R=1.0，12/12）**，高于上一版的 0.957——直出为非确定性、逐次浮动。据此把价值定位表述**进一步收紧**：锚定流水线 F1 与直出**持平或略低**（本次 0.957 vs 直出 1.0），结构化的价值**明确不在 F1**，而在零编造引用 / 全语料覆盖 / 确定性 / 可审计（与诚实红线一致）。上表数字为 2026-06-22 定格值，本次复测确认其在当前 pipeline 仍可复现。
+> **2026-07-07 复测**：anchored 关思考 F1=0.957（R=0.917）、开思考 F1=0.909（R=0.833）；同次 llm-direct=1.000。直出结果具有逐次波动，早一版为 0.957。该结果只描述当时 pipeline，不覆盖 2026-07-10 的时间/模态约束实现。
 
-**算法**（非「让 LLM 找矛盾」）：①逐块抽原子主张 `{entity,attribute,value,chunk_id}`（LLM，关思考）→ `resolveValidCitations` 丢弃伪造锚点；②**按实体确定性聚类**（非 LLM）；③**仅簇内成对 NLI**（LLM 判 `contradiction|agreement|unrelated`），复杂度 O(Σnᵢ²) 而非 O(N²)；④确定性置信度（关系确定度+是否跨源+数值距离）+ scope（cross/intra-material）。两条矛盾陈述各经 `chunkToCitation` 绑定 content_hash = 逐条 provenance。
+**历史算法口径**：①逐块抽原子主张 `{entity,attribute,value,chunk_id}`；②按实体确定性聚类；③仅簇内成对 NLI；④计算置信度与 scope。两条矛盾陈述各绑定内容哈希和定位信息。
+
+**2026-07-10 当前算法变化**：命题扩为 `{entity,attribute,value,modality,time,chunk_id}`；只比较同一实体、属性、模态和归一化时间锚点，计划/预测与已发生事实分开；模型大 JSON 不可解析时递归二分批次，单块失败显式 partial。该变化旨在消除跨时间状态误报，但可能降低召回，必须重新跑同一 12 条金标集。
 
 **思考分流对照（headline，过程见决策日志 D24）**：我们曾假设「成对 NLI 属难判定 → 开思考求质量」，并据此把判定路由到 thinking-on。实测给出**反例**：NLI **开思考 F1=0.909（recall 0.833）低于关思考 F1=0.957（recall 0.917）**——推理模型「想多了」会把一条真矛盾判成 unrelated。故**按数据把 NLI 路由到关思考**（更快、更省、且召回更高）。「该开思考则开」在此处被 benchmark 明确判为「不开」——这正是老师要的「设计完 benchmark 对比验证」闭环：建机制（thinking on/off 可配，`MINI_AGENT_CONTRADICTION_JUDGE_THINKING`）→ 跑对照 → 让数据定默认。
 
 **关键提升（M1 机制修复，过程见 D20/D21）**：上一版 anchored F1 仅 0.737（recall 0.583）。根因：核心适配器发 `max_completion_tokens`（DeepSeek 静默忽略）令 token 上限失效，且推理模型（deepseek-v4-flash）把预算耗在思维链上 → claim 抽取/判定半截断。M1 改发 `max_tokens` + 思考分流（结构化任务一律关思考）后，anchored **0.737 → 0.957**，**追平 llm-direct**。
 
-**结论 + 价值定位（诚实）**：锚定流水线（关思考）**matches direct-LLM F1 (0.957) while adding zero-fabrication per-claim citations, full-corpus coverage, determinism, and auditability**。也就是说，当前真实结果是 **PARITY（F1 0.957 = 0.957）**，不是精度或 F1 优势；结构化价值在于每条矛盾绑定可校验 provenance / scope、可分批覆盖全语料（M2 分批 + 确定性合并，不随语料增大而单次调用丢上下文）、全程经 OfflineGuard 与哈希链审计。
+**结论 + 价值定位（诚实）**：2026-07-07 历史基线显示 anchored 与直出持平或略低，不存在精度优势。结构化价值在可校验 provenance / scope、分批覆盖和审计。当前实现的 Precision/Recall/F1 状态为 **pending rerun**。
 
 ## 3. 证据级/任务级指标（Batch F）
 
-> 复现（确定性指标）：`npx vitest run packages/server/tests/benchmark-metrics.test.ts`。夹具均为 `docs/report/fixtures/` 下的自造合成小样本；它们用于验证指标定义与管线可跑，不代表真实业务分布，可能与当前切块/Prompt 设计耦合。
+> 复现（确定性指标）：`pnpm vitest run packages/server/tests/benchmark-metrics.test.ts`。夹具均为 `docs/report/fixtures/` 下的自造合成小样本；它们用于验证指标定义与管线可跑，不代表真实业务分布，可能与当前切块/Prompt 设计耦合。
 
 | 指标 | 夹具 | 结果 | 方法 |
 | --- | ---: | ---: | --- |
@@ -52,10 +56,10 @@ LLM-dependent 指标已建 harness + 标注夹具（`llm-metrics-fixture.json`�
 
 ## 4. Export Gate Scope Boundary
 
-The export zero-fabrication gate enforces citation backing for all factual content (section body, summary, conclusion, heading text). The report title and header metadata fields (recipient, issuer, date) are editorial/administrative fields that do not require evidence citations — this is an intentional, documented boundary, not a coverage gap.
+The export citation-backing gate checks factual content (section body, summary, conclusion, heading text) against approved findings and valid citations. The report title and header metadata fields (recipient, issuer, date) are editorial/administrative fields that do not require evidence citations — this is an intentional, documented boundary, not a coverage gap. This gate rejects unsupported report content; it is not a claim that every model output is hallucination-free.
 
 ## 5. 一句话总览
 
 - **检索**：强基线已饱和，通用 RAG 增强在清洁语料不增益（界定适用边界，opt-in 保留）。
-- **矛盾检测**：锚定流水线（关思考）F1=0.957 **追平**直出；其价值不是更高 F1，而是 zero-fabrication per-claim citations、full-corpus coverage、determinism、auditability。
-- **思考分流**：建了 thinking on/off 机制并 benchmark 验证——NLI 开思考反降召回，故数据驱动路由到关思考（非拍脑袋）；用户可选的「问答深度模式」保留 thinking-on 供开放性追问。
+- **矛盾检测**：2026-07-07 历史基线 F1=0.957；2026-07-10 当前策略待复测。其价值定位是可校验引用、分批覆盖和审计，不是更高 F1。
+- **思考分流**：历史消融显示 NLI 开思考反降召回；当前策略复测时应保留 thinking on/off 对照，不能直接沿用旧数字。

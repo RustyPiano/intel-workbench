@@ -75,7 +75,11 @@ export function ContradictionsPanel() {
   };
 
   const jobResult = job?.kind === "contradictions" && job.result ? job.result as ContradictionDetectionResult : null;
-  const latestResult = jobResult ?? contradictionResult;
+  // job.result 是检测完成当时的快照，不会随后续 acknowledgement 更新。
+  // 仅运行中优先用 job 快照；终态以持久化 GET 结果为准。
+  const latestResult = job?.state === "running"
+    ? jobResult ?? contradictionResult
+    : contradictionResult ?? jobResult;
   const all = latestResult?.contradictions ?? [];
   const propositions = latestResult?.groundedPropositions ?? [];
   const warnings = latestResult?.warnings ?? [];

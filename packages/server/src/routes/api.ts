@@ -43,6 +43,11 @@ import { createTaskRouter } from "./tasks.js";
  */
 
 export interface ApiServices {
+  health: {
+    devMode: boolean;
+    networkMode: "offline" | "restricted-cloud";
+    modelConfigured: boolean;
+  };
   auth: AuthService;
   cases: CaseService;
   audit: AuditService;
@@ -67,7 +72,7 @@ export function createApiRouter(services: ApiServices): Router {
   const router = Router();
 
   router.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({ ok: true, ...services.health });
   });
 
   // 自描述路由索引：M1–M5 + 鉴权全部做实，已无占位。

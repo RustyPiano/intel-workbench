@@ -116,6 +116,8 @@ interface BriefSnapshot {
   fingerprint: string;
   generatedAt: string;
   degraded: boolean;
+  /** 本次概览降级原因；不含密钥/原文。 */
+  lastError?: string;
   overview: BriefOverviewSentence[];
   materials: BriefMaterialStats;
   processing: BriefProcessingStats;
@@ -167,6 +169,9 @@ function needsConfig(material: { modality: Modality; note?: string }, configs: S
 }
 
 export class BriefService {
+  /** 同一专题+同一输入指纹只允许一次聚合/LLM 计算。 */
+  private readonly inflight = new Map<string, Promise<BriefSnapshot>>();
+
   constructor(
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
@@ -191,7 +196,7 @@ export class BriefService {
     const cached = await this.readSnapshot(caseId);
     const snapshot = !options.refresh && cached && cached.fingerprint === fingerprint
       ? cached
-      : await this.recompute(actor, caseId, manifest, fingerprint);
+      : await this.recomputeSingleflight(actor, caseId, manifest, fingerprint, cached);
 
     // 实时字段每次现算叠加（不进缓存/指纹）：任务阶段条、autopilot 开关、自动研判进度、报告覆盖度。
     const [task, autoInquiry, coverage] = await Promise.all([
@@ -209,7 +214,24 @@ export class BriefService {
     };
   }
 
-  private async recompute(actor: Identity, caseId: string, manifest: CaseManifest, fingerprint: string): Promise<BriefSnapshot> {
+  private recomputeSingleflight(
+    actor: Identity,
+    caseId: string,
+    manifest: CaseManifest,
+    fingerprint: string,
+    cached: BriefSnapshot | null,
+  ): Promise<BriefSnapshot> {
+    const key = `${caseId}:${fingerprint}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
+    const run = this.recompute(actor, caseId, manifest, fingerprint, cached).finally(() => {
+      if (this.inflight.get(key) === run) this.inflight.delete(key);
+    });
+    this.inflight.set(key, run);
+    return run;
+  }
+
+  private async recompute(actor: Identity, caseId: string, manifest: CaseManifest, fingerprint: string, cached: BriefSnapshot | null): Promise<BriefSnapshot> {
     const [elements, graph, contradictionResult, findingList, openQuestions, overview] = await Promise.all([
       this.elements.get(actor, caseId),
       this.elementGraph.graph(actor, caseId),
@@ -231,6 +253,7 @@ export class BriefService {
       fingerprint,
       generatedAt: new Date().toISOString(),
       degraded: overview.degraded,
+      ...(overview.reason ? { lastError: overview.reason } : {}),
       overview: overview.sentences,
       materials: this.materialStats(manifest),
       processing: {
@@ -260,7 +283,13 @@ export class BriefService {
       openQuestions: openQuestions.slice(0, OPEN_QUESTIONS_TOP),
     };
 
-    await this.writeSnapshot(caseId, snapshot);
+    const hasLastGood = Boolean(cached && !cached.degraded && cached.overview.length > 0);
+    const stableDegraded = overview.reason === "llm-unconfigured"
+      || overview.reason === "no-chunks"
+      || overview.reason === "overview-sentences-rejected";
+    // 暂时中止/网络错误不覆盖 last-good；首次就遇到暂态错误也不落盘，下次 GET 可自动重试。
+    const preserveCache = overview.degraded && (hasLastGood || !stableDegraded);
+    if (!preserveCache) await this.writeSnapshot(caseId, snapshot);
     await this.audit.append({
       user: actor.id,
       action: "brief.generate",
@@ -272,6 +301,7 @@ export class BriefService {
         sentences: snapshot.overview.length,
         elements: snapshot.processing.elementCount,
         unresolvedContradictions: snapshot.processing.unresolvedContradictionCount,
+        cachePreserved: preserveCache,
         ...(overview.reason ? { overviewReason: overview.reason } : {}),
       },
     });

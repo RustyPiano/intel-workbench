@@ -49,25 +49,36 @@ export function CitationChips({ claim, onFrame }: { claim: ApiClaim; onFrame: (c
               ? () => navigate(`/cases/${encodeURIComponent(caseId!)}/materials?${docFocus}`)
               : undefined;
         const hint = audioTc ? "\n（点击回听被引用片段）" : framed ? "\n（点击查看引用帧并框选）" : docFocus ? "\n（点击回到原文片段）" : "";
+        const citationContent = (
+          <>
+            {audioTc ? (
+              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", fill: "currentColor", verticalAlign: "middle" }} viewBox="0 0 24 24" stroke="none">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            ) : framed ? (
+              <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              </svg>
+            ) : null}
+            引用 {i + 1}
+          </>
+        );
         return (
           <span key={i} className="citation-item">
-            <span
-              className="citation"
-              style={onClick ? { cursor: "pointer" } : undefined}
-              title={`${c.material_name}${loc}\n${quote}${support}${hint}`}
-              onClick={onClick}
-            >
-              {audioTc ? (
-                <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", fill: "currentColor", verticalAlign: "middle" }} viewBox="0 0 24 24" stroke="none">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-              ) : framed ? (
-                <svg className="icon-svg" style={{ width: "8px", height: "8px", marginRight: "3px", verticalAlign: "middle" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                </svg>
-              ) : null}
-              引用 {i + 1}
-            </span>
+            {onClick ? (
+              <button
+                type="button"
+                className="citation"
+                title={`${c.material_name}${loc}\n${quote}${support}${hint}`}
+                onClick={onClick}
+              >
+                {citationContent}
+              </button>
+            ) : (
+              <span className="citation" title={`${c.material_name}${loc}\n${quote}${support}${hint}`}>
+                {citationContent}
+              </span>
+            )}
             {supportLabel ? <span className="citation-support">{supportLabel}</span> : null}
             {c.quote ? <span className="citation-quote" title={c.quote}>“{c.quote}”</span> : null}
           </span>

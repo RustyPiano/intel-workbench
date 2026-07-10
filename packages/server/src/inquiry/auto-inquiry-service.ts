@@ -25,6 +25,7 @@ import type { InquiryService } from "./inquiry-service.js";
  */
 
 const DEFAULT_MAX = 8;
+const MAX_ATTEMPTS = 3;
 
 /** 每题状态：待跑 / 进行中 / 已产生候选 / 已完成（无候选）/ 失败。 */
 export type AutoInquiryItemStatus = "pending" | "running" | "candidate" | "done" | "failed";
@@ -40,11 +41,12 @@ export interface AutoInquiryItem {
   candidateCount?: number;
   /** 失败原因（status=failed 时填）。 */
   error?: string;
+  attempts?: number;
 }
 
 /** 批处理进度（落 `cases/<id>/auto-inquiry.json`）。 */
 export interface AutoInquiryProgress {
-  status: "running" | "done" | "cancelled";
+  status: "running" | "done" | "cancelled" | "failed";
   total: number;
   completed: number;
   /** 当前进行中的题目下标；空闲时 null。 */
@@ -53,6 +55,13 @@ export interface AutoInquiryProgress {
   startedAt: string;
   updatedAt: string;
   finishedAt?: string;
+}
+
+export class AutoInquiryBatchError extends Error {
+  constructor(public readonly result: AutoInquiryProgress) {
+    super("自动研判存在重试后仍失败的问题");
+    this.name = "AutoInquiryBatchError";
+  }
 }
 
 function readMax(): number {
@@ -76,7 +85,7 @@ function normalizeKey(question: string): string {
 export function countCandidates(inquiry: Inquiry): number {
   let count = 0;
   for (const sf of inquiry.submitted_findings ?? []) {
-    if (sf.supporting_citations.some((c) => c.support_status === "supported")) count += 1;
+    if (sf.supporting_citations.length > 0 && sf.supporting_citations.every((c) => c.support_status === "supported")) count += 1;
   }
   for (const claim of inquiry.claims) {
     if (claim.support_status !== "supported") continue;
@@ -156,28 +165,38 @@ export class AutoInquiryService {
       progress.updatedAt = now();
       await this.write(caseId, progress);
 
-      try {
-        const inquiry = await this.inquiries.ask(actor, caseId, item.question, { deep: true, signal: ctx.signal });
-        const candidates = countCandidates(inquiry);
-        item.inquiryId = inquiry.id;
-        item.inquiryStatus = inquiry.status;
-        item.candidateCount = candidates;
-        item.status = candidates > 0 ? "candidate" : "done";
-      } catch (e) {
-        // 取消导致的中断不判该题失败：还原为待跑，标记批次取消并停止后续题目。
-        if (ctx.signal.aborted) {
-          item.status = "pending";
-          progress.status = "cancelled";
-          progress.currentIndex = null;
-          progress.updatedAt = now();
-          await this.write(caseId, progress);
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        item.attempts = attempt;
+        try {
+          const inquiry = await this.inquiries.ask(actor, caseId, item.question, { deep: true, signal: ctx.signal });
+          const candidates = countCandidates(inquiry);
+          item.inquiryId = inquiry.id;
+          item.inquiryStatus = inquiry.status;
+          item.candidateCount = candidates;
+          item.status = candidates > 0 ? "candidate" : "done";
+          delete item.error;
           break;
+        } catch (e) {
+          // 取消导致的中断不判该题失败：还原为待跑，标记批次取消并停止后续题目。
+          if (ctx.signal.aborted) {
+            item.status = "pending";
+            progress.status = "cancelled";
+            progress.currentIndex = null;
+            progress.updatedAt = now();
+            await this.write(caseId, progress);
+            break;
+          }
+          item.error = message(e);
+          if (attempt < MAX_ATTEMPTS) {
+            await this.auditBatch(actor, caseId, "auto-inquiry.question.retry", "error", { index: i, question: item.question, reason: item.error, attempt });
+            continue;
+          }
+          item.status = "failed";
+          await this.auditBatch(actor, caseId, "auto-inquiry.question", "error", { index: i, question: item.question, reason: item.error, attempts: attempt });
         }
-        // 单题失败记录后继续下一题（不中断批次，D3）。
-        item.status = "failed";
-        item.error = message(e);
-        await this.auditBatch(actor, caseId, "auto-inquiry.question", "error", { index: i, question: item.question, reason: item.error });
       }
+
+      if (progress.status === "cancelled") break;
 
       progress.completed += 1;
       progress.currentIndex = null;
@@ -186,18 +205,19 @@ export class AutoInquiryService {
       await this.write(caseId, progress);
     }
 
-    if (progress.status === "running") progress.status = "done";
+    if (progress.status === "running") progress.status = progress.items.some((item) => item.status === "failed") ? "failed" : "done";
     progress.currentIndex = null;
     progress.finishedAt = now();
     progress.updatedAt = now();
     await this.write(caseId, progress);
-    await this.auditBatch(actor, caseId, "auto-inquiry.done", progress.status === "cancelled" ? "ok" : "ok", {
+    await this.auditBatch(actor, caseId, "auto-inquiry.done", progress.status === "failed" ? "error" : "ok", {
       status: progress.status,
       total: progress.total,
       completed: progress.completed,
       candidates: progress.items.filter((it) => it.status === "candidate").length,
       failed: progress.items.filter((it) => it.status === "failed").length,
     });
+    if (progress.status === "failed") throw new AutoInquiryBatchError(progress);
     return progress;
   }
 

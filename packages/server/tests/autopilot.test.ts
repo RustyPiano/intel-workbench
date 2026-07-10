@@ -203,6 +203,22 @@ describe("AutopilotService（阶段三 M1 自动流水线）", () => {
     expect(autoInquiry.run).not.toHaveBeenCalled();
   });
 
+  it("素材集合变化后使旧产物失效并重跑全部自动阶段", async () => {
+    await cases.attachMaterial(caseId, material(caseId));
+    const elements = fakeElements();
+    const contradictions = fakeContradictions();
+    const autoInquiry = fakeAutoInquiry();
+    const autopilot = makeAutopilot(elements, contradictions, true, autoInquiry);
+
+    await autopilot.onMaterialsSettled(OPERATOR, caseId);
+    await cases.attachMaterial(caseId, material(caseId, { id: "m-2", filename: "second.txt", size: 24 }));
+    await autopilot.onMaterialsSettled(OPERATOR, caseId);
+
+    expect(elements.extract).toHaveBeenCalledTimes(2);
+    expect(contradictions.detect).toHaveBeenCalledTimes(2);
+    expect(autoInquiry.run).toHaveBeenCalledTimes(2);
+  });
+
   it("autopilot=false → 不触发（既不建 run 也不调用执行体）", async () => {
     await cases.attachMaterial(caseId, material(caseId));
     await cases.update(OPERATOR, caseId, { autopilot: false });

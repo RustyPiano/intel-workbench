@@ -9,10 +9,11 @@
 | 文档 | 作用 |
 | --- | --- |
 | [AGENTS.md](../AGENTS.md)（根） | **唯一现行 onboarding 入口**。项目一句话、架构、当前进度（阶段一/二/三）、关键约定与红线、如何运行、里程碑编号消歧表。 |
-| [implementation-notes.md](../implementation-notes.md)（根） | **权威变更日志**。阶段一~三 + 真模型彩排的详细实现记录与偏离说明，细节比 AGENTS.md 更完整。 |
+| [implementation-notes.md](../implementation-notes.md)（根） | **权威变更日志**。按时间倒序记录 2026-07-10 可靠性加固、真实模型复测和阶段一~三的实现/偏离。 |
 | [docs/plans/2026-07-06-phase3-guided-autopilot-plan.md](./plans/2026-07-06-phase3-guided-autopilot-plan.md) | 阶段三（目标驱动工作台 M1–M5）的原始计划。 |
-| [docs/expert-review-brief.md](./expert-review-brief.md) | **诚实边界 / 收敛依据**。矛盾检测与大模型直出的真实对比结论、禁止夸大的宣称、"收敛主线勿加新功能面"的红线。 |
+| [docs/claims-and-limitations.md](./claims-and-limitations.md) | **现行宣称与诚实边界**。规定可以讲什么、不能夸大什么，以及当前已知限制。 |
 | [docs/how-to/run-the-workbench.md](./how-to/run-the-workbench.md) | 如何把工作台跑起来。 |
+| [docs/delivery/](./delivery/README.md) | 当前答辩脚本、架构/评测速览、必答问题和最终报告导航。 |
 
 ### 运行时文档簇（随代码演进持续维护）
 
@@ -27,7 +28,9 @@
   [CLI 与配置](./reference/cli-and-config.md) ·
   [模型适配器](./reference/model-adapter.md) ·
   [会话格式](./reference/session-format.md) ·
-  [工具契约](./reference/tool-contracts.md)
+  [工具契约](./reference/tool-contracts.md) ·
+  [Workbench API](./reference/workbench-api.md) ·
+  [Workbench 数据与持久化](./reference/workbench-storage.md)
 - **Explanation**：[运行时架构](./explanation/runtime-architecture.md)（同目录下的 `spec-author-handoff-*` 三份属更早版本历史，见下方"历史存档"）
 
 ### 决策 / 规格 / 报告（参考资料，随项目演进追加，不追溯改写）
@@ -35,8 +38,7 @@
 - **Decisions**（`docs/decisions/`）：
   [Agent harness 自主性设计](./decisions/2026-07-03-agent-harness-autonomy-design.md) ·
   [智能工作流自动化决策](./decisions/2026-07-03-intelligent-workflow-automation.md) ·
-  [核验候选池产品流程](./decisions/2026-07-03-verification-pool-product-flow.md) ·
-  [实施路线图](./decisions/implementation-roadmap.md)
+  [核验候选池产品流程](./decisions/2026-07-03-verification-pool-product-flow.md)
 - **Specs**（`docs/specs/`）：
   [情报分析工作台 · 产品设计 + 界面规格](./specs/intel-workbench-product-spec.md) ·
   [一期工程实现方案](./specs/intel-workbench-phase1-engineering-plan.md) ·
@@ -46,11 +48,11 @@
   [av-dialogue-insight spec](./specs/av-dialogue-insight-spec.md) ·
   [intel-bulletin spec](./specs/intel-bulletin-spec.md)
 - **Report**（`docs/report/`）：
-  [Benchmark 汇总](./report/benchmark-summary.md) ·
+  **[技术总结报告 2026-07-10](./report/技术总结报告-2026-07-10.md)（课程实验报告，现行）** ·
+  [真实模型端到端复测](./report/2026-07-10-real-model-e2e.md) ·
+  [Benchmark 汇总](./report/benchmark-summary.md)（矛盾检测 2026-07-07 数字为历史基线，新策略待复测） ·
   [溯源问答 Agent Harness 决策记录](./report/inquiry-agent-harness-decision.md) ·
-  [实践报告](./report/practice-report.md) ·
   [RAG 质量决策日志](./report/rag-quality-decision-log.md)
-- **Reports**（`docs/reports/`）：[2026-07-03 Phase1-2 实施报告](./reports/2026-07-03-phase1-2-implementation-report.md)
 - **Releases**（`docs/releases/`）：[v1.1.0 release notes](./releases/v1.1.0.md)
 - **Plans**（`docs/plans/`，除上方阶段三计划外）：
   [P0/P1/P2 重构计划](./plans/2026-06-22-p0p1p2-refactor-plan.md) ·
@@ -72,6 +74,10 @@
 | [architecture-explained.html](./archive/architecture-explained.html) | 2026-06-22（P3.D 老技术轨） |
 | [答辩汇报底册-2026-07-03.md](./archive/答辩汇报底册-2026-07-03.md) | 2026-07-03 |
 | [答辩-代码讲解脚本-2026-07-03.md](./archive/答辩-代码讲解脚本-2026-07-03.md) | 2026-07-03 |
+| [expert-review-brief-2026-07-02.md](./archive/expert-review-brief-2026-07-02.md) | 2026-07-02（课程改造前的专家评审输入） |
+| [implementation-roadmap-2026-07-03.md](./archive/implementation-roadmap-2026-07-03.md) | 2026-07-03（已放弃 FeedbackService 的旧三周路线图） |
+| [2026-07-03-phase1-2-implementation-report.md](./archive/2026-07-03-phase1-2-implementation-report.md) | 2026-07-03（建议服务 Phase1-2 实施快照） |
+| [practice-report-2026-07-02.md](./archive/practice-report-2026-07-02.md) | 2026-07-02（阶段一至三之前的课程报告） |
 
 ### 更早版本历史（原位保留，未移动到 archive/）
 

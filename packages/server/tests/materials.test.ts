@@ -134,6 +134,18 @@ describe("MaterialService 汇入与加工（M2）", () => {
     expect(raw).toContain("第二段含线索");
   });
 
+  it("多文件流式批次可延后到统一 settle 才触发自动流水线", async () => {
+    let settled = 0;
+    materials.setAutopilotHook(() => { settled += 1; });
+
+    await materials.ingestStream(OPERATOR, caseId, "a.txt", Readable.from("A"), { settle: false });
+    await materials.ingestStream(OPERATOR, caseId, "b.txt", Readable.from("B"), { settle: false });
+    expect(settled).toBe(0);
+
+    await materials.settleIngest(OPERATOR, caseId);
+    expect(settled).toBe(1);
+  });
+
   it("ingestStream 与 base64 路同判据：非二进制文档扩展名（.srt）→ done（不分叉）", async () => {
     const m = await materials.ingestStream(OPERATOR, caseId, "subs.srt", Readable.from(Buffer.from("字幕第一段。\n\n字幕第二段。", "utf8")));
     expect(m.modality).toBe("doc");

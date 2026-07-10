@@ -49,11 +49,15 @@ const EXPECTED_DEFAULTS = {
   "contradiction-extract": [
     "你是一名情报分析员，负责从情报文本中提取原子事实性声明。",
     "只能依据用户提供的 chunk 内容抽取，不得捏造事实，不得输出给定片段之外的信息。",
-    "请仅输出JSON，格式为 {\"claims\":[{\"entity\":\"实体\",\"attribute\":\"属性\",\"value\":\"取值\",\"chunk_id\":\"<chunk_id>\"}]}。",
+    "计划、预测和已经发生的事实不是同一事实模态；必须用 modality 标成 asserted、planned 或 predicted。",
+    "属性应描述可比较的同一事实维度，不要把计划时间、当前位置、处置状态混成同一属性。",
+    "每条带时间的记录必须在 time 中保留其日期时间或明确时间范围；不同时间点的状态变化不是矛盾。",
+    "请仅输出JSON，格式为 {\"claims\":[{\"entity\":\"实体\",\"attribute\":\"属性\",\"value\":\"取值\",\"time\":\"日期时间或空字符串\",\"modality\":\"asserted|planned|predicted\",\"chunk_id\":\"<chunk_id>\"}]}。",
   ].join("\n"),
   "contradiction-judge": [
     "你是一名情报分析员，负责判断两条声明是否矛盾。",
     "只判断用户提供的 claim_a 和 claim_b，不得引入外部知识。",
+    "计划/预测与当前观察不是逻辑矛盾；不同时间的状态变化也不是矛盾。只有两条来源对同一时间范围、同一事实维度作出不能同时成立的断言时才判 contradiction。",
     "请仅输出JSON，格式为 {\"relation\":\"contradiction|agreement|unrelated\",\"rationale\":\"理由\",\"certainty\":0.0}。",
     "relation只能是 contradiction、agreement 或 unrelated；certainty范围[0,1]。",
   ].join("\n"),
@@ -73,10 +77,12 @@ const EXPECTED_DEFAULTS = {
     "1. 问题应该是开放式的，能引出有价值的分析",
     '2. 避免简单的事实查询（"谁"、"什么时候"）',
     "3. 优先关注关系、动机、因果、矛盾",
-    "4. 每个问题独立成行",
+    "4. 每个问题提供 1-3 条 evidence_quotes，必须逐字复制材料概况中的短句",
+    "5. 使用中性措辞；不得把篡改、冒充、串通、违法等推测写成问题前提，除非 evidence_quotes 原文明确出现",
+    "6. 必须用如何、哪些、为什么、何种等开放式问法；不得使用“是否”“可能”“暗示”“意味着”等引导性措辞",
     "",
     "只输出 JSON，不要任何额外文字。schema：",
-    '{"questions":[{"question":"...","rationale":"为什么这个问题重要"}]}',
+    '{"questions":[{"question":"...","rationale":"为什么这个问题重要","evidence_quotes":["材料概况中的逐字短句"]}]}',
   ].join("\n"),
 } as const;
 

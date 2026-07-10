@@ -183,15 +183,15 @@ describe("ContextService", () => {
       expect(result.inquiries).toHaveLength(2);
     });
 
-    it("素材摘要按用途截断长度不同（suggest-questions 200 字符，verify-claims 400 字符）", async () => {
+    it("素材摘要按用途截断长度不同（suggest-questions 600 字符，verify-claims 800 字符）", async () => {
       const longText = "关键情报线索。".repeat(100); // 远超两个用途的截断上限
       await materials.ingest(OPERATOR, caseId, [{ filename: "long.txt", content: longText }]);
 
       const forSuggest = await context.buildContext(OPERATOR, caseId, "suggest-questions");
-      expect(forSuggest.materials[0]!.excerpt.length).toBeLessThanOrEqual(200);
+      expect(forSuggest.materials[0]!.excerpt.length).toBeLessThanOrEqual(600);
 
       const forVerify = await context.buildContext(OPERATOR, caseId, "verify-claims");
-      expect(forVerify.materials[0]!.excerpt.length).toBeLessThanOrEqual(400);
+      expect(forVerify.materials[0]!.excerpt.length).toBeLessThanOrEqual(800);
       expect(forVerify.materials[0]!.excerpt.length).toBeGreaterThan(forSuggest.materials[0]!.excerpt.length);
     });
 

@@ -191,6 +191,8 @@ export function InquiryPanel() {
   const appliedQuestionRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  /** 每次启动/停止都递增；旧流的延迟事件和 finally 不得改写新流状态。 */
+  const streamGenerationRef = useRef(0);
   const mountedRef = useRef(true);
   const userStoppedRef = useRef(false);
   /** liveEvents 的同步镜像：done 到达时用它捕获完整过程，规避 setState 闭包滞后。 */
@@ -240,6 +242,7 @@ export function InquiryPanel() {
     return () => {
       mountedRef.current = false;
       userStoppedRef.current = true;
+      streamGenerationRef.current += 1;
       streamControllerRef.current?.abort();
     };
   }, []);
@@ -250,8 +253,8 @@ export function InquiryPanel() {
     setLiveEvents([]);
   };
 
-  const handleStreamEvent = (event: ApiInquiryStreamEvent) => {
-    if (!mountedRef.current || userStoppedRef.current) return;
+  const handleStreamEvent = (event: ApiInquiryStreamEvent, generation: number) => {
+    if (!mountedRef.current || userStoppedRef.current || generation !== streamGenerationRef.current) return;
     if (event.type === "done") {
       const process = liveEventsRef.current;
       if (process.length > 0) {
@@ -274,8 +277,12 @@ export function InquiryPanel() {
 
   const handleStop = () => {
     userStoppedRef.current = true;
-    streamControllerRef.current?.abort();
+    streamGenerationRef.current += 1;
+    const controller = streamControllerRef.current;
+    streamControllerRef.current = null;
+    controller?.abort();
     clearLiveState();
+    setActiveDeep(false);
     setBusy(false);
   };
 
@@ -289,6 +296,8 @@ export function InquiryPanel() {
 
   const runQuestion = async (q: string, deep = deepMode) => {
     if (!q || !user || !caseId || busy) return;
+    const generation = streamGenerationRef.current + 1;
+    streamGenerationRef.current = generation;
     userStoppedRef.current = false;
     setBusy(true);
     setError(null);
@@ -300,15 +309,15 @@ export function InquiryPanel() {
     const controller = new AbortController();
     streamControllerRef.current = controller;
     try {
-      await askInquiryStream(caseId, q, handleStreamEvent, controller.signal, deep);
+      await askInquiryStream(caseId, q, (event) => handleStreamEvent(event, generation), controller.signal, deep);
     } catch (err) {
-      if (!userStoppedRef.current && mountedRef.current) {
+      if (!userStoppedRef.current && mountedRef.current && generation === streamGenerationRef.current) {
         setError((err as Error).message);
         clearLiveState();
       }
     } finally {
-      if (mountedRef.current) {
-        if (streamControllerRef.current === controller) streamControllerRef.current = null;
+      if (mountedRef.current && generation === streamGenerationRef.current && streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
         setActiveDeep(false);
         setBusy(false);
       }

@@ -1,4 +1,5 @@
 import type { OcrAdapter, OcrResult } from "./slots.js";
+import { fetchNoRedirect } from "../security/offline-guard.js";
 
 const WHOLE_FRAME: [number, number, number, number] = [0, 0, 1, 1];
 
@@ -54,7 +55,7 @@ export class PaddleOcrAdapter implements OcrAdapter {
     const headers: Record<string, string> = {};
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseURL}/ocr`, {
+    const res = await fetchNoRedirect(`${this.baseURL}/ocr`, {
       method: "POST",
       headers,
       body: fd,

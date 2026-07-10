@@ -10,6 +10,11 @@ export function CaseAuditPanel() {
   const [events, setEvents] = useState<AuditEvent[] | null>(null);
   const [auditFilter, setAuditFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const canViewGlobalAudit = Boolean(
+    user
+    && (user.role === "security" || user.role === "admin")
+    && user.clearance === "topsecret",
+  );
 
   useEffect(() => {
     if (!user || !caseId) return;
@@ -66,9 +71,11 @@ export function CaseAuditPanel() {
       <div className="audit-filters">
         <input className="search audit-filters__input audit-filters__input--wide" value={auditFilter} onChange={(e) => setAuditFilter(e.target.value)} placeholder="按动作 / 对象 / 用户 / 详情过滤" />
         <div className="audit-filters__spacer" />
-        <NavLink to="/audit" className="btn" style={{ padding: "6px 14px", fontSize: "12px" }}>
-          去全局审计中心
-        </NavLink>
+        {canViewGlobalAudit ? (
+          <NavLink to="/audit" className="btn" style={{ padding: "6px 14px", fontSize: "12px" }}>
+            去全局审计中心
+          </NavLink>
+        ) : null}
       </div>
 
       <div className="audit-layout">

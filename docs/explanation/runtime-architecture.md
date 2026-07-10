@@ -65,6 +65,8 @@ Skills are discovered from configured directories, parsed from `SKILL.md`, and a
 
 That keeps prompt growth under control and matches the progressive-disclosure rule from the spec.
 
+The discovered catalog belongs to the agent, but active state belongs to a conversation. Every new or resumed conversation uses a forked registry; resume restores only the `skill_activation` entries from that session. This prevents one session from silently changing another session's prompt.
+
 Implementation:
 
 - [packages/core/src/skills/discover.ts](../../packages/core/src/skills/discover.ts)
@@ -79,6 +81,8 @@ Sessions are plain JSONL files. That choice is deliberate:
 - easy to replay
 - easy to present in a course demo
 - easy to recover partially if corruption happens
+
+`RuntimeConversation.send` holds a per-session lock across reload, repair, model/tool execution, and append. The lock combines the in-process queue with an exclusive `.<session-id>.lock` file so separate processes cannot append stale views of the same journal. A resumed turn reloads the latest journal while holding the lock.
 
 Implementation: [packages/core/src/runtime/session.ts](../../packages/core/src/runtime/session.ts)
 

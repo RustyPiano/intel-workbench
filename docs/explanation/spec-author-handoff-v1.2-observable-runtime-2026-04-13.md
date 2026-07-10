@@ -1,6 +1,6 @@
 # Spec Author Handoff: v1.2 Observable Runtime
 
-This document is the handoff for the engineer who wrote [docs/mini-agent-runtime-v1.2-spec.md](docs/mini-agent-runtime-v1.2-spec.md).
+This document is the handoff for the engineer who wrote [docs/mini-agent-runtime-v1.2-spec.md](../mini-agent-runtime-v1.2-spec.md).
 
 It is meant to answer three practical questions:
 
@@ -73,7 +73,7 @@ On those questions, the current tree now has concrete answers.
 
 Delivered:
 
-- a normalized runtime trace event layer in [src/runtime/trace.ts](src/runtime/trace.ts)
+- a normalized runtime trace event layer in [src/runtime/trace.ts](../../packages/core/src/runtime/trace.ts)
 - event types for:
   - `run_started`
   - `planning_summary`
@@ -98,7 +98,7 @@ Practical result:
 
 ### 2.2 Run store and persistence layout
 
-Delivered in [src/runtime/run-store.ts](src/runtime/run-store.ts):
+Delivered in [src/runtime/run-store.ts](../../packages/core/src/runtime/run-store.ts):
 
 - per-run storage rooted at `.mini-agent/runs/<run-id>/`
 - `meta.json` for run-level summary/state
@@ -116,9 +116,9 @@ Practical result:
 
 Delivered across:
 
-- [src/runtime/run-manager.ts](src/runtime/run-manager.ts)
-- [src/runtime/loop.ts](src/runtime/loop.ts)
-- [src/runtime/agent.ts](src/runtime/agent.ts)
+- [src/runtime/run-manager.ts](../../packages/core/src/runtime/run-manager.ts)
+- [src/runtime/loop.ts](../../packages/core/src/runtime/loop.ts)
+- [src/runtime/agent.ts](../../packages/core/src/runtime/agent.ts)
 
 What changed:
 
@@ -136,11 +136,11 @@ Practical result:
 
 Delivered across:
 
-- [src/cli/timeline.ts](src/cli/timeline.ts)
-- [src/cli/run-report.ts](src/cli/run-report.ts)
-- [src/cli/main.ts](src/cli/main.ts)
-- [src/cli/repl.ts](src/cli/repl.ts)
-- [src/cli/doctor.ts](src/cli/doctor.ts)
+- [src/cli/timeline.ts](../../packages/core/src/cli/timeline.ts)
+- [src/cli/run-report.ts](../../packages/core/src/cli/run-report.ts)
+- [src/cli/main.ts](../../packages/core/src/cli/main.ts)
+- [src/cli/repl.ts](../../packages/core/src/cli/repl.ts)
+- [src/cli/doctor.ts](../../packages/core/src/cli/doctor.ts)
 
 Exposed commands and surfaces:
 
@@ -161,10 +161,10 @@ Practical result:
 
 Delivered across:
 
-- [src/tools/bash.ts](src/tools/bash.ts)
-- [src/tools/write.ts](src/tools/write.ts)
-- [src/tools/edit.ts](src/tools/edit.ts)
-- [src/tools/activate-skill.ts](src/tools/activate-skill.ts)
+- [src/tools/bash.ts](../../packages/core/src/tools/bash.ts)
+- [src/tools/write.ts](../../packages/core/src/tools/write.ts)
+- [src/tools/edit.ts](../../packages/core/src/tools/edit.ts)
+- [src/tools/activate-skill.ts](../../packages/core/src/tools/activate-skill.ts)
 
 Specific behavior now present:
 
@@ -195,7 +195,7 @@ Practical result:
 
 ### 2.7 Operator diagnostics
 
-Delivered in [src/cli/doctor.ts](src/cli/doctor.ts):
+Delivered in [src/cli/doctor.ts](../../packages/core/src/cli/doctor.ts):
 
 - last-run and per-run summaries that include:
   - run status
@@ -214,24 +214,24 @@ Practical result:
 
 The main runtime implementation also updated maintainer-facing docs:
 
-- [README.md](README.md)
-- [docs/README.md](docs/README.md)
-- [docs/reference/cli-and-config.md](docs/reference/cli-and-config.md)
-- [docs/reference/session-format.md](docs/reference/session-format.md)
+- [README.md](../../README.md)
+- [docs/README.md](../README.md)
+- [docs/reference/cli-and-config.md](../reference/cli-and-config.md)
+- [docs/reference/session-format.md](../reference/session-format.md)
 
 The `v1.2` spec itself is now also checked into the docs tree as:
 
-- [docs/mini-agent-runtime-v1.2-spec.md](docs/mini-agent-runtime-v1.2-spec.md)
+- [docs/mini-agent-runtime-v1.2-spec.md](../mini-agent-runtime-v1.2-spec.md)
 
 ### 2.9 Test coverage
 
 Core regression coverage now includes:
 
-- [tests/integration/runtime-observability.test.ts](tests/integration/runtime-observability.test.ts)
-- [tests/unit/run-store.test.ts](tests/unit/run-store.test.ts)
-- [tests/unit/timeline-renderer.test.ts](tests/unit/timeline-renderer.test.ts)
-- [tests/unit/run-report.test.ts](tests/unit/run-report.test.ts)
-- [tests/unit/repl.test.ts](tests/unit/repl.test.ts)
+- [tests/integration/runtime-observability.test.ts](../../packages/core/tests/integration/runtime-observability.test.ts)
+- [tests/unit/run-store.test.ts](../../packages/core/tests/unit/run-store.test.ts)
+- [tests/unit/timeline-renderer.test.ts](../../packages/core/tests/unit/timeline-renderer.test.ts)
+- [tests/unit/run-report.test.ts](../../packages/core/tests/unit/run-report.test.ts)
+- [tests/unit/repl.test.ts](../../packages/core/tests/unit/repl.test.ts)
 
 The important point is not just that more tests exist. It is that the tests now cover the failure modes found during review rather than only the intended happy path.
 
@@ -272,11 +272,11 @@ After the reviewed implementation was committed, live usage exposed another issu
 
 Root cause:
 
-- both [src/cli/main.ts](src/cli/main.ts) and [src/cli/repl.ts](src/cli/repl.ts) were subscribing to the same runtime event bus
+- both [src/cli/main.ts](../../packages/core/src/cli/main.ts) and [src/cli/repl.ts](../../packages/core/src/cli/repl.ts) were subscribing to the same runtime event bus
 
 Fix:
 
-- a failing regression test was added in [tests/unit/repl.test.ts](tests/unit/repl.test.ts)
+- a failing regression test was added in [tests/unit/repl.test.ts](../../packages/core/tests/unit/repl.test.ts)
 - REPL-side duplicate subscription logic was removed so `main.ts` owns timeline rendering
 
 Result:

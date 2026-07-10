@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -47,6 +47,12 @@ describe("ReportService citation id and export-gate pool", () => {
   }
 
   async function approveReport(input: Parameters<ReportService["draft"]>[2]): Promise<void> {
+    const count = (await materials.loadCaseChunks(caseId)).length;
+    await writeFile(
+      path.join(paths.caseDir(caseId), "contradictions.result.json"),
+      `${JSON.stringify({ status: "succeeded", contradictions: [], groundedPropositions: [], processedChunks: count, totalChunks: count, truncated: false, warnings: [] }, null, 2)}\n`,
+      "utf8",
+    );
     await reports.draft(OPERATOR, caseId, input);
     await reports.submit(OPERATOR, caseId);
     await reports.approve(SECURITY, caseId);

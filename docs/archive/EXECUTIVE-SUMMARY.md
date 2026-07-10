@@ -330,7 +330,7 @@ cd packages/web && pnpm dev
 ```
 docs/QUICKSTART-PHASE1-2.md          # 5 分钟快速上手
 docs/HANDOVER.md                     # 完整交接文档
-docs/reports/2026-07-03-phase1-2-implementation-report.md  # 实施报告
+docs/archive/2026-07-03-phase1-2-implementation-report.md  # 实施报告（归档）
 docs/decisions/2026-07-03-intelligent-workflow-automation.md  # 决策文档
 ```
 

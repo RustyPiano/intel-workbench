@@ -93,12 +93,14 @@ export class AuditService {
     const line = `${JSON.stringify(event)}\n`;
     await mkdir(path.dirname(this.paths.auditFile), { recursive: true });
     await appendFile(this.paths.auditFile, line, "utf8");
+    // 全局日志是权威链：一旦追加成功就立即推进链头。专题镜像后续失败
+    // 可以让本次 append 报错，但不得让下一条事件继续引用旧 prev_hash。
+    this.lastHash = event_hash;
     if (input.caseId) {
       const caseLog = this.paths.caseAuditLog(input.caseId);
       await mkdir(path.dirname(caseLog), { recursive: true });
       await appendFile(caseLog, line, "utf8");
     }
-    this.lastHash = event_hash;
     return event;
   }
 

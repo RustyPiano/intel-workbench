@@ -71,6 +71,22 @@ describe("editTool", () => {
     expect(await readFile(filePath, "utf8")).toBe("Status:\n\"DONE\" - shipped\n");
   });
 
+  test("does not commit an edit after its signal is aborted", async () => {
+    const workspaceRoot = await createWorkspace();
+    const filePath = path.join(workspaceRoot, "notes.md");
+    await writeFile(filePath, "before\n", "utf8");
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await editTool.execute(
+      { path: "notes.md", old_text: "before", new_text: "after" },
+      { ...createContext(workspaceRoot), signal: controller.signal },
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "RUN_ABORTED" } });
+    expect(await readFile(filePath, "utf8")).toBe("before\n");
+  });
+
   test("returns EDIT_AMBIGUOUS when multiple matches exist and replace_all is false", async () => {
     const workspaceRoot = await createWorkspace();
     await writeFile(path.join(workspaceRoot, "notes.md"), "TODO\nTODO\n", "utf8");

@@ -53,11 +53,11 @@ describe("PaddleOcrAdapter.ocr（mock fetch，不连真服务）", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("POST 到 <baseURL>/ocr 并把响应映射成归一化结果", async () => {
-    const calls: { url: string; method?: string; hasFile: boolean }[] = [];
+    const calls: { url: string; method?: string; redirect?: RequestRedirect; hasFile: boolean }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
-        calls.push({ url, method: init.method, hasFile: init.body instanceof FormData });
+        calls.push({ url, method: init.method, redirect: init.redirect, hasFile: init.body instanceof FormData });
         return new Response(
           JSON.stringify({ width: 200, height: 100, results: [{ text: "线索", box: [20, 10, 120, 40] }] }),
           { status: 200, headers: { "content-type": "application/json" } },
@@ -71,6 +71,7 @@ describe("PaddleOcrAdapter.ocr（mock fetch，不连真服务）", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("http://ocr.local:8000/ocr"); // 末尾斜杠被规整
     expect(calls[0].method).toBe("POST");
+    expect(calls[0].redirect).toBe("error");
     expect(calls[0].hasFile).toBe(true);
     expect(result.lines).toEqual([{ text: "线索", bbox: [0.1, 0.1, 0.5, 0.3] }]);
     expect(adapter.engine).toBe("paddleocr");

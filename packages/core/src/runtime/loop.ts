@@ -133,13 +133,10 @@ export async function runAgentLoop(
   dependencies: LoopDependencies,
   initialMessages: RuntimeMessage[] = [],
 ): Promise<LoopResult> {
-  const messages: RuntimeMessage[] = [...initialMessages];
+  // RuntimeConversation owns this array. Mutating it only after the matching
+  // journal append succeeds keeps retries and later on-disk resume identical.
+  const messages = initialMessages;
   const userMessageId = createId("msg");
-  messages.push({
-    role: "user",
-    content: prompt,
-    messageId: userMessageId,
-  });
   await dependencies.sessionStore.appendEntry(sessionId, {
     type: "message",
     role: "user",
@@ -147,6 +144,11 @@ export async function runAgentLoop(
     timestamp: new Date().toISOString(),
     content: prompt,
     runId: dependencies.runManager.runId,
+  });
+  messages.push({
+    role: "user",
+    content: prompt,
+    messageId: userMessageId,
   });
 
   let turn = 0;
@@ -230,14 +232,37 @@ export async function runAgentLoop(
       throwIfAborted(dependencies.signal);
       await dependencies.runManager.recordModelResponse(turn, assistant);
 
+      const returnedToolCalls = assistant.message.toolCalls ?? [];
+      if (assistant.stopReason === "error") {
+        throw new RuntimeError({
+          code: "MODEL_ERROR",
+          message: "Model stopped with an error before completing the turn",
+          retriable: true,
+        });
+      }
+      if (assistant.stopReason === "max_tokens" && returnedToolCalls.length === 0) {
+        throw new RuntimeError({
+          code: "MODEL_ERROR",
+          message: "Model output was truncated before completing the turn (finish_reason=length)",
+          retriable: true,
+          details: { category: "output_truncated" },
+        });
+      }
+      if (assistant.stopReason === "tool_use" && returnedToolCalls.length === 0) {
+        throw new RuntimeError({
+          code: "MODEL_ERROR",
+          message: "Model reported tool use without returning a tool call",
+          details: { category: "incompatible_response" },
+        });
+      }
+
       const assistantMessageId = createId("msg");
       const assistantMessage: AssistantMessage = {
         role: "assistant",
         content: assistant.message.content,
         messageId: assistantMessageId,
-        toolCalls: assistant.message.toolCalls ?? [],
+        toolCalls: returnedToolCalls,
       };
-      messages.push(assistantMessage);
       await dependencies.sessionStore.appendEntry(sessionId, {
         type: "message",
         role: "assistant",
@@ -247,6 +272,7 @@ export async function runAgentLoop(
         runId: dependencies.runManager.runId,
         toolCalls: assistantMessage.toolCalls,
       });
+      messages.push(assistantMessage);
 
       if (assistantMessage.toolCalls?.length) {
         await dependencies.runManager.emitPlanningSummary(
@@ -305,6 +331,7 @@ export async function runAgentLoop(
           meta:
             typeof result.meta === "object" && result.meta !== null ? (result.meta as Record<string, unknown>) : undefined,
           error: result.error,
+          artifacts: result.artifacts,
         };
         await dependencies.sessionStore.appendEntry(sessionId, toolResultEntry);
         messages.push({
@@ -376,7 +403,6 @@ export async function runAgentLoop(
       content: createMaxTurnsHandoffMessage(dependencies.maxTurns),
       messageId: assistantMessageId,
     };
-    messages.push(finalMessage);
     await dependencies.sessionStore.appendEntry(sessionId, {
       type: "message",
       role: "assistant",
@@ -385,6 +411,7 @@ export async function runAgentLoop(
       content: finalMessage.content,
       runId: dependencies.runManager.runId,
     });
+    messages.push(finalMessage);
     await dependencies.runManager.recordTurnLimitReached(dependencies.maxTurns, finalMessage.content);
   }
 

@@ -634,7 +634,7 @@ export class InquiryService {
   }
 
   async clear(actor: Identity, caseId: string): Promise<void> {
-    await this.cases.get(actor, caseId); // 访问校验
+    await this.cases.requireWriteAccess(actor, caseId, "inquiry.clear");
     await rm(this.inquiriesFile(caseId), { force: true });
     await this.audit.append({
       user: actor.id,
@@ -752,7 +752,8 @@ export class InquiryService {
     const attachSubmittedFindings = (inquiry: Inquiry): Inquiry =>
       submittedFindings.length > 0 ? { ...inquiry, submitted_findings: submittedFindings } : inquiry;
 
-    const answerable = claims.filter((claim) => claim.support_status === "supported" || claim.support_status === "support-unverified");
+    // support-unverified 仍保留在 claims 台账供人工查看，但不得进入最终 answer。
+    const answerable = claims.filter((claim) => claim.support_status === "supported");
     if (answerable.length === 0) {
       return attachSubmittedFindings(this.make(actor, question, "insufficient", INSUFFICIENT, claims));
     }
@@ -790,10 +791,14 @@ export class InquiryService {
     };
     const resolved: InquirySubmittedFinding[] = [];
     for (const sf of ledger.submittedFindings) {
-      const supporting_citations = await resolveCitations(sf.conclusion, sf.supporting_cite_ids);
-      // 防御性处理：工具提交时已强制 supporting_cite_ids ≥1，这里理论上不会清空，但 cite_id 解析失败仍需兜底丢弃整条。
-      if (supporting_citations.length === 0) continue;
-      const opposing_citations = await resolveCitations(sf.conclusion, sf.opposing_cite_ids);
+      const supportingIds = dedupeStrings(sf.supporting_cite_ids);
+      const supporting_citations = await resolveCitations(sf.conclusion, supportingIds);
+      // 结构化候选必须全部支持引用都已被裁判为 supports；unknown 仅留在 Inquiry 原始记录。
+      if (supportingIds.length === 0
+        || supporting_citations.length !== supportingIds.length
+        || supporting_citations.some((citation) => citation.support_status !== "supported")) continue;
+      const opposing_citations = (await resolveCitations(sf.conclusion, dedupeStrings(sf.opposing_cite_ids)))
+        .filter((citation) => citation.support_label === "contradicts");
       resolved.push({
         conclusion: sf.conclusion,
         supporting_citations,

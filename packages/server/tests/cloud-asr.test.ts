@@ -67,6 +67,7 @@ describe("CloudAsrAdapter.transcribe（mock fetch）", () => {
     expect(fetch.mock.calls[0][0]).toBe("https://api.siliconflow.cn/v1/audio/transcriptions");
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("error");
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer k");
   });

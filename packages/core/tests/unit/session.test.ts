@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, unlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -21,6 +21,84 @@ async function createWorkspace() {
 }
 
 describe("SessionStore", () => {
+  test("serializes independent stores on the same session lock", async () => {
+    const workspaceRoot = await createWorkspace();
+    const options = {
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+      sessionLockPollMs: 5,
+    };
+    const firstStore = new SessionStore(options);
+    const secondStore = new SessionStore(options);
+    let release!: () => void;
+    let markEntered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    let secondEntered = false;
+    const first = firstStore.withSessionLock("shared", async () => {
+      markEntered();
+      await gate;
+    });
+    await entered;
+    const second = secondStore.withSessionLock("shared", async () => {
+      secondEntered = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondEntered).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(secondEntered).toBe(true);
+  });
+
+  test("only clears dead-owner or expired ownerless locks", async () => {
+    const workspaceRoot = await createWorkspace();
+    const sessionDir = path.join(workspaceRoot, ".mini-agent", "sessions");
+    await mkdir(sessionDir, { recursive: true });
+    const store = new SessionStore({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      model: "mock",
+      sessionLockPollMs: 5,
+      sessionLockStaleMs: 10,
+    });
+
+    const deadLock = path.join(sessionDir, ".dead.lock");
+    await writeFile(deadLock, JSON.stringify({ token: "dead", pid: 99_999_999, createdAt: new Date().toISOString() }));
+    await store.withSessionLock("dead", async () => {});
+    await expect(access(deadLock)).rejects.toThrow();
+
+    const damagedLock = path.join(sessionDir, ".damaged.lock");
+    await writeFile(damagedLock, "not-json");
+    const old = new Date(Date.now() - 1_000);
+    await utimes(damagedLock, old, old);
+    await store.withSessionLock("damaged", async () => {});
+    await expect(access(damagedLock)).rejects.toThrow();
+
+    const liveLock = path.join(sessionDir, ".live.lock");
+    await writeFile(liveLock, JSON.stringify({ token: "live", pid: process.pid, createdAt: old.toISOString() }));
+    await utimes(liveLock, old, old);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+    await expect(store.withSessionLock("live", async () => {}, controller.signal)).rejects.toMatchObject({
+      code: "RUN_ABORTED",
+    });
+    await expect(access(liveLock)).resolves.toBeUndefined();
+    await unlink(liveLock);
+  });
+
+  test("rejects session ids that could escape the session directory", async () => {
+    const workspaceRoot = await createWorkspace();
+    const store = new SessionStore({ workspaceRoot, runtimeVersion: "1.0.0", model: "mock" });
+
+    await expect(store.createSession("x/../../../escaped")).rejects.toMatchObject({ code: "INVALID_ARGS" });
+  });
+
   test("creates a jsonl session with a header and appended entries", async () => {
     const workspaceRoot = await createWorkspace();
     const store = new SessionStore({

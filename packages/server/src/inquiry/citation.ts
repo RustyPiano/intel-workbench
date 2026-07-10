@@ -55,6 +55,7 @@ export function validateCitationIntegrity(citation: Citation, chunks: Chunk[]): 
   const candidates = chunks.filter(
     (chunk) => chunk.material_id === citation.material_id
       && chunk.content_hash === citation.content_hash
+      && sourceLocatorKey(chunk.locator) === sourceLocatorKey(citation.locator)
       && sha256(chunk.text) === chunk.content_hash,
   );
   if (candidates.length === 0) return { validChunk: false, validSpan: false, missingSpan: false };
@@ -72,4 +73,18 @@ export function validateCitationIntegrity(citation: Citation, chunks: Chunk[]): 
     return chunk.text.includes(citation.quote!);
   });
   return { validChunk: true, validSpan, missingSpan: false };
+}
+
+/** artifact_hash 可由按需裁剪产生；其余来源定位必须与持久化 chunk 完全一致。 */
+function sourceLocatorKey(locator: Citation["locator"]): string {
+  return JSON.stringify([
+    locator.page ?? null,
+    locator.paragraph ?? null,
+    locator.char_start ?? null,
+    locator.char_end ?? null,
+    locator.timecode ?? null,
+    locator.bbox ?? null,
+    locator.speaker ?? null,
+    locator.frame ?? null,
+  ]);
 }

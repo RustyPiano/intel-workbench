@@ -4,7 +4,7 @@
 
 > 给接手开发的 Agent / 工程师。读完这份 + `CLAUDE.md`（行为准则）+ `docs/specs/` 就能上手。
 > 最后更新：2026-06-23（追加 **Batch F**：benchmark 叙事改为 parity + auditability、新增确定性指标 harness、记录导出闸 scope boundary、PromptStore inquiry-methodology 健康告警；详见决策日志 D26）。LLM-dependent metrics 仍为 pending run（需配置模型端点）。
-> 评测/报告：`docs/report/benchmark-summary.md`（benchmark 汇总）、`docs/report/rag-quality-decision-log.md`（D8–D26 决策日志）、`docs/report/practice-report.md`（实践报告）。
+> 评测/报告：`docs/report/benchmark-summary.md`（现行 benchmark 状态）、`docs/report/rag-quality-decision-log.md`（D8–D26 决策日志）、`docs/archive/practice-report-2026-07-02.md`（同期实践报告快照）。
 
 ---
 
@@ -70,7 +70,7 @@
 
 ## 3. 怎么跑 / 怎么测
 
-> 完整「运行整个项目」分步指南见 **[docs/how-to/run-the-workbench.md](how-to/run-the-workbench.md)**。速记：
+> 完整「运行整个项目」分步指南见 **[docs/how-to/run-the-workbench.md](../how-to/run-the-workbench.md)**。速记：
 
 ```bash
 # 1) 填两把 key（仅本机，已 gitignore，绝不入库）

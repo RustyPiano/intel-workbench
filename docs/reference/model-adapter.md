@@ -74,6 +74,8 @@ The adapter uses the OpenAI Node SDK and can target:
 - the default OpenAI API when `baseURL` is omitted
 - any endpoint that accepts the same Chat Completions shape when `baseURL` is provided
 
+The SDK is constructed with a custom fetch that uses `redirect: "error"`. Model requests therefore fail instead of following an HTTP redirect to an unreviewed host.
+
 Connection fields:
 
 - `provider`
@@ -146,7 +148,10 @@ Current mapping:
 
 - `tool_calls` or `function_call` -> `tool_use`
 - `length` -> `max_tokens`
-- everything else -> `end_turn`
+- `stop` -> `end_turn`
+- null, unknown, or provider-specific reasons -> `error`
+
+The runtime loop also fails closed when a provider reports tool use without a tool call, reports an error stop, or reaches `max_tokens` without a usable tool call.
 
 ## Error surfacing
 
@@ -172,12 +177,12 @@ The category is inferred from both transport status and provider-supplied messag
 
 ## Tool-call parsing
 
-Incoming provider tool calls are rejected unless:
+Incoming provider tool calls are accepted only when:
 
 - `type === "function"`
-- `function.arguments` parses as JSON
+- `function.arguments` is a string containing a JSON object, or can be conservatively rescued by removing a code fence / trailing text after the first balanced object
 
-Invalid tool payloads become `MODEL_ERROR` before the runtime loop tries to execute anything.
+When string arguments still cannot be parsed, the adapter records a bounded `argumentsParseError` instead of executing the tool. The runtime journals a failed tool result and feeds it back to the model so the model can resend valid arguments. Missing arguments, object-shaped arguments, unsupported tool-call types, malformed choices, and unknown response shapes remain fail-closed `MODEL_ERROR` cases.
 
 ## Signal propagation
 

@@ -227,6 +227,28 @@ describe("SuggestionService", () => {
       expect(relationshipQs[0]!.rationale).toContain("1 处素材片段");
     });
 
+    it("does not turn two co-occurring timestamps into a relationship question", async () => {
+      await writeElements([
+        el("t1", "2026年7月1日", "time", ["h1"]),
+        el("t2", "2026年7月2日", "time", ["h1"]),
+      ]);
+
+      const result = await suggestions.suggestQuestions(OPERATOR, caseId);
+
+      expect(result.some((item) => item.question.includes("2026年7月1日与2026年7月2日是什么关系"))).toBe(false);
+    });
+
+    it("does not turn a timestamp and an entity into a relationship question", async () => {
+      await writeElements([
+        el("t1", "2026年7月1日", "time", ["h1"]),
+        el("p1", "三号门", "location", ["h1"]),
+      ]);
+
+      const result = await suggestions.suggestQuestions(OPERATOR, caseId);
+
+      expect(result.some((item) => item.question.includes("2026年7月1日与三号门是什么关系"))).toBe(false);
+    });
+
     it("caps the overall list at 8 suggestions", async () => {
       await writeContradictions([
         contradiction("ct-1", "A", "属性", 0.9),
@@ -254,6 +276,13 @@ describe("SuggestionService", () => {
   });
 
   describe("suggestQuestionsWithLLM", () => {
+    beforeEach(async () => {
+      await materials.ingest(OPERATOR, caseId, [{
+        filename: "evidence.txt",
+        content: "甲组织与乙组织频繁接触。行动涉及资金链条。目标甲在码头出现。",
+      }]);
+    });
+
     function scriptedAdapter(content: () => string): ModelAdapter {
       return {
         name: "scripted",
@@ -284,8 +313,8 @@ describe("SuggestionService", () => {
         scriptedAdapter(() =>
           JSON.stringify({
             questions: [
-              { question: "甲组织与乙组织为何频繁接触？", rationale: "涉及动机分析" },
-              { question: "此次行动的资金链条如何形成？", rationale: "涉及因果分析" },
+              { question: "甲组织与乙组织为何频繁接触？", rationale: "涉及动机分析", evidence_quotes: ["甲组织与乙组织频繁接触"] },
+              { question: "此次行动的资金链条如何形成？", rationale: "涉及因果分析", evidence_quotes: ["行动涉及资金链条"] },
             ],
           }),
         ),
@@ -304,7 +333,7 @@ describe("SuggestionService", () => {
     it("deduplicates an LLM question that matches an existing rule-based question (normalized, ignoring trailing punctuation)", async () => {
       const withLlm = withLLM(
         scriptedAdapter(() =>
-          JSON.stringify({ questions: [{ question: "这些材料中涉及哪些关键人物?", rationale: "与基础问题重复" }] }),
+          JSON.stringify({ questions: [{ question: "这些材料中涉及哪些关键人物?", rationale: "与基础问题重复", evidence_quotes: ["目标甲在码头出现"] }] }),
         ),
       );
 
@@ -320,7 +349,7 @@ describe("SuggestionService", () => {
         contradiction("ct-3", "C", "属性", 0.9),
       ]);
       const withLlm = withLLM(
-        scriptedAdapter(() => JSON.stringify({ questions: [{ question: "新问题一", rationale: "r1" }] })),
+        scriptedAdapter(() => JSON.stringify({ questions: [{ question: "哪些新问题值得核验？", rationale: "r1", evidence_quotes: ["目标甲在码头出现"] }] })),
       );
       const unbounded = await withLlm.suggestQuestionsWithLLM(OPERATOR, caseId);
       expect(unbounded.length).toBeGreaterThan(2);
@@ -358,12 +387,26 @@ describe("SuggestionService", () => {
 
     it("records a suggestion.questions.llm audit entry with the generated count on success", async () => {
       const withLlm = withLLM(
-        scriptedAdapter(() => JSON.stringify({ questions: [{ question: "新问题一", rationale: "r1" }] })),
+        scriptedAdapter(() => JSON.stringify({ questions: [{ question: "哪些新问题值得核验？", rationale: "r1", evidence_quotes: ["目标甲在码头出现"] }] })),
       );
       await withLlm.suggestQuestionsWithLLM(OPERATOR, caseId);
 
       const events = await audit.readCaseEvents(caseId);
       expect(events.some((e) => e.action === "suggestion.questions.llm" && e.result === "ok" && e.detail?.count === 1)).toBe(true);
+    });
+
+    it("rejects an accusatory premise not present in its evidence quotes", async () => {
+      const withLlm = withLLM(scriptedAdapter(() => JSON.stringify({
+        questions: [{
+          question: "这是否意味着值班员篡改记录？",
+          rationale: "测试",
+          evidence_quotes: ["甲组织与乙组织频繁接触"],
+        }],
+      })));
+
+      const result = await withLlm.suggestQuestionsWithLLM(OPERATOR, caseId);
+
+      expect(result.some((item) => item.category === "analysis")).toBe(false);
     });
   });
 
@@ -543,14 +586,14 @@ describe("SuggestionService", () => {
         },
       } as unknown as InquiryService;
       const withAutoInquiry = new SuggestionService(audit, fakeInquiries, findings, contradictions, elementGraph, context, promptService, {
-        adapter: scriptedAdapter(() => JSON.stringify({ questions: [{ question: "目标甲的活动轨迹是否异常？", rationale: "轨迹研判" }] })),
+        adapter: scriptedAdapter(() => JSON.stringify({ questions: [{ question: "哪些证据可以说明目标甲的活动轨迹？", rationale: "轨迹研判", evidence_quotes: ["目标甲在码头出现。"] }] })),
         guard: new OfflineGuard(["stub.local"], audit),
         modelEndpoint: "https://stub.local/v1",
       });
 
       const result = await withAutoInquiry.generateFindingSuggestions(OPERATOR, caseId);
 
-      expect(result.questions).toContain("目标甲的活动轨迹是否异常？");
+      expect(result.questions).toContain("哪些证据可以说明目标甲的活动轨迹？");
       expect(result.inquiriesCreated).toBeGreaterThan(0);
       expect(result.suggestions.some((item) => item.conclusion === "目标甲在码头出现。")).toBe(true);
       const events = await audit.readCaseEvents(caseId);

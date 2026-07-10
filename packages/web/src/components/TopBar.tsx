@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { getRuntimeStatus, type ApiRuntimeStatus } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS, ROLE_LABELS, type Clearance } from "../types";
 
@@ -20,6 +21,8 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
   const { user, signOut } = useSession();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [runtime, setRuntime] = useState<ApiRuntimeStatus | null>(null);
+  const [runtimeUnavailable, setRuntimeUnavailable] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   // 打开时：点击菜单外部或按 Esc 关闭（常见下拉交互预期）。
@@ -38,6 +41,19 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getRuntimeStatus(controller.signal)
+      .then((next) => {
+        setRuntime(next);
+        setRuntimeUnavailable(false);
+      })
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") setRuntimeUnavailable(true);
+      });
+    return () => controller.abort();
+  }, []);
 
   const clearance = user?.clearance ?? "internal";
 
@@ -59,12 +75,32 @@ export function TopBar({ breadcrumb }: { breadcrumb?: string }) {
         <span className={`badge badge--clearance ${CLEARANCE_TONE[clearance]}`}>
           权限：{CLEARANCE_LABELS[clearance]}及以下
         </span>
-        <span className="badge badge--offline" title="外部访问须经白名单授权并审计；离线部署可置空白名单。">
-          离线
-        </span>
-        <span className="badge badge--devmode" title="开发模式：未接入正式运行环境，禁止涉密专题">
-          开发模式
-        </span>
+        {runtime ? (
+          <>
+            <span
+              className={`badge ${runtime.networkMode === "offline" ? "badge--offline" : "badge--devmode"}`}
+              title={runtime.networkMode === "offline" ? "未配置外联白名单" : "外部访问仅允许通过白名单，并留存审计记录"}
+            >
+              {runtime.networkMode === "offline" ? "离线运行" : "受控外联"}
+            </span>
+            <span
+              className={`badge ${runtime.modelConfigured ? "badge--offline" : "badge--devmode"}`}
+              title={runtime.modelConfigured ? "文本模型已配置" : "文本模型未配置，相关能力将降级或不可用"}
+            >
+              {runtime.modelConfigured ? "模型已配置" : "模型未配置"}
+            </span>
+            <span
+              className={`badge ${runtime.devMode ? "badge--devmode" : "badge--offline"}`}
+              title={runtime.devMode ? "开发模式：禁止用于真实涉密专题" : "服务端未启用开发模式"}
+            >
+              {runtime.devMode ? "开发模式" : "正式模式"}
+            </span>
+          </>
+        ) : (
+          <span className="badge badge--devmode" title={runtimeUnavailable ? "无法读取服务端运行状态" : "正在读取服务端运行状态"}>
+            {runtimeUnavailable ? "运行状态未知" : "状态检测中"}
+          </span>
+        )}
 
         {user?.role === "admin" ? (
           <Link to="/admin/prompts" className="topbar__admin-entry" style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>

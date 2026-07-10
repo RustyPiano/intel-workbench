@@ -46,6 +46,7 @@ export interface ApiCase {
   created_at: string;
   updated_at: string;
   materials: unknown[];
+  autopilot?: boolean;
 }
 
 export interface OverviewCaseRow {
@@ -461,6 +462,21 @@ async function unwrap<T>(res: Response, key: string): Promise<T> {
   return body[key] as T;
 }
 
+export interface ApiRuntimeStatus {
+  ok: true;
+  devMode: boolean;
+  networkMode: "offline" | "restricted-cloud";
+  modelConfigured: boolean;
+}
+
+/** 公开、非敏感的实际运行状态，供顶栏诚实展示。 */
+export async function getRuntimeStatus(signal?: AbortSignal): Promise<ApiRuntimeStatus> {
+  const res = await fetch(`${BASE}/health`, { signal });
+  const body = (await res.json().catch(() => ({}))) as Partial<ApiRuntimeStatus> & { message?: string };
+  if (!res.ok || body.ok !== true) throw new Error(body.message ?? `运行状态请求失败（HTTP ${res.status}）`);
+  return body as ApiRuntimeStatus;
+}
+
 // ---- 鉴权（产品 spec §8.1） ----
 
 export async function login(username: string, password: string): Promise<{ token: string; user: SessionUser }> {
@@ -525,11 +541,72 @@ export function listMaterials(caseId: string): Promise<ApiMaterial[]> {
   );
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 32_768;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+const BATCH_UPLOAD_MAX_RAW_BYTES = 18 * 1024 * 1024;
+
+/**
+ * 真正的批量汇入：整批文件一次交给 `/materials`，服务端在全部摄入后才触发
+ * autopilot。小批次走 JSON/base64 单请求；超过 body 上限时逐件流式上传，
+ * 但每件都标记 defer，最后再 settle 一次，避免 autopilot 在批中提前启动。
+ */
+export async function uploadMaterialsBatch(
+  caseId: string,
+  files: readonly File[],
+  onPrepared?: (file: File, index: number, total: number) => void,
+): Promise<ApiMaterial[]> {
+  if (files.length === 0) return [];
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > BATCH_UPLOAD_MAX_RAW_BYTES) {
+    const uploaded: ApiMaterial[] = [];
+    const failures: string[] = [];
+    try {
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        onPrepared?.(file, index + 1, files.length);
+        try {
+          uploaded.push(await uploadMaterial(caseId, file, undefined, true));
+        } catch (e) {
+          failures.push(`${file.name}：${(e as Error).message}`);
+        }
+      }
+    } finally {
+      await settleMaterialBatch(caseId);
+    }
+    if (failures.length > 0) throw new Error(`${failures.length} 个文件上传失败；${failures.join("；")}`);
+    return uploaded;
+  }
+  const payload: { filename: string; content: string; encoding: "base64" }[] = [];
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    payload.push({ filename: file.name, content: await fileToBase64(file), encoding: "base64" });
+    onPrepared?.(file, index + 1, files.length);
+  }
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials`, {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ files: payload }),
+  }).then((r) => unwrap<ApiMaterial[]>(r, "materials"));
+}
+
 /**
  * 流式上传单个文件（二期 §4.6，绕 25MB base64-in-JSON 上限）：请求体即文件字节。
  * 用 XHR 而非 fetch，以拿到 upload.onprogress 上传进度（fetch 无上传进度事件）。
  */
-export function uploadMaterial(caseId: string, file: File, onProgress?: (fraction: number) => void): Promise<ApiMaterial> {
+export function uploadMaterial(
+  caseId: string,
+  file: File,
+  onProgress?: (fraction: number) => void,
+  deferBatch = false,
+): Promise<ApiMaterial> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${BASE}/cases/${encodeURIComponent(caseId)}/materials/upload`);
@@ -537,6 +614,7 @@ export function uploadMaterial(caseId: string, file: File, onProgress?: (fractio
     if (token) xhr.setRequestHeader("authorization", `Bearer ${token}`);
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.setRequestHeader("x-upload-filename", encodeURIComponent(file.name));
+    if (deferBatch) xhr.setRequestHeader("x-upload-batch", "defer");
     if (onProgress && xhr.upload) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(e.total > 0 ? e.loaded / e.total : 0);
@@ -559,6 +637,18 @@ export function uploadMaterial(caseId: string, file: File, onProgress?: (fractio
     xhr.onerror = () => reject(new Error("上传失败（网络错误）"));
     xhr.send(file);
   });
+}
+
+async function settleMaterialBatch(caseId: string): Promise<void> {
+  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/materials/settle`, {
+    method: "POST",
+    headers: headers(),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!res.ok || body.ok === false) {
+    noteStatus(res);
+    throw new Error(body.message ?? `批量素材收口失败（HTTP ${res.status}）`);
+  }
 }
 
 /** 重建素材稠密索引（embed 端点恢复后手动建检索向量）。 */
@@ -932,7 +1022,7 @@ export interface ApiAutoInquiryItem {
   error?: string;
 }
 export interface ApiAutoInquiryProgress {
-  status: "running" | "done" | "cancelled";
+  status: "running" | "done" | "cancelled" | "failed";
   total: number;
   completed: number;
   currentIndex: number | null;
@@ -978,12 +1068,12 @@ export interface ApiBrief {
 }
 
 /** 取研判简报（命中新鲜缓存则直接返回；`refresh` 强制重算）。 */
-export function getBrief(caseId: string, refresh = false): Promise<ApiBrief> {
+export function getBrief(caseId: string, refresh = false, signal?: AbortSignal): Promise<ApiBrief> {
   const qs = refresh ? "?refresh=1" : "";
-  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/brief${qs}`, { headers: headers() }).then((r) => unwrap<ApiBrief>(r, "brief"));
+  return fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/brief${qs}`, { headers: headers(), signal }).then((r) => unwrap<ApiBrief>(r, "brief"));
 }
 
-export const refreshBrief = (caseId: string) => getBrief(caseId, true);
+export const refreshBrief = (caseId: string, signal?: AbortSignal) => getBrief(caseId, true, signal);
 
 // ---- 后台任务（M3：大专题异步抽取/检测，进度轮询 + 取消） ----
 

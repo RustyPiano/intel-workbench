@@ -111,18 +111,20 @@ async function closeStream(stream: ReturnType<typeof createWriteStream>): Promis
   });
 }
 
-function terminateProcessTree(pid: number | undefined): void {
+const FORCE_KILL_GRACE_MS = 250;
+
+function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
   if (!pid) {
     return;
   }
 
   try {
     if (process.platform === "win32") {
-      process.kill(pid, "SIGTERM");
+      process.kill(pid, signal);
       return;
     }
 
-    process.kill(-pid, "SIGTERM");
+    process.kill(-pid, signal);
   } catch {
     // The process may already be gone.
   }
@@ -215,6 +217,10 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
   description:
     "Execute a shell command inside the workspace. Do not use this to print environment variables or read secret files such as .env, API keys, tokens, or credentials; use redacted diagnostics such as `npm run dev -- doctor` for configuration status.",
   inputSchema: bashArgsSchema,
+  getTimeoutMs(args, ctx) {
+    const commandTimeoutMs = Math.max(1, Math.min(args.timeout_ms ?? ctx.config.bashTimeoutMs, ctx.config.bashTimeoutMs));
+    return commandTimeoutMs + FORCE_KILL_GRACE_MS + 100;
+  },
   async execute(args, ctx) {
     try {
       assertCommandDoesNotExposeSecrets(args.command);
@@ -318,13 +324,26 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
           detached: process.platform !== "win32",
         });
 
+        let forceKillTimer: NodeJS.Timeout | undefined;
+        let terminationRequested = false;
+        const requestTermination = () => {
+          if (terminationRequested) return;
+          terminationRequested = true;
+          terminateProcessTree(child.pid, "SIGTERM");
+          forceKillTimer = setTimeout(() => terminateProcessTree(child.pid, "SIGKILL"), FORCE_KILL_GRACE_MS);
+          forceKillTimer.unref();
+        };
+        const clearTerminationTimers = () => {
+          clearTimeout(timer);
+          if (forceKillTimer) clearTimeout(forceKillTimer);
+        };
         const timer = setTimeout(() => {
           timedOut = true;
-          terminateProcessTree(child.pid);
+          requestTermination();
         }, timeoutMs);
         const abortHandler = () => {
           aborted = true;
-          terminateProcessTree(child.pid);
+          requestTermination();
         };
 
         ctx.signal.addEventListener("abort", abortHandler, { once: true });
@@ -336,12 +355,12 @@ export const bashTool: RuntimeTool<BashArgs, BashData> = {
           appendOutput(chunk.toString(), "stderr");
         });
         child.on("error", (error) => {
-          clearTimeout(timer);
+          clearTerminationTimers();
           ctx.signal.removeEventListener("abort", abortHandler);
           reject(error);
         });
         child.on("close", (code) => {
-          clearTimeout(timer);
+          clearTerminationTimers();
           ctx.signal.removeEventListener("abort", abortHandler);
           resolve(code);
         });

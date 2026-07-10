@@ -1,4 +1,5 @@
 import type { RuntimeErrorShape } from "./errors.js";
+import type { ToolArtifact } from "../tools/types.js";
 
 export type RuntimeRole = "system" | "user" | "assistant" | "tool";
 
@@ -76,6 +77,7 @@ export interface ToolResultEntry {
   meta?: Record<string, unknown>;
   data?: Record<string, unknown>;
   error?: RuntimeErrorShape;
+  artifacts?: ToolArtifact[];
 }
 
 export interface SkillActivationEntry {

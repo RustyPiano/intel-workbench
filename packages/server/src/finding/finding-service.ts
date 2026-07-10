@@ -43,7 +43,7 @@ export class FindingService {
     const fromClaim = input.claim;
     if (fromClaim && !this.canPromoteClaim(fromClaim)) {
       await this.auditCreateDeny(actor, caseId, "unsupported-claim");
-      throw new AppError(400, "仅可从 supported / support-unverified 结论创建 Finding");
+      throw new AppError(400, "仅可从 supported 结论创建 Finding");
     }
 
     const conclusion = (fromClaim?.text ?? input.conclusion ?? "").trim();
@@ -57,6 +57,13 @@ export class FindingService {
       ? this.promotableCitations(fromClaim).filter((citation) => this.citationStillValid(citation, chunks))
       : (input.supporting_citations ?? []);
     const opposing = input.opposing_citations ?? [];
+    const unverifiedSupporting = supporting.some((citation) => citation.support_status === "support-unverified" || citation.support_status === "unsupported");
+    const unverifiedOpposing = opposing.some((citation) => citation.support_status === "support-unverified"
+      || (citation.support_status === "unsupported" && citation.support_label !== "contradicts"));
+    if (unverifiedSupporting || unverifiedOpposing) {
+      await this.auditCreateDeny(actor, caseId, "citation:not-supported");
+      throw new AppError(400, "Finding 不得包含未通过支持性校验的引用");
+    }
     if (supporting.length === 0) {
       await this.auditCreateDeny(actor, caseId, "missing-supporting-citation");
       throw new AppError(400, "Finding 至少需要一条支持引用");
@@ -142,13 +149,14 @@ export class FindingService {
   }
 
   private canPromoteClaim(claim: InquiryClaim): boolean {
-    if (claim.support_status === "unsupported") return false;
-    if (claim.support_status === "supported" || claim.support_status === "support-unverified") return this.promotableCitations(claim).length > 0;
+    if (claim.support_status === "unsupported" || claim.support_status === "support-unverified") return false;
+    if (claim.support_status === "supported") return this.promotableCitations(claim).length > 0;
     return claim.status === "verified" && this.promotableCitations(claim).length > 0;
   }
 
   private promotableCitations(claim: InquiryClaim): Citation[] {
-    return claim.citations.filter((citation) => citation.support_status !== "unsupported");
+    // 旧版 verified claim 没有 support_status，保留兼容；显式 unverified/unsupported 不得晋升。
+    return claim.citations.filter((citation) => citation.support_status === undefined || citation.support_status === "supported");
   }
 
   private defaultConfidence(citations: Citation[]): number {

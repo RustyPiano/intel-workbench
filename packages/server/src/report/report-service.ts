@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+import { FileMutationQueue } from "mini-agent";
 
 import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
@@ -10,11 +12,14 @@ import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import {
   CLEARANCE_LABELS,
+  CLEARANCES,
+  clearanceRank,
   type BulletinSection,
   type BulletinSpec,
   type CaseManifest,
   type Chunk,
   type Citation,
+  type Clearance,
   type Finding,
   type Identity,
   type ReportCoverageStatus,
@@ -22,6 +27,8 @@ import {
 } from "../domain/types.js";
 import { readContradictionAcknowledgements, readFindings } from "../finding/finding-store.js";
 import { validateCitationIntegrity, type CitationIntegrity } from "../inquiry/citation.js";
+import { writeFileAtomic } from "../util/atomic.js";
+import { sha256, shortId } from "../util/hash.js";
 import { computeCoverage, type ReportCoverage } from "./coverage.js";
 
 const execFileAsync = promisify(execFile);
@@ -97,6 +104,8 @@ function bulletinScriptPath(): string {
 }
 
 export class ReportService {
+  private readonly queue = new FileMutationQueue();
+
   constructor(
     private readonly paths: DataPaths,
     private readonly audit: AuditService,
@@ -105,29 +114,35 @@ export class ReportService {
 
   async draft(actor: Identity, caseId: string, input: DraftInput): Promise<ReportRecord> {
     const manifest = await this.cases.get(actor, caseId);
-    const spec = await this.buildSpec(input, manifest, caseId);
-
-    const prev = await this.read(caseId);
-    const now = new Date().toISOString();
-    // 任何编辑都回到 draft（既有复核失效，需重新走闸门）。
-    const record: ReportRecord = {
-      status: "draft",
-      spec,
-      drafted_by: actor.id,
-      drafted_at: now,
-      rendered: false,
-    };
-    await this.writeSpec(caseId, spec);
-    record.rendered = await this.render(caseId);
-    await this.write(caseId, record);
-    await this.audit.append({
-      user: actor.id,
-      action: "report.draft",
-      object: `report:${caseId}`,
-      caseId,
-      detail: { caseId, rendered: record.rendered, redraftedFrom: prev?.status },
+    return this.queue.runExclusive(this.recordPath(caseId), async () => {
+      const spec = await this.buildSpec(input, manifest, caseId);
+      const prev = await this.read(caseId);
+      const revision = (prev?.revision ?? 0) + 1;
+      const now = new Date().toISOString();
+      await this.writeSpec(caseId, spec);
+      const markdown = await this.render(caseId);
+      if (markdown === null) await rm(this.markdownPath(caseId), { force: true });
+      else await writeFileAtomic(this.markdownPath(caseId), markdown);
+      // 任何编辑都构造全新 draft record，不复制任何提交/审批痕迹。
+      const record: ReportRecord = {
+        status: "draft",
+        spec,
+        revision,
+        ...(markdown === null ? {} : { contentHash: this.contentHash(spec, markdown) }),
+        drafted_by: actor.id,
+        drafted_at: now,
+        rendered: markdown !== null,
+      };
+      await this.write(caseId, record);
+      await this.audit.append({
+        user: actor.id,
+        action: "report.draft",
+        object: `report:${caseId}`,
+        caseId,
+        detail: { caseId, revision, contentHash: record.contentHash, rendered: record.rendered, redraftedFrom: prev?.status },
+      });
+      return record;
     });
-    return record;
   }
 
   async get(actor: Identity, caseId: string): Promise<ReportRecord | null> {
@@ -145,14 +160,21 @@ export class ReportService {
   }
 
   async submit(actor: Identity, caseId: string): Promise<ReportRecord> {
-    const record = await this.require(actor, caseId);
-    if (record.status !== "draft") throw new AppError(409, `仅草稿态可提交复核（当前：${record.status}）`);
-    record.status = "in_review";
-    record.submitted_by = actor.id;
-    record.submitted_at = new Date().toISOString();
-    await this.write(caseId, record);
-    await this.audit.append({ user: actor.id, action: "report.submit", object: `report:${caseId}`, caseId, detail: { caseId } });
-    return record;
+    return this.queue.runExclusive(this.recordPath(caseId), async () => {
+      const record = await this.require(actor, caseId);
+      if (record.status !== "draft") throw new AppError(409, `仅草稿态可提交复核（当前：${record.status}）`);
+      await this.requireCurrentClassification(caseId, record);
+      await this.requireCurrentContent(caseId, record, true);
+      await this.requireCompleteContradictions(caseId);
+      record.status = "in_review";
+      record.submittedRevision = record.revision;
+      record.submittedContentHash = record.contentHash;
+      record.submitted_by = actor.id;
+      record.submitted_at = new Date().toISOString();
+      await this.write(caseId, record);
+      await this.audit.append({ user: actor.id, action: "report.submit", object: `report:${caseId}`, caseId, detail: { caseId, revision: record.revision, contentHash: record.contentHash } });
+      return record;
+    });
   }
 
   async approve(actor: Identity, caseId: string): Promise<ReportRecord> {
@@ -167,85 +189,103 @@ export class ReportService {
       });
       throw new AppError(403, "仅保密员或管理员可复核核准");
     }
-    const record = await this.require(actor, caseId);
-    if (record.status !== "in_review") throw new AppError(409, `仅待复核态可核准（当前：${record.status}）`);
-    record.status = "approved";
-    record.reviewed_by = actor.id;
-    record.approved_at = new Date().toISOString();
-    await this.write(caseId, record);
-    await this.audit.append({
-      user: actor.id,
-      action: "report.approve",
-      object: `report:${caseId}`,
-      caseId,
-      // 一期不强制复核人 ≠ 起草人，但记录是否同人（§7.4）。
-      detail: { caseId, samePerson: record.reviewed_by === record.drafted_by },
+    return this.queue.runExclusive(this.recordPath(caseId), async () => {
+      const record = await this.require(actor, caseId);
+      if (record.status !== "in_review") throw new AppError(409, `仅待复核态可核准（当前：${record.status}）`);
+      if (record.submittedRevision !== record.revision || record.submittedContentHash !== record.contentHash) {
+        throw new AppError(409, "报告内容已与提交版本不一致，请重新生成并提交");
+      }
+      await this.requireCurrentClassification(caseId, record);
+      await this.requireCurrentContent(caseId, record);
+      await this.requireCompleteContradictions(caseId);
+      record.status = "approved";
+      record.approvedRevision = record.revision;
+      record.approvedContentHash = record.contentHash;
+      record.reviewed_by = actor.id;
+      record.approved_at = new Date().toISOString();
+      await this.write(caseId, record);
+      await this.audit.append({
+        user: actor.id,
+        action: "report.approve",
+        object: `report:${caseId}`,
+        caseId,
+        // 一期不强制复核人 ≠ 起草人，但记录是否同人（§7.4）。
+        detail: { caseId, revision: record.revision, contentHash: record.contentHash, samePerson: record.reviewed_by === record.drafted_by },
+      });
+      return record;
     });
-    return record;
   }
 
   async export(actor: Identity, caseId: string): Promise<ExportResult> {
-    const record = await this.require(actor, caseId);
-    // 闸门：未复核态一律拒绝导出（红线 §7.4）。
-    if (record.status !== "approved" && record.status !== "exported") {
-      await this.audit.append({
-        user: actor.id,
-        action: "report.export",
-        object: `report:${caseId}`,
-        result: "deny",
-        caseId,
-        detail: { caseId, status: record.status, reason: "未复核，禁止导出" },
-      });
-      throw new AppError(409, `报告未复核，禁止导出（当前：${record.status}）`);
-    }
-    const gateReasons = await this.evaluateExportGate(caseId, record);
-    if (gateReasons.length > 0) {
-      for (const reason of gateReasons) {
+    return this.queue.runExclusive(this.recordPath(caseId), async () => {
+      const record = await this.require(actor, caseId);
+      // 闸门：未复核态一律拒绝导出（红线 §7.4）。
+      if (record.status !== "approved" && record.status !== "exported") {
         await this.audit.append({
           user: actor.id,
-          action: "report.export.gate",
+          action: "report.export",
           object: `report:${caseId}`,
           result: "deny",
           caseId,
-          detail: { caseId, reason },
+          detail: { caseId, status: record.status, reason: "未复核，禁止导出" },
         });
+        throw new AppError(409, `报告未复核，禁止导出（当前：${record.status}）`);
+      }
+      if (record.approvedRevision !== record.revision || record.approvedContentHash !== record.contentHash) {
+        throw new AppError(409, "报告内容已与审批版本不一致，禁止导出");
+      }
+      await this.requireCurrentClassification(caseId, record);
+      const content = await this.requireCurrentContent(caseId, record);
+      const gateReasons = await this.evaluateExportGate(caseId, record);
+      if (gateReasons.length > 0) {
+        for (const reason of gateReasons) {
+          await this.audit.append({
+            user: actor.id,
+            action: "report.export.gate",
+            object: `report:${caseId}`,
+            result: "deny",
+            caseId,
+            detail: { caseId, reason },
+          });
+        }
+        await this.audit.append({
+          user: actor.id,
+          action: "report.export",
+          object: `report:${caseId}`,
+          result: "deny",
+          caseId,
+          detail: { caseId, status: record.status, reasons: gateReasons },
+        });
+        throw new ExportGateError(gateReasons);
       }
       await this.audit.append({
         user: actor.id,
-        action: "report.export",
+        action: "report.export.gate",
         object: `report:${caseId}`,
-        result: "deny",
         caseId,
-        detail: { caseId, status: record.status, reasons: gateReasons },
+        detail: { caseId, allowed: true },
       });
-      throw new ExportGateError(gateReasons);
-    }
-    await this.audit.append({
-      user: actor.id,
-      action: "report.export.gate",
-      object: `report:${caseId}`,
-      caseId,
-      detail: { caseId, allowed: true },
+      if (record.status === "approved") {
+        record.status = "exported";
+        record.exported_by = actor.id;
+        record.exported_at = new Date().toISOString();
+        await this.write(caseId, record);
+      }
+      await this.audit.append({ user: actor.id, action: "report.export", object: `report:${caseId}`, caseId, detail: { caseId, revision: record.revision, contentHash: record.contentHash } });
+      return { filename: `${caseId}-bulletin.md`, content, status: record.status };
     });
-    const content = await readFile(this.markdownPath(caseId), "utf8");
-    if (record.status === "approved") {
-      record.status = "exported";
-      record.exported_by = actor.id;
-      record.exported_at = new Date().toISOString();
-      await this.write(caseId, record);
-    }
-    await this.audit.append({ user: actor.id, action: "report.export", object: `report:${caseId}`, caseId, detail: { caseId } });
-    return { filename: `${caseId}-bulletin.md`, content, status: record.status };
   }
 
   async generateAutoDraft(actor: Identity, caseId: string): Promise<DraftInput> {
     const manifest = await this.cases.get(actor, caseId);
-    const approvedFindings = (await readFindings(this.paths, caseId)).filter((finding) => finding.review_status === "approved");
+    const approvedFindings = (await readFindings(this.paths, caseId))
+      .filter((finding) => finding.review_status === "approved" && this.isReportableFinding(finding));
     const sections = this.sectionsFromFindings(approvedFindings);
+    const requiredClassification = this.requiredClassification(manifest, approvedFindings);
 
     const draft: DraftInput = {
       title: `${manifest.name} 情报分析报告`,
-      classification: CLEARANCE_LABELS[manifest.clearance],
+      classification: CLEARANCE_LABELS[requiredClassification],
       sections,
       finding_ids: approvedFindings.map((finding) => finding.id),
       date: new Date().toISOString().split("T")[0],
@@ -269,7 +309,8 @@ export class ReportService {
   private async buildSpec(input: DraftInput, manifest: CaseManifest, caseId: string): Promise<BulletinSpec> {
     const title = input.title?.trim();
     if (!title) throw new AppError(400, "报告标题为必填项");
-    const approvedFindings = (await readFindings(this.paths, caseId)).filter((finding) => finding.review_status === "approved");
+    const approvedFindings = (await readFindings(this.paths, caseId))
+      .filter((finding) => finding.review_status === "approved" && this.isReportableFinding(finding));
     const sections = input.sections !== undefined
       ? input.sections.map((s) => this.normalizeSection(s)).filter((s) => s.heading || s.body || s.finding_ids.length > 0 || s.citation_ids.length > 0)
       : input.finding_ids !== undefined
@@ -281,9 +322,12 @@ export class ReportService {
     if (sections.length === 0 && !input.body?.trim()) {
       sections.push(...this.sectionsFromFindings(approvedFindings));
     }
+    const findingIds = new Set(sections.flatMap((section) => section.finding_ids));
+    const referencedFindings = approvedFindings.filter((finding) => findingIds.has(finding.id));
+    const requiredClassification = this.requiredClassification(manifest, referencedFindings);
     return {
       title,
-      classification: input.classification?.trim() || CLEARANCE_LABELS[manifest.clearance],
+      classification: this.validateClassification(input.classification, requiredClassification),
       recipient: input.recipient?.trim() || undefined,
       summary: input.summary?.trim() || undefined,
       sections,
@@ -331,7 +375,7 @@ export class ReportService {
     const reasons = new Set<string>();
     const findings = await readFindings(this.paths, caseId);
     const findingById = new Map(findings.map((finding) => [finding.id, finding]));
-    const approvedFindings = findings.filter((finding) => finding.review_status === "approved");
+    const approvedFindings = findings.filter((finding) => finding.review_status === "approved" && this.isReportableFinding(finding));
     const citationById = new Map<string, CitationPoolEntry>();
     for (const finding of approvedFindings) {
       for (const citation of finding.supporting_citations) {
@@ -357,6 +401,8 @@ export class ReportService {
           reasons.add("finding:rejected");
         } else if (finding.review_status !== "approved") {
           reasons.add("finding:not-approved");
+        } else if (!this.isReportableFinding(finding)) {
+          reasons.add("citation:support-unverified");
         } else {
           sectionFindings.push(finding);
           reportFindings.set(finding.id, finding);
@@ -399,6 +445,9 @@ export class ReportService {
     }
     this.validateStandaloneProse(record.spec.summary, [...reportFindings.values()], chunks, reasons);
     this.validateStandaloneProse(record.spec.conclusion, [...reportFindings.values()], chunks, reasons);
+    if (!(await this.contradictionsComplete(caseId, chunks.length))) {
+      reasons.add("contradiction:not-complete");
+    }
     if (await this.hasHighSeverityContradiction(caseId)) {
       reasons.add("contradiction:high-severity-unresolved");
     }
@@ -412,6 +461,10 @@ export class ReportService {
   private validateFindingCitations(finding: Finding, chunks: Chunk[], reasons: Set<string>): { hasValidSpan: boolean } {
     let hasValidSpan = false;
     for (const citation of finding.supporting_citations) {
+      if (citation.support_status === "support-unverified" || citation.support_status === "unsupported") {
+        reasons.add("citation:support-unverified");
+        continue;
+      }
       const validation = this.validateCitation(citation, chunks);
       if (!validation.validChunk || (!validation.validSpan && !validation.missingSpan)) {
         reasons.add("citation:invalid");
@@ -486,14 +539,17 @@ export class ReportService {
     }
   }
 
-  /** 调 render_report.py 渲染 .md（读已落盘的 spec）；失败不阻塞草稿。 */
-  private async render(caseId: string): Promise<boolean> {
-    const outBase = path.join(this.reportDir(caseId), "bulletin");
+  /** 调 render_report.py 渲染到临时文件；只有成功读回完整 Markdown 才会由 draft 原子切换。 */
+  private async render(caseId: string): Promise<string | null> {
+    const outBase = path.join(this.reportDir(caseId), shortId("render-"));
+    const renderedFile = `${outBase}.md`;
     try {
       await execFileAsync("python3", [bulletinScriptPath(), this.specPath(caseId), outBase], { timeout: 20_000 });
-      return true;
+      return await readFile(renderedFile, "utf8");
     } catch {
-      return false;
+      return null;
+    } finally {
+      await rm(renderedFile, { force: true }).catch(() => undefined);
     }
   }
 
@@ -526,14 +582,112 @@ export class ReportService {
     return record;
   }
 
+  private contentHash(spec: BulletinSpec, markdown: string): string {
+    return sha256(`${JSON.stringify(spec)}\n${markdown}`);
+  }
+
+  /** 核对 record/spec/Markdown 三者是同一版；旧 draft 仅在首次提交时就地绑定。 */
+  private async requireCurrentContent(caseId: string, record: ReportRecord, upgradeLegacy = false): Promise<string> {
+    if (!record.rendered) throw new AppError(409, "报告渲染失败，禁止提交、审批或导出");
+    let diskSpec: BulletinSpec;
+    let markdown: string;
+    try {
+      [diskSpec, markdown] = await Promise.all([
+        readFile(this.specPath(caseId), "utf8").then((raw) => JSON.parse(raw) as BulletinSpec),
+        readFile(this.markdownPath(caseId), "utf8"),
+      ]);
+    } catch {
+      throw new AppError(409, "报告渲染产物缺失或损坏，请重新生成");
+    }
+    if (JSON.stringify(diskSpec) !== JSON.stringify(record.spec)) {
+      throw new AppError(409, "报告 spec 已与状态记录不一致，请重新生成");
+    }
+    const currentHash = this.contentHash(record.spec, markdown);
+    if ((!record.revision || !record.contentHash) && upgradeLegacy && record.status === "draft") {
+      record.revision = 1;
+      record.contentHash = currentHash;
+      await this.write(caseId, record);
+    }
+    if (!record.revision || !record.contentHash || currentHash !== record.contentHash) {
+      throw new AppError(409, "报告当前内容与记录版本不一致，请重新生成");
+    }
+    return markdown;
+  }
+
+  private async requireCompleteContradictions(caseId: string): Promise<void> {
+    const chunks = await this.loadCaseChunks(caseId);
+    if (!(await this.contradictionsComplete(caseId, chunks.length))) {
+      throw new AppError(409, "矛盾检测未成功完成全量覆盖，禁止提交或审批报告");
+    }
+  }
+
+  private async requireCurrentClassification(caseId: string, record: ReportRecord): Promise<void> {
+    const manifest = await this.cases.loadManifest(caseId);
+    if (!manifest) throw new AppError(404, "专题不存在");
+    const ids = new Set(record.spec.sections.flatMap((section) => section.finding_ids));
+    const referenced = (await readFindings(this.paths, caseId)).filter((finding) => ids.has(finding.id));
+    const required = this.requiredClassification(manifest, referenced);
+    const current = record.spec.classification ? this.parseClassification(record.spec.classification) : null;
+    if (!current || clearanceRank(current) < clearanceRank(required)) {
+      throw new AppError(409, `报告密级低于当前专题或引用证据密级（至少 ${CLEARANCE_LABELS[required]}），请重新生成`);
+    }
+  }
+
+  private async contradictionsComplete(caseId: string, currentChunkCount: number): Promise<boolean> {
+    const result = await this.readJson<{
+      status?: string;
+      processedChunks?: number;
+      totalChunks?: number;
+      truncated?: boolean;
+      notStarted?: boolean;
+    }>(path.join(this.paths.caseDir(caseId), "contradictions.result.json"));
+    return result?.status === "succeeded"
+      && result.notStarted !== true
+      && result.truncated === false
+      && Number.isInteger(result.processedChunks)
+      && result.processedChunks === result.totalChunks
+      && result.totalChunks === currentChunkCount;
+  }
+
+  private isReportableFinding(finding: Finding): boolean {
+    return finding.supporting_citations.length > 0
+      && finding.supporting_citations.every((citation) => citation.support_status !== "support-unverified" && citation.support_status !== "unsupported");
+  }
+
+  private requiredClassification(manifest: CaseManifest, findings: Finding[]): Clearance {
+    let required = manifest.clearance;
+    for (const finding of findings) {
+      for (const citation of [...finding.supporting_citations, ...finding.opposing_citations]) {
+        const raw = (citation as Citation & { classification?: unknown }).classification;
+        const evidence = typeof raw === "string" ? this.parseClassification(raw) : null;
+        if (evidence && clearanceRank(evidence) > clearanceRank(required)) required = evidence;
+      }
+    }
+    return required;
+  }
+
+  private validateClassification(input: string | undefined, required: Clearance): string {
+    const requested = input?.trim() ? this.parseClassification(input.trim()) : required;
+    if (!requested) throw new AppError(400, "报告密级必须为内部/秘密/机密/绝密");
+    if (clearanceRank(requested) < clearanceRank(required)) {
+      throw new AppError(400, `报告密级不得低于专题或引用证据密级（至少 ${CLEARANCE_LABELS[required]}）`);
+    }
+    return CLEARANCE_LABELS[requested];
+  }
+
+  private parseClassification(value: string): Clearance | null {
+    if ((CLEARANCES as readonly string[]).includes(value)) return value as Clearance;
+    return CLEARANCES.find((clearance) => CLEARANCE_LABELS[clearance] === value) ?? null;
+  }
+
   private async write(caseId: string, record: ReportRecord): Promise<void> {
     await mkdir(this.reportDir(caseId), { recursive: true });
-    await writeFile(this.recordPath(caseId), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await writeFileAtomic(this.recordPath(caseId), `${JSON.stringify(record, null, 2)}\n`);
   }
 
   private async writeSpec(caseId: string, spec: BulletinSpec): Promise<void> {
     await mkdir(this.reportDir(caseId), { recursive: true });
-    await writeFile(this.specPath(caseId), `${JSON.stringify(spec, null, 2)}\n`, "utf8");
+    await writeFileAtomic(this.specPath(caseId), `${JSON.stringify(spec, null, 2)}\n`);
   }
 }
 

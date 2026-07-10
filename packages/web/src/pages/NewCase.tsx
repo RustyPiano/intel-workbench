@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createCase, uploadMaterial } from "../api";
+import { createCase, uploadMaterial, uploadMaterialsBatch } from "../api";
 import { useSession } from "../state/session";
 import { CLEARANCE_LABELS, type Clearance } from "../types";
 
@@ -63,14 +63,19 @@ export function NewCasePage() {
       const created = await createCase({ name: name.trim(), clearance, description: desc.trim() || undefined });
       if (files.length > 0) {
         setUploading(true);
-        for (const [i, file] of files.entries()) {
-          setUploadStatus(`上传素材 ${i + 1}/${files.length}...`);
-          // best-effort：单个文件上传失败不阻断其余，素材状态在工作台 MaterialsPanel 可见。
-          try {
-            await uploadMaterial(created.id, file);
-          } catch {
-            /* 跳过失败文件，继续上传剩余 */
+        try {
+          if (files.length > 1) {
+            await uploadMaterialsBatch(created.id, files, (_file, index, total) => {
+              setUploadStatus(index < total ? `准备素材 ${index}/${total}...` : "正在整批上传...");
+            });
+          } else {
+            setUploadStatus("上传素材 1/1...");
+            await uploadMaterial(created.id, files[0]);
           }
+        } catch (uploadError) {
+          const message = `专题已创建，但素材上传失败：${(uploadError as Error).message}`;
+          navigate(`/cases/${encodeURIComponent(created.id)}/materials?uploadError=${encodeURIComponent(message)}`, { replace: true });
+          return;
         }
       }
       navigate(`/cases/${encodeURIComponent(created.id)}`);

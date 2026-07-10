@@ -2,6 +2,17 @@ import type { AuditService } from "../audit/audit-service.js";
 import { AppError } from "../domain/identity.js";
 
 /**
+ * server 内所有直接 HTTP 请求的统一出口：初始 host 由 OfflineGuard.authorize
+ * 校验，这里禁止 fetch 自动跟随到未授权的二跳 host。
+ */
+export function fetchNoRedirect(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): ReturnType<typeof fetch> {
+  return fetch(input, { ...init, redirect: "error" });
+}
+
+/**
  * 零外发应用层闸门（工程方案 §7.1）。应用自身的全部出站都必须先经此授权：
  * 仅白名单 host 放行，其余一律拒绝；放行/拒绝都落审计。开发期白名单仅文本
  * LLM 端点；生产把白名单置空即一键全断。

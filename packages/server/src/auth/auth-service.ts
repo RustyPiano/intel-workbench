@@ -40,7 +40,9 @@ export class AuthService {
     private readonly users: UserStore,
     private readonly audit: AuditService,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    users.onSecurityChange((id) => this.revokeUser(id));
+  }
 
   async login(username: string, password: string): Promise<{ token: string; identity: Identity }> {
     const id = (username ?? "").trim();
@@ -86,8 +88,11 @@ export class AuthService {
       throw new AppError(401, "当前口令错误");
     }
 
+    const expiresAt = session.expiresAt;
     await this.users.setPassword(user.id, newPassword);
     session.identity = { ...session.identity, mustChangePassword: false };
+    // UserStore 已撤销该用户全部令牌；本人改密成功后仅续期当前令牌。
+    this.sessions.set(token!, { identity: session.identity, expiresAt });
     await this.audit.append({ user: user.id, action: "user.password", object: `user:${user.id}`, result: "ok" });
     return session.identity;
   }
@@ -107,6 +112,12 @@ export class AuthService {
   async logout(token: string | undefined, actor: Identity): Promise<void> {
     if (token) this.sessions.delete(token);
     await this.audit.append({ user: actor.id, action: "auth.logout", object: `user:${actor.id}`, result: "ok" });
+  }
+
+  private revokeUser(id: string): void {
+    for (const [token, session] of this.sessions) {
+      if (session.identity.id === id) this.sessions.delete(token);
+    }
   }
 
   private async deny(id: string, reason: string): Promise<void> {

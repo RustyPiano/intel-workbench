@@ -3365,12 +3365,21 @@ button.auto-inquiry__item:hover {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
-  cursor: pointer;
+  border: 0;
+  font-family: inherit;
+  cursor: default;
   white-space: nowrap;
   transition: var(--transition);
 }
-.citation:hover {
+button.citation {
+  cursor: pointer;
+}
+button.citation:hover {
   background: var(--accent-light);
+}
+button.citation:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
 }
 .citation-support {
   color: var(--text-muted);

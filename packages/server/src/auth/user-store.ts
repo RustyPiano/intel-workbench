@@ -2,9 +2,12 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { FileMutationQueue } from "mini-agent";
+
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
 import { CLEARANCES, ROLES, type Clearance, type Role } from "../domain/types.js";
+import { writeFileAtomic } from "../util/atomic.js";
 
 /**
  * 本地用户存储（工程方案 §4.2，`config/users.json`）。口令以 scrypt 加盐哈希
@@ -79,6 +82,8 @@ function strip(user: StoredUser): PublicUser {
 
 export class UserStore {
   private seedPromise: Promise<StoredUser[]> | null = null;
+  private readonly queue = new FileMutationQueue();
+  private readonly securityChangeListeners = new Set<(id: string) => void>();
 
   constructor(private readonly paths: DataPaths) {}
 
@@ -90,30 +95,40 @@ export class UserStore {
     return (await this.read()).find((u) => u.id === id);
   }
 
+  /** 角色/密级/启停/口令变更后通知会话层撤销旧令牌。 */
+  onSecurityChange(listener: (id: string) => void): () => void {
+    this.securityChangeListeners.add(listener);
+    return () => this.securityChangeListeners.delete(listener);
+  }
+
   async ensureDemoUsers(): Promise<void> {
-    const users = await this.read();
-    for (const { user, password } of SEED_DEFAULTS) {
-      const existing = users.find((u) => u.id === user.id);
-      if (!existing) {
-        users.push({
-          id: user.id,
-          name: user.name,
-          role: user.role,
-          clearance: user.clearance,
-          enabled: true,
-          must_change_password: false,
-          pwd_hash: hashPassword(password),
-        });
-        continue;
+    const changed = await this.queue.runExclusive(this.paths.usersFile, async () => {
+      const users = await this.read();
+      for (const { user, password } of SEED_DEFAULTS) {
+        const existing = users.find((u) => u.id === user.id);
+        if (!existing) {
+          users.push({
+            id: user.id,
+            name: user.name,
+            role: user.role,
+            clearance: user.clearance,
+            enabled: true,
+            must_change_password: false,
+            pwd_hash: hashPassword(password),
+          });
+          continue;
+        }
+        existing.name = user.name;
+        existing.role = user.role;
+        existing.clearance = user.clearance;
+        existing.enabled = true;
+        existing.must_change_password = false;
+        if (!verifyPassword(password, existing.pwd_hash)) existing.pwd_hash = hashPassword(password);
       }
-      existing.name = user.name;
-      existing.role = user.role;
-      existing.clearance = user.clearance;
-      existing.enabled = true;
-      existing.must_change_password = false;
-      if (!verifyPassword(password, existing.pwd_hash)) existing.pwd_hash = hashPassword(password);
-    }
-    await this.write(users);
+      await this.write(users);
+      return SEED_DEFAULTS.map(({ user }) => user.id);
+    });
+    changed.forEach((id) => this.notifySecurityChange(id));
   }
 
   async create(input: { id: string; name: string; role: Role; clearance: Clearance; password: string }): Promise<PublicUser> {
@@ -122,50 +137,65 @@ export class UserStore {
     if (!ROLES.includes(input.role)) throw new AppError(400, "非法角色");
     if (!CLEARANCES.includes(input.clearance)) throw new AppError(400, "非法密级");
     await this.assertAcceptablePassword(input.password);
-    const users = await this.read();
-    if (users.some((u) => u.id === id)) throw new AppError(409, "账号已存在");
-    const user: StoredUser = {
-      id,
-      name: input.name.trim() || id,
-      role: input.role,
-      clearance: input.clearance,
-      enabled: true,
-      must_change_password: false,
-      pwd_hash: hashPassword(input.password),
-    };
-    users.push(user);
-    await this.write(users);
-    return strip(user);
+    return this.queue.runExclusive(this.paths.usersFile, async () => {
+      const users = await this.read();
+      if (users.some((u) => u.id === id)) throw new AppError(409, "账号已存在");
+      const user: StoredUser = {
+        id,
+        name: input.name.trim() || id,
+        role: input.role,
+        clearance: input.clearance,
+        enabled: true,
+        must_change_password: false,
+        pwd_hash: hashPassword(input.password),
+      };
+      users.push(user);
+      await this.write(users);
+      return strip(user);
+    });
   }
 
   async update(id: string, patch: { name?: string; role?: Role; clearance?: Clearance; enabled?: boolean }): Promise<PublicUser> {
-    const users = await this.read();
-    const user = users.find((u) => u.id === id);
-    if (!user) throw new AppError(404, "用户不存在");
-    if (patch.role !== undefined) {
-      if (!ROLES.includes(patch.role)) throw new AppError(400, "非法角色");
-      user.role = patch.role;
-    }
-    if (patch.clearance !== undefined) {
-      if (!CLEARANCES.includes(patch.clearance)) throw new AppError(400, "非法密级");
-      user.clearance = patch.clearance;
-    }
-    if (patch.name !== undefined) user.name = patch.name.trim() || user.id;
-    if (patch.enabled !== undefined) user.enabled = patch.enabled;
-    await this.write(users);
-    return strip(user);
+    let securityChanged = false;
+    const result = await this.queue.runExclusive(this.paths.usersFile, async () => {
+      const users = await this.read();
+      const user = users.find((u) => u.id === id);
+      if (!user) throw new AppError(404, "用户不存在");
+      if (patch.role !== undefined) {
+        if (!ROLES.includes(patch.role)) throw new AppError(400, "非法角色");
+        securityChanged ||= patch.role !== user.role;
+        user.role = patch.role;
+      }
+      if (patch.clearance !== undefined) {
+        if (!CLEARANCES.includes(patch.clearance)) throw new AppError(400, "非法密级");
+        securityChanged ||= patch.clearance !== user.clearance;
+        user.clearance = patch.clearance;
+      }
+      if (patch.name !== undefined) user.name = patch.name.trim() || user.id;
+      if (patch.enabled !== undefined) {
+        securityChanged ||= patch.enabled !== user.enabled;
+        user.enabled = patch.enabled;
+      }
+      await this.write(users);
+      return strip(user);
+    });
+    if (securityChanged) this.notifySecurityChange(id);
+    return result;
   }
 
   async setPassword(id: string, password: string): Promise<void> {
     await this.assertAcceptablePassword(password);
-    const users = await this.read();
-    const user = users.find((u) => u.id === id);
-    if (!user) throw new AppError(404, "用户不存在");
-    const removeInitialPassword = id === "admin" && user.must_change_password === true;
-    user.pwd_hash = hashPassword(password);
-    user.must_change_password = false;
-    await this.write(users);
-    if (removeInitialPassword) await this.removeInitialAdminPassword();
+    await this.queue.runExclusive(this.paths.usersFile, async () => {
+      const users = await this.read();
+      const user = users.find((u) => u.id === id);
+      if (!user) throw new AppError(404, "用户不存在");
+      const removeInitialPassword = id === "admin" && user.must_change_password === true;
+      user.pwd_hash = hashPassword(password);
+      user.must_change_password = false;
+      await this.write(users);
+      if (removeInitialPassword) await this.removeInitialAdminPassword();
+    });
+    this.notifySecurityChange(id);
   }
 
   private async read(): Promise<StoredUser[]> {
@@ -264,6 +294,10 @@ export class UserStore {
 
   private async write(users: StoredUser[]): Promise<void> {
     await mkdir(path.dirname(this.paths.usersFile), { recursive: true });
-    await writeFile(this.paths.usersFile, `${JSON.stringify(users, null, 2)}\n`, "utf8");
+    await writeFileAtomic(this.paths.usersFile, `${JSON.stringify(users, null, 2)}\n`);
+  }
+
+  private notifySecurityChange(id: string): void {
+    for (const listener of this.securityChangeListeners) listener(id);
   }
 }

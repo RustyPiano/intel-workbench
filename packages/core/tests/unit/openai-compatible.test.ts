@@ -1,3 +1,6 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 
@@ -19,7 +22,64 @@ async function collectStreamEvents(stream: AsyncIterable<ModelStreamEvent>): Pro
   return events;
 }
 
+async function listen(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return (server.address() as AddressInfo).port;
+}
+
+async function close(server: Server): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
 describe("OpenAICompatibleModelAdapter", () => {
+  test("refuses 307 redirects without replaying the authenticated request to the target", async () => {
+    let targetHits = 0;
+    const target = createServer((_request, response) => {
+      targetHits += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ choices: [{ message: { content: "leaked" }, finish_reason: "stop" }] }));
+    });
+    const targetPort = await listen(target);
+    const redirect = createServer((_request, response) => {
+      response.writeHead(307, { location: `http://127.0.0.1:${targetPort}/captured` });
+      response.end();
+    });
+    const redirectPort = await listen(redirect);
+
+    try {
+      const adapter = new OpenAICompatibleModelAdapter({
+        model: "test-model",
+        apiKey: "test-secret",
+        baseURL: `http://127.0.0.1:${redirectPort}/v1`,
+      });
+      await expect(adapter.generate({ systemPrompt: "test", messages: [], tools: [] })).rejects.toMatchObject({
+        code: "MODEL_ERROR",
+      });
+      expect(targetHits).toBe(0);
+    } finally {
+      await close(redirect);
+      await close(target);
+    }
+  }, 10_000);
+
+  test("maps content-filtered responses to an error stop reason", async () => {
+    const adapter = new OpenAICompatibleModelAdapter({ model: "any-model", apiKey: "test-key" });
+    (adapter as unknown as { client: unknown }).client = {
+      chat: {
+        completions: {
+          async create() {
+            return { choices: [{ message: { content: null }, finish_reason: "content_filter" }] };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.generate({ systemPrompt: "test", messages: [], tools: [] });
+
+    expect(result.stopReason).toBe("error");
+  });
+
   test("rejects malformed provider responses that omit the choices array", async () => {
     const adapter = new OpenAICompatibleModelAdapter({
       provider: "openai-compatible",

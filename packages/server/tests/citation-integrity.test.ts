@@ -53,4 +53,15 @@ describe("validateCitationIntegrity", () => {
       missingSpan: true,
     });
   });
+
+  it("rejects a real quote attached to a fabricated locator", () => {
+    const c = chunk("目标甲在码头出现。");
+    const citation = { ...citationFor(c, "目标甲", 0), locator: { paragraph: 99 } };
+
+    expect(validateCitationIntegrity(citation, [c])).toEqual({
+      validChunk: false,
+      validSpan: false,
+      missingSpan: false,
+    });
+  });
 });

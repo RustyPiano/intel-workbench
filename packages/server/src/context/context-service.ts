@@ -84,9 +84,10 @@ const MATERIAL_LIMITS: Record<ContextPurpose, number> = {
   "verify-claims": 30,
 };
 const EXCERPT_CHARS: Record<ContextPurpose, number> = {
-  "suggest-questions": 200,
+  // 问题生成需要看到完整事实邻域；200 字会把同一条车辆/时间记录截成错误前提。
+  "suggest-questions": 600,
   "generate-report": 150,
-  "verify-claims": 400,
+  "verify-claims": 800,
 };
 const ELEMENT_LIMITS: Record<ContextPurpose, number> = {
   "suggest-questions": 20,

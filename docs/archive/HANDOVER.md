@@ -42,9 +42,9 @@ mini-agent/
 ├── docs/
 │   ├── decisions/
 │   │   ├── 2026-07-03-intelligent-workflow-automation.md  # 决策文档
-│   │   └── implementation-roadmap.md                      # 实施路线图
+│   │   └── implementation-roadmap-2026-07-03.md           # 实施路线图（现已归档）
 │   └── reports/
-│       └── 2026-07-03-phase1-2-implementation-report.md  # 完整实施报告
+│       └── 2026-07-03-phase1-2-implementation-report.md  # 完整实施报告（现已归档）
 ├── packages/
 │   ├── server/src/
 │   │   ├── suggestion/           # Phase 1: 建议服务
@@ -261,7 +261,7 @@ pm2 restart mini-agent-server
 ### 立即可做
 
 1. **审查代码**
-   - 阅读 `docs/reports/2026-07-03-phase1-2-implementation-report.md`
+   - 阅读 `docs/archive/2026-07-03-phase1-2-implementation-report.md`
    - 检查 `packages/server/src/suggestion/suggestion-service.ts`
    - 检查前端面板代码
 
@@ -278,7 +278,7 @@ pm2 restart mini-agent-server
 ### 如需继续开发
 
 1. **Phase 3 实施**
-   - 参考 `docs/decisions/implementation-roadmap.md`
+   - 参考 `docs/archive/implementation-roadmap-2026-07-03.md`
    - 先实施 FeedbackService
    - 再考虑 AI 助手
 

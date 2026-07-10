@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   cancelJob,
@@ -14,10 +14,12 @@ import {
   type ApiClaim,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { CitationChips } from "../components/CitationChips";
 import { CoverageMeter } from "../components/CoverageMeter";
 import { FrameCiteView } from "../components/FrameCiteView";
 import { TaskOverview } from "../components/TaskOverview";
+import { useExtractionJob } from "../hooks/useExtractionJob";
 import {
   CONTRADICTION_SCOPE_LABELS,
   ELEMENT_TYPE_LABELS,
@@ -141,16 +143,29 @@ const AUTO_INQUIRY_STATUS_LABEL: Record<ApiAutoInquiryItemStatus, string> = {
  */
 function AutoInquiryProgressBlock({
   progress,
+  canManage,
   cancelling,
+  restarting,
   onCancel,
+  onRestart,
   onOpenFindings,
 }: {
   progress: ApiAutoInquiryProgress;
+  canManage: boolean;
   cancelling: boolean;
+  restarting: boolean;
   onCancel: () => void;
+  onRestart: () => void;
   onOpenFindings: () => void;
 }) {
-  const statusLabel = progress.status === "running" ? "研判进行中" : progress.status === "cancelled" ? "已取消" : "研判完成";
+  const statusLabel = progress.status === "running"
+    ? "研判进行中"
+    : progress.status === "cancelled"
+      ? "已取消"
+      : progress.status === "failed"
+        ? "运行失败"
+        : "研判完成";
+  const canRestart = progress.status === "cancelled" || progress.status === "failed" || progress.items.some((item) => item.status === "failed");
   return (
     <div className="auto-inquiry">
       <div className="auto-inquiry__head">
@@ -159,9 +174,13 @@ function AutoInquiryProgressBlock({
           {statusLabel} · {progress.completed}/{progress.total}
         </span>
         <span className="auto-inquiry__spacer" />
-        {progress.status === "running" ? (
+        {canManage && progress.status === "running" ? (
           <button type="button" className="btn btn--ghost btn--sm" onClick={onCancel} disabled={cancelling}>
             {cancelling ? "取消中…" : "取消"}
+          </button>
+        ) : canManage && canRestart ? (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onRestart} disabled={restarting}>
+            {restarting ? "重启中…" : "重新运行"}
           </button>
         ) : null}
       </div>
@@ -201,42 +220,81 @@ function AutoInquiryProgressBlock({
 export function BriefPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const { user } = useSession();
+  const { canManage } = useWorkbenchContext();
   const navigate = useNavigate();
   const [brief, setBrief] = useState<ApiBrief | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [cancellingBatch, setCancellingBatch] = useState(false);
+  const [restartingBatch, setRestartingBatch] = useState(false);
   const [frameCite, setFrameCite] = useState<ApiCitation | null>(null);
+  const briefRequestRef = useRef<{ caseId: string; promise: Promise<ApiBrief> } | null>(null);
+
+  /**
+   * 简报包含真模型概览，不允许轮询、StrictMode 或手动刷新叠加发起同一请求。
+   * 强制刷新会等当前请求收尾，从而保持服务端生成单飞。
+   */
+  const loadBrief = useCallback((force = false, signal?: AbortSignal): Promise<ApiBrief> => {
+    if (!caseId) return Promise.reject(new Error("缺少专题 ID"));
+    const current = briefRequestRef.current;
+    if (current?.caseId === caseId && !force) return current.promise;
+
+    const promise = (async () => {
+      if (current?.caseId === caseId && force) await current.promise.catch(() => undefined);
+      return force ? refreshBrief(caseId, signal) : getBrief(caseId, false, signal);
+    })();
+    briefRequestRef.current = { caseId, promise };
+    void promise.finally(() => {
+      if (briefRequestRef.current?.promise === promise) briefRequestRef.current = null;
+    }).catch(() => undefined);
+    return promise;
+  }, [caseId]);
+
+  const syncBrief = useCallback(() => {
+    void loadBrief().then((next) => {
+      setBrief(next);
+      setError(null);
+    }).catch((e: Error) => {
+      if (e.name !== "AbortError") setError(e.message);
+    });
+  }, [loadBrief]);
+
+  const autoInquiryJob = useExtractionJob(caseId ?? "", "auto-inquiry", syncBrief);
 
   useEffect(() => {
     if (!user || !caseId) return;
     let alive = true;
-    const load = async () => {
+    let timer: number | null = null;
+    const controller = new AbortController();
+    const poll = async () => {
       try {
-        const next = await getBrief(caseId);
+        const next = await loadBrief(false, controller.signal);
         if (!alive) return;
         setBrief(next);
         setError(null);
       } catch (e) {
-        if (alive) setError((e as Error).message);
+        if (alive && (e as Error).name !== "AbortError") setError((e as Error).message);
+      } finally {
+        // 上一次完成后再计时，避免慢模型请求与下一轮重叠。
+        if (alive) timer = window.setTimeout(() => void poll(), 8000);
       }
     };
-    void load();
-    // 轮询保持任务阶段条 / autopilot 状态新鲜；产物变更时服务端按指纹自动重算概览（D5）。
-    const timer = window.setInterval(() => void load(), 8000);
+    // 延后到下一个 task，React StrictMode 的探测性 effect 会在发请前被清理。
+    timer = window.setTimeout(() => void poll(), 0);
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
     };
-  }, [user, caseId]);
+  }, [user, caseId, loadBrief]);
 
   const handleRefresh = async () => {
     if (!caseId || refreshing) return;
     setRefreshing(true);
     setError(null);
     try {
-      setBrief(await refreshBrief(caseId));
+      setBrief(await loadBrief(true));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -245,12 +303,12 @@ export function BriefPanel() {
   };
 
   const handleToggleAutopilot = async () => {
-    if (!caseId || !brief || autopilotBusy) return;
+    if (!caseId || !brief || !canManage || autopilotBusy) return;
     setAutopilotBusy(true);
     setError(null);
     try {
-      await updateCase(caseId, { autopilot: !brief.autopilot });
-      setBrief(await getBrief(caseId));
+      const updated = await updateCase(caseId, { autopilot: !brief.autopilot });
+      setBrief((current) => current ? { ...current, autopilot: updated.autopilot ?? !current.autopilot } : current);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -271,17 +329,31 @@ export function BriefPanel() {
   };
 
   const handleCancelBatch = async () => {
-    if (!caseId || cancellingBatch) return;
+    if (!caseId || !canManage || cancellingBatch) return;
     setCancellingBatch(true);
     setError(null);
     try {
       // 复用 jobs 通用取消端点；随即重拉简报以尽快反映取消态（简报轮询亦会补更新）。
       await cancelJob(caseId, "auto-inquiry");
-      setBrief(await getBrief(caseId));
+      setBrief(await loadBrief());
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setCancellingBatch(false);
+    }
+  };
+
+  const handleStartBatch = async () => {
+    if (!caseId || !canManage || restartingBatch) return;
+    setRestartingBatch(true);
+    setError(null);
+    try {
+      await autoInquiryJob.start();
+      setBrief(await loadBrief());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRestartingBatch(false);
     }
   };
 
@@ -305,9 +377,11 @@ export function BriefPanel() {
           )}
         </div>
         <div className="brief-controls__actions">
-          <button type="button" className="btn btn--ghost btn--sm" onClick={handleToggleAutopilot} disabled={!brief || autopilotBusy}>
-            {autopilotBusy ? "处理中…" : brief?.autopilot ? "暂停自动推进" : "开启自动推进"}
-          </button>
+          {canManage ? (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={handleToggleAutopilot} disabled={!brief || autopilotBusy}>
+              {autopilotBusy ? "处理中…" : brief?.autopilot ? "暂停自动推进" : "开启自动推进"}
+            </button>
+          ) : null}
           <button type="button" className="btn btn--ghost btn--sm" onClick={handleRefresh} disabled={refreshing}>
             {refreshing ? "重算中…" : "刷新概览"}
           </button>
@@ -315,9 +389,10 @@ export function BriefPanel() {
       </div>
 
       {/* 阶段条并入简报头部（复用 TaskOverview：起草/确认检查点/标记阶段等交互一并保留）。 */}
-      <TaskOverview caseId={caseId} enabled={Boolean(user && caseId)} />
+      <TaskOverview caseId={caseId} enabled={Boolean(user && caseId)} canManage={canManage} />
 
       {error ? <div className="brief-error">{error}</div> : null}
+      {autoInquiryJob.error ? <div className="brief-error">{autoInquiryJob.error}</div> : null}
 
       {brief ? (
         <>
@@ -415,11 +490,23 @@ export function BriefPanel() {
             {brief.autoInquiry && brief.autoInquiry.total > 0 ? (
               <AutoInquiryProgressBlock
                 progress={brief.autoInquiry}
+                canManage={canManage}
                 cancelling={cancellingBatch}
+                restarting={restartingBatch}
                 onCancel={handleCancelBatch}
+                onRestart={handleStartBatch}
                 onOpenFindings={openFindings}
               />
-            ) : null}
+            ) : (
+              <div className="brief-empty">
+                自动研判尚未运行。
+                {canManage ? (
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={handleStartBatch} disabled={restartingBatch}>
+                    {restartingBatch ? "启动中…" : "启动自动研判"}
+                  </button>
+                ) : null}
+              </div>
+            )}
             {brief.openQuestions.length === 0 ? (
               <div className="brief-empty">暂无系统建议的待核问题。</div>
             ) : (

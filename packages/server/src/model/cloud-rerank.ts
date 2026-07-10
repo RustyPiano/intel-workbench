@@ -6,6 +6,7 @@
  * 边界：零外发授权由调用方（检索查询侧）出站前完成；rerank 不在摄入路径，无 ingest 出站。
  */
 import type { RerankerAdapter } from "./slots.js";
+import { fetchNoRedirect } from "../security/offline-guard.js";
 
 const TIMEOUT_MS = 60_000;
 
@@ -43,7 +44,7 @@ export class CloudRerankAdapter implements RerankerAdapter {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseURL}/rerank`, {
+    const res = await fetchNoRedirect(`${this.baseURL}/rerank`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model: this.model, query, documents: candidates, top_n: candidates.length, return_documents: false }),

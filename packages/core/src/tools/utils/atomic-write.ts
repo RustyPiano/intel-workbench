@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { RuntimeError } from "../../runtime/errors.js";
+
 export type AtomicWriteEncoding = BufferEncoding;
 
 /**
@@ -15,6 +17,7 @@ export async function atomicWriteFile(
   filePath: string,
   content: string | Buffer,
   encoding: AtomicWriteEncoding = "utf8",
+  signal?: AbortSignal,
 ): Promise<void> {
   const parentDir = path.dirname(filePath);
   const baseName = path.basename(filePath);
@@ -22,10 +25,16 @@ export async function atomicWriteFile(
   const tempPath = path.join(parentDir, `.${baseName}.${suffix}.tmp`);
 
   try {
+    if (signal?.aborted) {
+      throw new RuntimeError({ code: "RUN_ABORTED", message: "Write aborted before commit", retriable: true });
+    }
     if (typeof content === "string") {
       await writeFile(tempPath, content, encoding);
     } else {
       await writeFile(tempPath, content);
+    }
+    if (signal?.aborted) {
+      throw new RuntimeError({ code: "RUN_ABORTED", message: "Write aborted before commit", retriable: true });
     }
     await rename(tempPath, filePath);
   } catch (error) {

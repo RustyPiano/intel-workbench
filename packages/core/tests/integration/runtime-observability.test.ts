@@ -108,6 +108,14 @@ describe("runtime observability", () => {
 
     const result = await agent.run("Generate an intel bulletin report.");
     expect(result.finalMessage.content).toBe("Report rendered.");
+    const session = await agent.sessionStore.loadSession(result.sessionId);
+    const bashResult = session.entries.find(
+      (entry) => entry.type === "tool_result" && entry.toolCallId === "call_bash",
+    );
+    expect(bashResult).toMatchObject({
+      type: "tool_result",
+      artifacts: expect.arrayContaining([expect.objectContaining({ type: "log" })]),
+    });
 
     const runStore = new RunStore({ workspaceRoot });
     const runs = await runStore.listRuns();

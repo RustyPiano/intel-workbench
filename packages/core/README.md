@@ -8,6 +8,8 @@
 - built-in `read`, `write`, `edit`, `bash`, and `activate_skill` tools
 - skill discovery and activation
 - JSONL session persistence
+- conversation-local skill activation and resumable tool artifacts
+- per-session in-process serialization plus cross-process lock files
 - per-run trace capture under `.mini-agent/runs/<run-id>/`
 - compact/verbose timeline rendering
 - CLI one-shot and REPL modes
@@ -61,10 +63,12 @@ pnpm --filter mini-agent dev doctor
 ## Compatibility Notes
 
 - `RuntimeAgent.create(options)` is the supported construction path.
-- `RuntimeConversation.send` serializes overlapping calls on the same conversation.
+- `RuntimeConversation.send` serializes overlapping calls, acquires a cross-process session lock, reloads the latest journal under that lock, and only then starts the next turn.
+- Each conversation forks its own skill registry. Activating a skill in one session does not activate it in another; resumed sessions restore only their own activation entries.
 - Tool input schemas are `zod` schemas; `getToolJsonSchema(tool)` derives strict JSON Schema for model adapters.
-- `bash` artifact snapshots are opt-in with `track_artifacts: true`.
-- `write` and `edit` use atomic temp-file-plus-rename writes.
+- Tool artifacts stored on `tool_result` entries are replayed with the resumed tool transcript. `bash` artifact snapshots are opt-in with `track_artifacts: true`.
+- `write` and `edit` use atomic temp-file-plus-rename writes and observe cancellation before committing the rename.
+- `bash` starts a process group and closes timeout/abort with `SIGTERM`, followed by `SIGKILL` when the group does not exit. External third-party tools must still cooperate with `AbortSignal`; the runtime cannot undo side effects that already happened.
 - `RunStatus` is monotonic: `pending -> running -> finalizing -> completed | failed | cancelled`.
 - `EventBus` is bounded; use `getBufferedEvents()`.
 - Trace redaction runs before prompt/session content is stored.

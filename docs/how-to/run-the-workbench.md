@@ -9,7 +9,7 @@
 | 组件 | 端口 | 说明 |
 |---|---|---|
 | 工作台后端 | `:4319` | Express，`pnpm dev:server` |
-| 工作台前端 | Vite（默认 `:5173`） | React，`pnpm dev:web`，代理 `/api`→`:4319` |
+| 工作台前端 | Vite（默认 `:5319`） | React，`pnpm dev:web`，代理 `/api`→`:4319` |
 | 文本 LLM（问答） | 云 | DeepSeek（`api.deepseek.com`，OpenAI 兼容）→ 部署换本地 |
 | Embed / Rerank / VLM | 云 | 硅基流动（`api.siliconflow.cn/v1`）→ 部署换本地 |
 | OCR | 本地 `:8000` | PaddleOCR 服务（`../paddleocr`，独立 uv 项目） |
@@ -57,11 +57,17 @@ cd ../funasr && uv run python server.py           # → 127.0.0.1:8001（等日�
 cd <本仓库> && source dev.env.sh && pnpm dev:server     # → :4319
 
 # 终端 D — 工作台前端
-cd <本仓库> && pnpm dev:web                     # 打开它提示的 URL（通常 http://localhost:5173）
+cd <本仓库> && pnpm dev:web                     # 打开它提示的 URL（通常 http://localhost:5319）
 ```
 
 > **关键**：跑后端的终端必须先 `source dev.env.sh`，否则模型端点/key 读不到，问答与检索会降级/报错。
-> 服务就绪自检：`curl 127.0.0.1:8000/health` 和 `curl 127.0.0.1:8001/health` 都应返回 `{"status":"ok","warmed":true}`。
+> 服务就绪自检：工作台用 `curl 127.0.0.1:4319/api/health`；OCR/ASR 分别用 `curl 127.0.0.1:8000/health` 和 `curl 127.0.0.1:8001/health`。工作台 health 只公开 `ok/devMode/networkMode/modelConfigured`，不回显端点或密钥。
+
+需要固定演示账号和种子专题时，终端 C 改为：
+
+```bash
+source dev.env.sh && MINI_AGENT_DEMO=1 pnpm dev:server
+```
 
 ---
 
@@ -69,11 +75,11 @@ cd <本仓库> && pnpm dev:web                     # 打开它提示的 URL（�
 
 1. 打开前端 URL → **登录**（演示账号须用 `MINI_AGENT_DEMO=1` 启动后端，见下）。
 2. **新建专题** → 进入工作台。
-3. **汇入材料**（MaterialsPanel "汇入"）：传文档(PDF/Word/txt)、图片、音频(wav/mp3) → 看解析/OCR/转写结果。
-4. **问答**（InquiryPanel）：提问 → 流式回答 + **逐条溯源**（点引用跳回原文/音频时间码）。
-5. **要素**：抽取人物/装备/地点等结构化实体。
-6. **报告**：起草 → 复核 → 批准 → 导出。
-7. **审计**：查看哈希链审计日志、verify。
+3. **汇入材料**（MaterialsPanel "汇入"）：多选文档(PDF/Word/txt)、图片、音频(wav/mp3) → 看解析/OCR/转写结果。小文件一次 JSON 批量提交；大文件使用 defer/settle，全部落盘后才触发自动流水线。
+4. **研判简报**：素材完成后查看要素、矛盾、自动研判和报告覆盖率的实时聚合。
+5. **问答**（InquiryPanel）：提问 → 流式回答 + **逐条溯源**（点引用跳回原文/音频时间码）。
+6. **结论与报告**：复核候选 Finding → 自动起草 → 提交 → 核准 → 导出。
+7. **审计**：查看上传、模型出站、拒绝访问、复核和导出记录，并执行哈希链 verify。
 
 **演示账号**（仅 `MINI_AGENT_DEMO=1` 时种入 `config/users.json`，scrypt 加盐哈希）：
 
@@ -95,7 +101,7 @@ cd <本仓库> && pnpm dev:web                     # 打开它提示的 URL（�
 source dev.env.sh   # 可选；测试是 hermetic 的
 pnpm check          # typecheck + 全量 vitest（不连任何真模型）
 ```
-- 结果应为 **N passed / 2 skipped**。那 2 个 skip 是环境性假失败（`api.test.ts` 需 TCP、`bash.test.ts` 偶发），正常。
+- 2026-07-10 基线为 **927 passed / 3 skipped**。3 个跳过均需显式外部模型条件：两个 DashScope 在线 smoke，以及一个 LLM-dependent benchmark 指标用例；不是 `api.test.ts` 或 `bash.test.ts` 假失败。
 
 **不起某个模型服务也能跑**（降级而非崩溃）：
 - 不起 PaddleOCR → 扫描件/图片 OCR 这一路降级；
@@ -123,9 +129,11 @@ pnpm check          # typecheck + 全量 vitest（不连任何真模型）
 | OCR / 语音上传后无结果、材料停在 pending | 对应本地服务没起（`curl :8000/health` / `:8001/health` 自检） |
 | 问答报错 / 答非所问 | 跑后端的终端没 `source dev.env.sh`，或 DeepSeek key 未填 |
 | 向量检索没生效（只像关键词匹配） | Embed key 未填（退化 BM25），或 `.vec` 是旧 mock 索引（重新汇入材料即重建） |
-| 端口被占（8000/8001/4319/5173） | 已有同名进程在跑，先停掉旧的 |
+| 端口被占（8000/8001/4319/5319） | 已有同名进程在跑，先停掉旧的；也可用 `PORT` / `WEB_PORT` / `SERVER_PORT` 改端口 |
+| 顶栏显示“受控外联” | 当前白名单中包含非 loopback 模型端点；这是开发替身状态，不等于气隙运行 |
+| 简报概览显示降级 | 模型未配置、调用失败或结构化 JSON 不可解析；实时统计、覆盖率和批处理状态仍应可见 |
 | 首次起 FunASR 卡很久 | 在拉 ~2GB 模型（看日志下载进度），等一次即可，之后缓存秒起 |
 
 ---
 
-更深的架构与红线见根 **[AGENTS.md](../../AGENTS.md)** 与 **[expert-review-brief.md](../expert-review-brief.md)**；历史架构图解见 **[archive/architecture-explained.html](../archive/architecture-explained.html)**（旧技术轨，仅参考）。
+更深的架构与红线见根 **[AGENTS.md](../../AGENTS.md)** 与 **[项目宣称与诚实边界](../claims-and-limitations.md)**；当前答辩材料见 **[delivery/](../delivery/README.md)**，历史架构图解见 **[archive/architecture-explained.html](../archive/architecture-explained.html)**（旧技术轨，仅参考）。

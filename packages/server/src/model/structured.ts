@@ -28,8 +28,13 @@ function defaultMaxTokens(): number {
   return Number.isInteger(raw) && raw > 0 ? raw : 1500;
 }
 
+export interface ParseJsonOutputOptions {
+  /** 是否允许截掉未完成尾部并返回部分对象；覆盖率敏感的抽取任务必须关闭。 */
+  allowPartial?: boolean;
+}
+
 /** 从模型输出中稳健地抽出 JSON（容忍 ```json 围栏 / 前后缀文字）。 */
-export function parseJsonOutput(content: string): Record<string, unknown> {
+export function parseJsonOutput(content: string, options: ParseJsonOutputOptions = {}): Record<string, unknown> {
   let text = content.trim();
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) text = fence[1].trim();
@@ -40,7 +45,7 @@ export function parseJsonOutput(content: string): Record<string, unknown> {
   try {
     return JSON.parse(slice) as Record<string, unknown>;
   } catch (e) {
-    const repaired = repairJson(slice);
+    const repaired = repairJson(slice, options.allowPartial !== false);
     if (repaired) return repaired;
     throw e;
   }
@@ -51,9 +56,12 @@ export function parseJsonOutput(content: string): Record<string, unknown> {
  * ① 补数组/对象元素间缺失的逗号（`}` 或 `]` 后紧跟 `{`/`[`/`"`）；② 仍失败则截取
  * 到最后一个可平衡闭合的前缀（丢尾部残元素，换部分结果而非整批失败）。修不回返回 null。
  */
-function repairJson(slice: string): Record<string, unknown> | null {
+function repairJson(slice: string, allowPartial: boolean): Record<string, unknown> | null {
   const withCommas = slice.replace(/([}\]"])(\s*)([{["])/g, "$1,$2$3");
-  for (const candidate of [withCommas, balancedPrefix(slice), balancedPrefix(withCommas)]) {
+  const candidates = allowPartial
+    ? [withCommas, balancedPrefix(slice), balancedPrefix(withCommas)]
+    : [withCommas];
+  for (const candidate of candidates) {
     if (!candidate) continue;
     try {
       return JSON.parse(candidate) as Record<string, unknown>;
@@ -98,6 +106,8 @@ export interface GenerateJsonOptions {
   /** 思考模式分流：批量抽取置 "disabled"（求速度/规模），难判定置 "enabled"（求质量）。 */
   thinking?: "enabled" | "disabled";
   signal?: AbortSignal;
+  /** 覆盖率敏感任务关闭尾部截断修复，避免把部分 JSON 当作完整批次。 */
+  allowPartialJsonRepair?: boolean;
 }
 
 /** 调一次结构化生成并解析为 JSON 对象；超时则中止。 */
@@ -122,7 +132,7 @@ export async function generateJson(
       thinking: options.thinking ? { type: options.thinking } : undefined,
       signal: controller.signal,
     });
-    return parseJsonOutput(result.message.content);
+    return parseJsonOutput(result.message.content, { allowPartial: options.allowPartialJsonRepair !== false });
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", abortFromExternal);

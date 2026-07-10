@@ -5,6 +5,7 @@
  * 边界：零外发授权（OfflineGuard.authorize）由调用方在出站前完成（检索/摄入），不写进适配器内部。
  */
 import type { EmbeddingAdapter } from "./slots.js";
+import { fetchNoRedirect } from "../security/offline-guard.js";
 
 const MAX_BATCH = 32; // 单请求最多 32 条，超出自动分批（规避各家 input 上限），按序拼接。
 const TIMEOUT_MS = 60_000;
@@ -67,7 +68,7 @@ export class CloudEmbedAdapter implements EmbeddingAdapter {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
-    const res = await fetch(`${this.baseURL}/embeddings`, {
+    const res = await fetchNoRedirect(`${this.baseURL}/embeddings`, {
       method: "POST",
       headers,
       // encoding_format:"float" 显式钉死：部分 OpenAI 兼容端默认/可返回 base64 编码向量，会悄悄破坏 float 数组映射。

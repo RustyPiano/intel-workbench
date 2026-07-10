@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { RuntimeAgent } from "../../src/runtime/agent.js";
 import { formatToolMessageContent } from "../../src/runtime/loop.js";
@@ -128,9 +128,28 @@ describe("RuntimeAgent.create (static factory)", () => {
 
     // Resuming the same id reuses the existing session rather than forking.
     const resumed = await agent.createConversation("my-named-session", { createIfMissing: true });
+    expect(resumed).toBe(conversation);
     expect(resumed.sessionId).toBe("my-named-session");
     const afterResume = await agent.sessionStore.listSessions();
     expect(afterResume.filter((session) => session.sessionId === "my-named-session")).toHaveLength(1);
+  });
+
+  test("coalesces concurrent opens of the same named session", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+    });
+
+    const [first, second] = await Promise.all([
+      agent.createConversation("shared-session", { createIfMissing: true }),
+      agent.createConversation("shared-session", { createIfMissing: true }),
+    ]);
+
+    expect(first).toBe(second);
+    expect((await agent.sessionStore.listSessions()).filter((session) => session.sessionId === "shared-session")).toHaveLength(1);
   });
 
   test("discovers explicit skills and omits disabled names from activation", async () => {
@@ -170,6 +189,52 @@ describe("RuntimeAgent.create (static factory)", () => {
       config: disabledAgent.toolConfig,
     });
     expect(result.ok).toBe(false);
+  });
+
+  test("keeps skill activation isolated and persisted per conversation", async () => {
+    const workspaceRoot = await createWorkspace();
+    const skillRoot = await createWorkspace();
+    await writeSkill(skillRoot, "foo");
+    const systemPrompts: string[] = [];
+    let callCount = 0;
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      baseTools: [activateSkillTool],
+      explicitSkillDirs: [skillRoot],
+      modelAdapter: {
+        name: "mock",
+        async generate(input) {
+          systemPrompts.push(input.systemPrompt);
+          callCount += 1;
+          if (callCount === 1 || callCount === 3) {
+            return {
+              message: {
+                role: "assistant",
+                content: "",
+                toolCalls: [{ id: `call_${callCount}`, name: "activate_skill", arguments: { name: "foo" } }],
+              },
+              stopReason: "tool_use",
+            };
+          }
+          return { message: { role: "assistant", content: "done" }, stopReason: "end_turn" };
+        },
+      },
+    });
+
+    const first = await agent.createConversation();
+    await first.send("first");
+    const second = await agent.createConversation();
+    await second.send("second");
+
+    expect(systemPrompts[1]).toContain("# foo");
+    expect(systemPrompts[2]).not.toContain("# foo");
+    expect(systemPrompts[3]).toContain("# foo");
+    for (const sessionId of [first.sessionId, second.sessionId]) {
+      const loaded = await agent.sessionStore.loadSession(sessionId);
+      expect(loaded.entries.filter((entry) => entry.type === "skill_activation")).toHaveLength(1);
+    }
   });
 });
 
@@ -221,20 +286,78 @@ describe("RuntimeConversation.send concurrency", () => {
     ]);
   });
 
+  test("serializes independent agents and refreshes session history under the file lock", async () => {
+    const workspaceRoot = await createWorkspace();
+    let markFirstEntered!: () => void;
+    let releaseFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondEntered = false;
+    let secondMessages: RuntimeMessage[] = [];
+    const firstAgent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "first",
+      baseTools: [],
+      modelAdapter: {
+        name: "first",
+        async generate() {
+          markFirstEntered();
+          await firstGate;
+          return { message: { role: "assistant", content: "reply A" }, stopReason: "end_turn" };
+        },
+      },
+    });
+    const secondAgent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "second",
+      baseTools: [],
+      modelAdapter: {
+        name: "second",
+        async generate(input) {
+          secondEntered = true;
+          secondMessages = input.messages;
+          return { message: { role: "assistant", content: "reply B" }, stopReason: "end_turn" };
+        },
+      },
+    });
+    const first = await firstAgent.createConversation("cross-process", { createIfMissing: true });
+    const second = await secondAgent.createConversation("cross-process");
+
+    const firstRun = first.send("A");
+    await firstEntered;
+    const secondRun = second.send("B");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondEntered).toBe(false);
+    releaseFirst();
+    await Promise.all([firstRun, secondRun]);
+
+    expect(secondMessages.filter((message) => message.role === "user").map((message) => message.content)).toEqual(["A", "B"]);
+    expect(secondMessages.some((message) => message.role === "assistant" && message.content === "reply A")).toBe(true);
+    expect((await secondAgent.sessionStore.loadSession("cross-process")).status).toBe("valid");
+  });
+
   test("a failed send does not poison the queue", async () => {
     const workspaceRoot = await createWorkspace();
     let callCount = 0;
+    let retryMessages: RuntimeMessage[] = [];
     const agent = await RuntimeAgent.create({
       workspaceRoot,
       runtimeVersion: "1.0.0",
       modelName: "mock",
       modelAdapter: {
         name: "mock",
-        async generate() {
+        async generate(input) {
           callCount += 1;
           if (callCount === 1) {
             throw new Error("first send failed");
           }
+          retryMessages = input.messages;
           return {
             message: { role: "assistant", content: "recovered" },
             stopReason: "end_turn",
@@ -250,6 +373,49 @@ describe("RuntimeConversation.send concurrency", () => {
     await expect(first).rejects.toThrow("first send failed");
     const secondResult = await second;
     expect(secondResult.finalMessage.content).toBe("recovered");
+    expect(retryMessages.filter((message) => message.role === "user").map((message) => message.content)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  test("marks a run failed when the first session journal append fails", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      modelAdapter: quietModel(1),
+    });
+    const conversation = await agent.createConversation();
+    vi.spyOn(agent.sessionStore, "appendEntry").mockRejectedValueOnce(new Error("disk write failed"));
+
+    await expect(conversation.send("will fail")).rejects.toThrow("disk write failed");
+
+    const [run] = await agent.runStore.listRuns();
+    expect(run?.status).toBe("failed");
+    const trace = await agent.runStore.loadTrace(run!.run_id);
+    expect(trace.events.at(-1)?.type).toBe("run_failed");
+  });
+
+  test("rejects a truncated final model response instead of completing it", async () => {
+    const workspaceRoot = await createWorkspace();
+    const agent = await RuntimeAgent.create({
+      workspaceRoot,
+      runtimeVersion: "1.0.0",
+      modelName: "mock",
+      baseTools: [],
+      modelAdapter: new ScriptedModelAdapter([
+        {
+          message: { role: "assistant", content: "partial" },
+          stopReason: "max_tokens",
+        },
+      ]),
+    });
+
+    await expect(agent.run("truncate")).rejects.toMatchObject({ code: "MODEL_ERROR" });
+    const [run] = await agent.runStore.listRuns();
+    expect(run?.status).toBe("failed");
   });
 });
 
@@ -314,6 +480,13 @@ describe("resume repairs interrupted tool calls", () => {
     const synthetic = sent.find((message) => message.role === "tool" && message.toolCallId === "call_x");
     expect(synthetic).toBeDefined();
     expect(synthetic!.content).toContain("interrupted");
+    const persisted = await agent.sessionStore.loadSession(session.sessionId);
+    expect(persisted.status).toBe("valid");
+    expect(
+      persisted.entries.some(
+        (entry) => entry.type === "tool_result" && entry.toolCallId === "call_x" && entry.error?.code === "RUN_ABORTED",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -332,12 +505,14 @@ describe("formatToolMessageContent (live <-> replay parity)", () => {
           ? (result.meta as Record<string, unknown>)
           : undefined,
       error: result.error,
+      artifacts: result.artifacts,
     };
     const reconstructed: ToolExecutionResult = {
       ok: entry.ok,
       content: entry.content,
       meta: entry.meta ?? entry.data,
       error: entry.error,
+      artifacts: entry.artifacts,
     };
     return formatToolMessageContent(reconstructed);
   }
@@ -362,6 +537,16 @@ describe("formatToolMessageContent (live <-> replay parity)", () => {
 
     const live = formatToolMessageContent(result);
     expect(live).toBe(replayContent(result));
+  });
+
+  test("produces byte-identical output when artifacts are present", () => {
+    const result: ToolExecutionResult = {
+      ok: true,
+      content: "created",
+      artifacts: [{ type: "file", path: "report.txt" }],
+    };
+
+    expect(formatToolMessageContent(result)).toBe(replayContent(result));
   });
 
   test("omits undefined optional fields (legacy session compatibility)", () => {

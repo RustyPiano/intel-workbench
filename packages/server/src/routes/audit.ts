@@ -2,7 +2,7 @@ import { Router } from "express";
 
 import type { AuditService } from "../audit/audit-service.js";
 import { AppError } from "../domain/identity.js";
-import type { Identity } from "../domain/types.js";
+import { clearanceRank, type Identity } from "../domain/types.js";
 
 /**
  * 审计 REST 路由（工程方案 §5 / §7.2）：列表、verify、导出留存（`/export`）均已做实。
@@ -35,5 +35,8 @@ export function createAuditRouter(audit: AuditService): Router {
 function assertAuditor(actor: Identity): void {
   if (actor.role !== "security" && actor.role !== "admin") {
     throw new AppError(403, "仅保密员或管理员可查看审计");
+  }
+  if (clearanceRank(actor.clearance) < clearanceRank("topsecret")) {
+    throw new AppError(403, "全局审计包含各密级事件，仅绝密权限可查看");
   }
 }

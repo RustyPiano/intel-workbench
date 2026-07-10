@@ -5,6 +5,7 @@
  * 边界：零外发授权由调用方（摄入 process() 的 media-ingest）出站前完成，不写进适配器内部。
  */
 import type { VlmAdapter, VlmOptions } from "./slots.js";
+import { fetchNoRedirect } from "../security/offline-guard.js";
 
 const TIMEOUT_MS = 120_000; // 32B VLM 较慢，给足
 const MAX_TOKENS = 512;
@@ -64,7 +65,7 @@ export class CloudVlmAdapter implements VlmAdapter {
       ...frames.map((f) => ({ type: "image_url", image_url: { url: dataUrl(f) } })),
     ];
 
-    const res = await fetch(`${this.baseURL}/chat/completions`, {
+    const res = await fetchNoRedirect(`${this.baseURL}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model: this.model, messages: [{ role: "user", content }], max_tokens: MAX_TOKENS, temperature: 0 }),

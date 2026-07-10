@@ -6,7 +6,7 @@ import { createDefaultToolRegistry, ToolRegistry } from "../tools/index.js";
 import { FileMutationQueue } from "../tools/file-mutation-queue.js";
 import type { RuntimeTool, ToolExecutionResult, ToolRuntimeConfig } from "../tools/types.js";
 import { createConsoleLogger, type Logger } from "../utils/logger.js";
-import { RuntimeError } from "./errors.js";
+import { isRuntimeError, RuntimeError, toRuntimeErrorShape } from "./errors.js";
 import { EventBus } from "./events.js";
 import { formatToolMessageContent, runAgentLoop, type ToolMiddleware } from "./loop.js";
 import { createPolicyEngine, type PolicyEngine } from "./policy.js";
@@ -14,7 +14,7 @@ import { buildActiveSkillsBlock, buildBaseSystemPrompt } from "./prompt.js";
 import { RunManager } from "./run-manager.js";
 import { RunStore } from "./run-store.js";
 import { SessionStore } from "./session.js";
-import type { AssistantMessage, RuntimeMessage, SessionEntry } from "./types.js";
+import type { AssistantMessage, RuntimeMessage, SessionEntry, ToolResultEntry } from "./types.js";
 
 export interface RuntimeAgentOptions {
   workspaceRoot: string;
@@ -53,6 +53,14 @@ export interface RunOverrides {
   thinking?: { type: "enabled" | "disabled" };
 }
 
+function interruptedToolResult(): ToolExecutionResult {
+  return {
+    ok: false,
+    content: "Tool result was not recorded before the session ended; the previous run was interrupted.",
+    error: { code: "RUN_ABORTED", message: "Tool result missing from an interrupted run." },
+  };
+}
+
 export class RuntimeConversation {
   private messages: RuntimeMessage[];
   // Serialize concurrent send() invocations so the shared `messages` array
@@ -71,6 +79,7 @@ export class RuntimeConversation {
     readonly sessionPath: string,
     messages: RuntimeMessage[] = [],
     private resumedFromStore = false,
+    private skillRegistry = agent.skillRegistry.fork(),
   ) {
     this.messages = messages;
   }
@@ -80,7 +89,18 @@ export class RuntimeConversation {
     signal: AbortSignal = new AbortController().signal,
     overrides?: RunOverrides,
   ): Promise<RuntimeRunResult> {
-    const next = this.sendQueue.then(() => this.sendInternal(prompt, signal, overrides));
+    const next = this.sendQueue.then(() =>
+      this.agent.sessionStore.withSessionLock(
+        this.sessionId,
+        async () => {
+          const state = await this.agent.loadConversationState(this.sessionId);
+          this.messages = state.messages;
+          this.skillRegistry = state.skillRegistry;
+          return this.sendInternal(prompt, signal, overrides);
+        },
+        signal,
+      ),
+    );
     this.sendQueue = next.catch(() => {});
     return next;
   }
@@ -111,35 +131,55 @@ export class RuntimeConversation {
       resumedFromSession: this.resumedFromStore,
     });
 
-    const loopResult = await runAgentLoop(prompt, this.sessionId, {
-      modelAdapter: overrides?.modelAdapter ?? this.agent.modelAdapter,
-      toolRegistry,
-      toolMiddleware: overrides?.toolMiddleware,
-      onModelStreamEvent: overrides?.onModelStreamEvent,
-      thinking: overrides?.thinking,
-      sessionStore: this.agent.sessionStore,
-      signal,
-      maxTurns: this.agent.maxTurns,
-      maxOutputTokens: this.agent.maxOutputTokens,
-      runManager,
-      createBaseSystemPrompt: () => this.getBaseSystemPrompt(),
-      createActiveSkillsBlock: () => buildActiveSkillsBlock(this.agent.skillRegistry.getActiveRecords()),
-      getActiveSkillNames: () => this.agent.skillRegistry.getActiveRecords().map((skill) => skill.meta.name),
-      createToolContext: (toolCall) => ({
-        workspaceRoot: this.agent.workspaceRoot,
-        sessionId: this.sessionId,
-        runId: runManager.runId,
-        toolCallId: toolCall.id,
+    let loopResult;
+    try {
+      loopResult = await runAgentLoop(prompt, this.sessionId, {
+        modelAdapter: overrides?.modelAdapter ?? this.agent.modelAdapter,
+        toolRegistry,
+        toolMiddleware: overrides?.toolMiddleware,
+        onModelStreamEvent: overrides?.onModelStreamEvent,
+        thinking: overrides?.thinking,
+        sessionStore: this.agent.sessionStore,
         signal,
-        logger: this.agent.logger,
-        skillRegistry: this.agent.skillRegistry,
-        policy: this.agent.policy,
-        fileMutationQueue: this.agent.fileMutationQueue,
-        config: this.agent.toolConfig,
-        onUpdate: (partial) =>
-          void runManager.recordToolProgress(toolCall, partial),
-      }),
-    }, this.messages);
+        maxTurns: this.agent.maxTurns,
+        maxOutputTokens: this.agent.maxOutputTokens,
+        runManager,
+        createBaseSystemPrompt: () => this.getBaseSystemPrompt(),
+        createActiveSkillsBlock: () => buildActiveSkillsBlock(this.skillRegistry.getActiveRecords()),
+        getActiveSkillNames: () => this.skillRegistry.getActiveRecords().map((skill) => skill.meta.name),
+        createToolContext: (toolCall) => ({
+          workspaceRoot: this.agent.workspaceRoot,
+          sessionId: this.sessionId,
+          runId: runManager.runId,
+          toolCallId: toolCall.id,
+          signal,
+          logger: this.agent.logger,
+          skillRegistry: this.skillRegistry,
+          policy: this.agent.policy,
+          fileMutationQueue: this.agent.fileMutationQueue,
+          config: this.agent.toolConfig,
+          onUpdate: (partial) => {
+            void runManager.recordToolProgress(toolCall, partial).catch((error: unknown) => {
+              this.agent.logger.warn("Failed to persist tool progress", {
+                runId: runManager.runId,
+                toolCallId: toolCall.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          },
+        }),
+      }, this.messages);
+    } catch (error) {
+      // runAgentLoop normally finalizes its own failures. This outer guard covers
+      // failures before its try/catch starts (for example the first session append).
+      const runtimeError = signal.aborted
+        ? new RuntimeError({ code: "RUN_ABORTED", message: "Run aborted by signal", retriable: true }).toJSON()
+        : toRuntimeErrorShape(error, isRuntimeError(error) ? error.code : "INTERNAL_ERROR");
+      await (runtimeError.code === "RUN_ABORTED" ? runManager.cancel(runtimeError) : runManager.fail(runtimeError)).catch(
+        () => {},
+      );
+      throw error;
+    }
 
     this.messages = loopResult.messages;
     this.resumedFromStore = false;
@@ -170,6 +210,8 @@ export class RuntimeAgent {
   readonly fileMutationQueue = new FileMutationQueue();
   readonly skillRegistry: SkillRegistry;
   readonly policy: PolicyEngine;
+  private readonly conversations = new Map<string, RuntimeConversation>();
+  private readonly conversationLoads = new Map<string, Promise<RuntimeConversation>>();
 
   private constructor(
     options: RuntimeAgentOptions,
@@ -232,27 +274,39 @@ export class RuntimeAgent {
     options: { createIfMissing?: boolean } = {},
   ): Promise<RuntimeConversation> {
     if (sessionId) {
-      const knownSessionIds = new Set((await this.sessionStore.listSessions()).map((session) => session.sessionId));
-      if (knownSessionIds.has(sessionId)) {
-        return this.loadConversation(sessionId);
-      }
+      const cached = this.conversations.get(sessionId);
+      if (cached) return cached;
 
-      // Default: resuming an unknown id is an error (a typo should not silently
-      // fork a new history). The CLI opts into create-or-resume so a user can
-      // name a fresh session with `--session <id>`.
-      if (!options.createIfMissing) {
-        throw new RuntimeError({
-          code: "SESSION_NOT_FOUND",
-          message: `Session not found: ${sessionId}`,
-        });
+      const pending = this.conversationLoads.get(sessionId) ?? this.createOrLoadConversation(sessionId, options);
+      this.conversationLoads.set(sessionId, pending);
+      try {
+        const conversation = await pending;
+        this.conversations.set(sessionId, conversation);
+        return conversation;
+      } finally {
+        if (this.conversationLoads.get(sessionId) === pending) this.conversationLoads.delete(sessionId);
       }
-
-      const created = await this.sessionStore.createSession(sessionId);
-      return new RuntimeConversation(this, created.sessionId, created.path, []);
     }
 
     const session = await this.sessionStore.createSession();
     return new RuntimeConversation(this, session.sessionId, session.path, []);
+  }
+
+  private async createOrLoadConversation(
+    sessionId: string,
+    options: { createIfMissing?: boolean },
+  ): Promise<RuntimeConversation> {
+    return this.sessionStore.withSessionLock(sessionId, async () => {
+      const knownSessionIds = new Set((await this.sessionStore.listSessions()).map((session) => session.sessionId));
+      if (knownSessionIds.has(sessionId)) return this.loadConversation(sessionId);
+
+      if (!options.createIfMissing) {
+        throw new RuntimeError({ code: "SESSION_NOT_FOUND", message: `Session not found: ${sessionId}` });
+      }
+
+      const created = await this.sessionStore.createSession(sessionId);
+      return new RuntimeConversation(this, created.sessionId, created.path, []);
+    });
   }
 
   private async loadConversation(sessionId: string): Promise<RuntimeConversation> {
@@ -264,6 +318,15 @@ export class RuntimeAgent {
       });
     }
 
+    const state = await this.loadConversationState(sessionId);
+    return new RuntimeConversation(this, sessionId, state.path, state.messages, true, state.skillRegistry);
+  }
+
+  async loadConversationState(sessionId: string): Promise<{
+    path: string;
+    messages: RuntimeMessage[];
+    skillRegistry: SkillRegistry;
+  }> {
     const loaded = await this.sessionStore.loadSession(sessionId, { mode: "strict" });
     if (loaded.status === "corrupted") {
       throw new RuntimeError({
@@ -271,12 +334,58 @@ export class RuntimeAgent {
         message: `Session ${sessionId} is corrupted and cannot be resumed in strict mode`,
       });
     }
-    await this.restoreActivatedSkills(loaded.entries);
+    await this.persistDanglingToolCallRepairs(sessionId, loaded.entries);
+    const skillRegistry = this.skillRegistry.fork();
+    await this.restoreActivatedSkills(loaded.entries, skillRegistry);
     const messages = this.replayMessages(loaded.entries);
-    return new RuntimeConversation(this, sessionId, loaded.path, messages, true);
+    return { path: loaded.path, messages, skillRegistry };
   }
 
-  private async restoreActivatedSkills(entries: SessionEntry[]): Promise<void> {
+  private async persistDanglingToolCallRepairs(sessionId: string, entries: SessionEntry[]): Promise<void> {
+    const declared = new Map<string, { toolCall: NonNullable<AssistantMessage["toolCalls"]>[number]; runId?: string }>();
+    const recordedCalls = new Set<string>();
+    const recordedResults = new Set<string>();
+    for (const entry of entries) {
+      if (entry.type === "message" && entry.role === "assistant") {
+        for (const toolCall of entry.toolCalls ?? []) declared.set(toolCall.id, { toolCall, runId: entry.runId });
+      } else if (entry.type === "tool_call") {
+        recordedCalls.add(entry.toolCallId);
+      } else if (entry.type === "tool_result") {
+        recordedResults.add(entry.toolCallId);
+      }
+    }
+
+    for (const [toolCallId, { toolCall, runId }] of declared) {
+      if (recordedResults.has(toolCallId)) continue;
+      const timestamp = new Date().toISOString();
+      if (!recordedCalls.has(toolCallId)) {
+        const callEntry = {
+          type: "tool_call" as const,
+          toolCallId,
+          toolName: toolCall.name,
+          args: toolCall.arguments,
+          timestamp,
+          runId,
+        };
+        await this.sessionStore.appendEntry(sessionId, callEntry);
+        entries.push(callEntry);
+      }
+      const result = interruptedToolResult();
+      const resultEntry: ToolResultEntry = {
+        type: "tool_result",
+        toolCallId,
+        ok: result.ok,
+        content: result.content,
+        timestamp,
+        runId,
+        error: result.error,
+      };
+      await this.sessionStore.appendEntry(sessionId, resultEntry);
+      entries.push(resultEntry);
+    }
+  }
+
+  private async restoreActivatedSkills(entries: SessionEntry[], skillRegistry: SkillRegistry): Promise<void> {
     const activatedSkills = new Set(
       entries
         .filter((entry): entry is Extract<SessionEntry, { type: "skill_activation" }> => entry.type === "skill_activation")
@@ -284,7 +393,7 @@ export class RuntimeAgent {
     );
 
     for (const skill of activatedSkills) {
-      await this.skillRegistry.activate(skill);
+      await skillRegistry.activate(skill);
     }
   }
 
@@ -309,6 +418,7 @@ export class RuntimeAgent {
           content: entry.content,
           meta: entry.meta ?? entry.data,
           error: entry.error,
+          artifacts: entry.artifacts,
         };
         return [
           {
@@ -365,13 +475,10 @@ export class RuntimeAgent {
         if (answered.has(toolCall.id)) {
           continue;
         }
+        const result = interruptedToolResult();
         repaired.push({
           role: "tool",
-          content: formatToolMessageContent({
-            ok: false,
-            content: "Tool result was not recorded before the session ended; the previous run was interrupted.",
-            error: { code: "RUN_ABORTED", message: "Tool result missing from an interrupted run." },
-          }),
+          content: formatToolMessageContent(result),
           messageId: `tool_${toolCall.id}_synthetic`,
           toolCallId: toolCall.id,
           toolName: toolCall.name,

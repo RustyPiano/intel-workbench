@@ -47,6 +47,9 @@ export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
       const parentDir = path.dirname(filePath);
 
       return await queue.runExclusive(filePath, async () => {
+        if (ctx.signal.aborted) {
+          throw new RuntimeError({ code: "RUN_ABORTED", message: "Write aborted before commit", retriable: true });
+        }
         if (args.create_dirs) {
           await mkdir(parentDir, { recursive: true });
         }
@@ -65,7 +68,10 @@ export const writeTool: RuntimeTool<WriteArgs, WriteData> = {
           });
         }
 
-        await atomicWriteFile(filePath, args.content, "utf8");
+        if (ctx.signal.aborted) {
+          throw new RuntimeError({ code: "RUN_ABORTED", message: "Write aborted before commit", retriable: true });
+        }
+        await atomicWriteFile(filePath, args.content, "utf8", ctx.signal);
 
         return {
           ok: true,

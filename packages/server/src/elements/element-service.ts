@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { DEFAULT_PROMPT_BODIES, type PromptStore } from "../admin/prompt-store.js";
@@ -13,6 +13,7 @@ import { resolveValidCitations } from "../inquiry/citation.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { shortId } from "../util/hash.js";
+import { writeFileAtomic } from "../util/atomic.js";
 
 /**
  * 要素抽取（产品 spec §5.2 / §8.6，一期"最小可用"）。复用溯源红线管线：
@@ -102,6 +103,7 @@ export class ElementService {
       const elements = mergeElements(results.map((result) => result.elements));
       const chunksCovered = results.reduce((sum, result) => sum + result.chunksCovered, 0);
       const failedBatches = results.filter((result) => result.failed).length;
+      if (failedBatches === batches.length) throw new Error("要素抽取全部批次失败");
 
       await this.persist(caseId, elements);
       await this.audit.append({
@@ -173,6 +175,7 @@ export class ElementService {
       timeoutMs: 120_000,
       thinking: "disabled",
       signal,
+      allowPartialJsonRepair: false,
     });
   }
 
@@ -183,6 +186,6 @@ export class ElementService {
   private async persist(caseId: string, elements: Element[]): Promise<void> {
     const file = this.elementsFile(caseId);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify(elements, null, 2)}\n`, "utf8");
+    await writeFileAtomic(file, `${JSON.stringify(elements, null, 2)}\n`);
   }
 }

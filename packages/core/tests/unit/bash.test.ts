@@ -215,6 +215,18 @@ describe("bashTool", () => {
     });
   });
 
+  test.skipIf(process.platform === "win32")("force-kills a process group that ignores SIGTERM", async () => {
+    const workspaceRoot = await createWorkspace();
+    const result = await bashTool.execute(
+      { command: 'echo $$ > stubborn.pid; trap "" TERM; while true; do sleep 1; done' },
+      createContext(workspaceRoot, "call_bash_force_kill", { bashTimeoutMs: 25 }),
+    );
+    const pid = Number(await readFile(path.join(workspaceRoot, "stubborn.pid"), "utf8"));
+
+    expect(result.error).toMatchObject({ code: "TOOL_TIMEOUT" });
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
   test("returns RUN_ABORTED when the runtime signal aborts the command", async () => {
     const workspaceRoot = await createWorkspace();
     const controller = new AbortController();

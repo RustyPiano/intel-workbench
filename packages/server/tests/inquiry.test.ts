@@ -16,6 +16,7 @@ import type { ModelSlots } from "../src/model/slots.js";
 import { OfflineGuard } from "../src/security/offline-guard.js";
 
 const OPERATOR: Identity = { id: "op", name: "op", role: "operator", clearance: "internal" };
+const PEER: Identity = { id: "peer", name: "peer", role: "operator", clearance: "internal" };
 const ENDPOINT = "https://stub.local/v1";
 
 /** 固定返回给定 JSON 的桩模型（不触网）。 */
@@ -126,6 +127,15 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
 
     expect(await svc.list(OPERATOR, caseId)).toEqual([]);
     expect((await audit.readAll()).some((event) => event.action === "inquiry.clear")).toBe(true);
+  });
+
+  it("非专题 owner/admin 不得清空问答记录", async () => {
+    const svc = service(stubAdapter(JSON.stringify({ claims: [{ text: "x", type: "fact", citations: [chunkId] }] })));
+    await svc.ask(OPERATOR, caseId, "问题一");
+
+    await expect(svc.clear(PEER, caseId)).rejects.toMatchObject({ status: 403 });
+    await expect(svc.list(OPERATOR, caseId)).resolves.toHaveLength(1);
+    expect((await audit.readAll()).some((event) => event.action === "inquiry.clear" && event.result === "deny")).toBe(true);
   });
 
   describe("token 预算路由（二期 §5.1）", () => {

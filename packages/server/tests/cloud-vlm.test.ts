@@ -47,6 +47,7 @@ describe("CloudVlmAdapter.caption（mock fetch）", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://api.siliconflow.cn/v1/chat/completions");
     const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(init.redirect).toBe("error");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer k");
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe("Qwen/Qwen3-VL-32B-Instruct");

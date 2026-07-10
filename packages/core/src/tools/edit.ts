@@ -91,7 +91,10 @@ export const editTool: RuntimeTool<EditArgs, EditData> = {
         }
 
         output = normalizeTextForEditing(output);
-        await atomicWriteFile(filePath, output, "utf8");
+        if (ctx.signal.aborted) {
+          throw new RuntimeError({ code: "RUN_ABORTED", message: "Edit aborted before commit", retriable: true });
+        }
+        await atomicWriteFile(filePath, output, "utf8", ctx.signal);
 
         return {
           ok: true,

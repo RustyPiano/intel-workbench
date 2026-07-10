@@ -75,6 +75,38 @@ describe("writeTool", () => {
     expect(leftovers).toEqual([]);
   });
 
+  test("does not commit a queued write after its signal is aborted", async () => {
+    const workspaceRoot = await createWorkspace();
+    const controller = new AbortController();
+    const context = { ...createContext(workspaceRoot), signal: controller.signal };
+    const filePath = path.join(workspaceRoot, "late.txt");
+    let release!: () => void;
+    let markStarted!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocker = context.fileMutationQueue!.runExclusive(filePath, async () => {
+      markStarted();
+      await gate;
+    });
+    await started;
+    const pending = writeTool.execute(
+      { path: "late.txt", content: "must not land", overwrite: true },
+      context,
+    );
+
+    controller.abort();
+    release();
+    await blocker;
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: false, error: { code: "RUN_ABORTED" } });
+    await expect(access(filePath)).rejects.toThrow();
+  });
+
   test("rejects unknown arguments via the strict tool schema", async () => {
     const workspaceRoot = await createWorkspace();
     const registry = new ToolRegistry([writeTool]);

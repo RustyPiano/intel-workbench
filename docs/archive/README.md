@@ -16,6 +16,10 @@
 | [`architecture-explained.html`](./architecture-explained.html) | 2026-06-22 快照，P3.D 老技术轨 | 同上架构图解的讲解版页面，同批同因归档。 |
 | [`答辩汇报底册-2026-07-03.md`](./答辩汇报底册-2026-07-03.md) | 2026-07-03 快照 | 当天的答辩提词稿 + 技术底册，逐行核对当日源码得出的结论（含具体文件:行号、待复现的 benchmark 数字），随代码演进已可能失真，仅作历史参考。 |
 | [`答辩-代码讲解脚本-2026-07-03.md`](./答辩-代码讲解脚本-2026-07-03.md) | 2026-07-03 快照 | 同上答辩物料的代码讲解脚本，同批同因归档。 |
+| [`expert-review-brief-2026-07-02.md`](./expert-review-brief-2026-07-02.md) | 2026-07-02 评审输入 | “功能铺开、简报缺失、主线不清”等诊断推动了后续改造，但已不再描述当前产品状态。现行宣称边界已独立为 `docs/claims-and-limitations.md`。 |
+| [`implementation-roadmap-2026-07-03.md`](./implementation-roadmap-2026-07-03.md) | 2026-07-03 旧路线图 | 三周 Suggestion/Context/Prompt/Feedback 路线图；FeedbackService 从未实现，后续被目标驱动工作台取代。 |
+| [`2026-07-03-phase1-2-implementation-report.md`](./2026-07-03-phase1-2-implementation-report.md) | 2026-07-03 实施快照 | 与旧路线图配套的阶段报告，数字与预测不再更新。 |
+| [`practice-report-2026-07-02.md`](./practice-report-2026-07-02.md) | 2026-07-02 课程报告 | 未包含阶段一/二/三与 2026-07-10 可靠性加固，已由现行技术总结报告取代。 |
 
 ## 怎么用这张表
 

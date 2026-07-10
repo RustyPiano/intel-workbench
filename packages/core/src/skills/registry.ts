@@ -44,6 +44,16 @@ export class SkillRegistry {
     return this.catalogMeta.map((meta) => meta.rootDir);
   }
 
+  /** Create an activation-isolated view over the same discovered catalog. */
+  fork(): SkillRegistry {
+    return new SkillRegistry({
+      catalog: [...this.catalogMeta],
+      warnings: [...this.warnings],
+      records: new Map(this.catalogRecords),
+      skillRoots: this.getSkillRoots(),
+    });
+  }
+
   getActiveRecords(): SkillRecord[] {
     return [...this.active.values()].map(({ record }) => record);
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -58,6 +58,21 @@ describe("AuditService 哈希链（§7.2）", () => {
     );
     const verdict = await audit.verify();
     expect(verdict).toEqual({ ok: true, count: 20 });
+  });
+
+  it("专题镜像写失败不会让后续全局审计事件断链", async () => {
+    const first = await audit.append({ user: "u", action: "first", object: "one" });
+    await mkdir(paths.casesDir, { recursive: true });
+    await writeFile(paths.caseDir("blocked"), "not-a-directory", "utf8");
+
+    await expect(audit.append({ user: "u", action: "mirrored", object: "two", caseId: "blocked" })).rejects.toBeTruthy();
+    const third = await audit.append({ user: "u", action: "third", object: "three" });
+
+    const events = await audit.readAll();
+    expect(events).toHaveLength(3);
+    expect(events[1]?.prev_hash).toBe(first.event_hash);
+    expect(third.prev_hash).toBe(events[1]?.event_hash);
+    expect(await audit.verify()).toEqual({ ok: true, count: 3 });
   });
 
   it("reconcile 找出有产物却缺 case.create 审计的孤儿专题", async () => {

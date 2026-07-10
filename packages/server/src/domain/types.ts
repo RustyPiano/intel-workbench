@@ -245,10 +245,18 @@ export interface BulletinSpec {
 export interface ReportRecord {
   status: ReportStatus;
   spec: BulletinSpec;
+  /** 每次生成/修改递增；旧数据可缺省，首次提交时校验并升级。 */
+  revision?: number;
+  /** sha256(JSON spec + rendered markdown)，把结构化草稿与实际导出正文绑定。 */
+  contentHash?: string;
   drafted_by: string;
   drafted_at: string;
+  submittedRevision?: number;
+  submittedContentHash?: string;
   submitted_by?: string;
   submitted_at?: string;
+  approvedRevision?: number;
+  approvedContentHash?: string;
   reviewed_by?: string;
   approved_at?: string;
   exported_by?: string;

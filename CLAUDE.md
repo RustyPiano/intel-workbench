@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Project-specific context, current status, commands, and red lines live in [`AGENTS.md`](./AGENTS.md). This file only adds generic coding behavior; when the two differ, follow `AGENTS.md` for repository facts and scope.
+
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.

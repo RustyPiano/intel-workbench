@@ -6,7 +6,7 @@ import type { ToolContext } from "../types.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
 export interface PersistToolResultParams {
-  ctx: Pick<ToolContext, "policy" | "fileMutationQueue">;
+  ctx: Pick<ToolContext, "policy" | "fileMutationQueue"> & Partial<Pick<ToolContext, "signal">>;
   outPath: string;
   data: unknown;
 }
@@ -38,7 +38,7 @@ export async function persistToolResult({
   const payload = `${JSON.stringify(data, null, 2)}\n`;
   const write = async () => {
     await mkdir(path.dirname(absPath), { recursive: true });
-    await atomicWriteFile(absPath, payload, "utf8");
+    await atomicWriteFile(absPath, payload, "utf8", ctx.signal);
   };
 
   if (ctx.fileMutationQueue) {

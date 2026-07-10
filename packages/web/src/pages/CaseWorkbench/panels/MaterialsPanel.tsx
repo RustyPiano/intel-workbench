@@ -8,12 +8,14 @@ import {
   processMaterial,
   reindexMaterial,
   uploadMaterial,
+  uploadMaterialsBatch,
   type ApiMaterial,
   type ImageMedia,
   type MaterialContent,
   type VideoMedia,
 } from "../../../api";
 import { useSession } from "../../../state/session";
+import { useWorkbenchContext } from "../../CaseWorkbench";
 import { BboxImage } from "../components/BboxImage";
 import {
   elapsedLabel,
@@ -86,6 +88,7 @@ export function MaterialsPanel() {
   const { id: caseId } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const { user } = useSession();
+  const { canManage } = useWorkbenchContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [materials, setMaterials] = useState<ApiMaterial[] | null>(null);
@@ -102,7 +105,7 @@ export function MaterialsPanel() {
   const [now, setNow] = useState(Date.now());
   const [rawUrl, setRawUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => searchParams.get("uploadError"));
   const [uploadProgress, setUploadProgress] = useState<{ name: string; index: number; total: number; fraction: number } | null>(null);
   const [uploadIssues, setUploadIssues] = useState<{ name: string; message: string }[]>([]);
   const focusMaterialId = searchParams.get("material");
@@ -187,7 +190,7 @@ export function MaterialsPanel() {
   }, [processingIds.size, serverProcessingIds]);
 
   const handleFiles = async (fileList: FileList | null) => {
-    if (!user || !caseId || !fileList || fileList.length === 0) return;
+    if (!user || !caseId || !canManage || !fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
     setBusy(true);
     setError(null);
@@ -196,14 +199,24 @@ export function MaterialsPanel() {
     const issues: { name: string; message: string }[] = [];
     let firstOk: string | null = null;
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setUploadProgress({ name: file.name, index: i + 1, total: files.length, fraction: 0 });
+      if (files.length > 1) {
         try {
-          const m = await uploadMaterial(caseId, file, (fraction) =>
-            setUploadProgress({ name: file.name, index: i + 1, total: files.length, fraction }),
+          setUploadProgress({ name: "整批素材", index: 0, total: files.length, fraction: 0 });
+          const uploaded = await uploadMaterialsBatch(caseId, files, (file, index, total) =>
+            setUploadProgress({ name: file.name, index, total, fraction: index / total }),
           );
-          if (!firstOk) firstOk = m.id;
+          firstOk = uploaded[0]?.id ?? null;
+        } catch (e) {
+          issues.push({ name: `整批上传（${files.length} 个文件）`, message: (e as Error).message });
+        }
+      } else {
+        const file = files[0];
+        setUploadProgress({ name: file.name, index: 1, total: 1, fraction: 0 });
+        try {
+          const uploaded = await uploadMaterial(caseId, file, (fraction) =>
+            setUploadProgress({ name: file.name, index: 1, total: 1, fraction }),
+          );
+          firstOk = uploaded.id;
         } catch (e) {
           issues.push({ name: file.name, message: (e as Error).message });
         }
@@ -220,7 +233,7 @@ export function MaterialsPanel() {
 
   // 重建稠密索引（embed 端点恢复后）；完成后刷新列表与阅读区。
   const handleReindex = async (mid: string) => {
-    if (!user || !caseId || reindexing) return;
+    if (!user || !caseId || !canManage || reindexing) return;
     setReindexing(true);
     setError(null);
     try {
@@ -239,7 +252,7 @@ export function MaterialsPanel() {
 
   // 删除素材（清理落盘 + 从专题摘除）；删当前选中则清空阅读区，列表回落首项。
   const handleDelete = async (mid: string) => {
-    if (!user || !caseId || deleting) return;
+    if (!user || !caseId || !canManage || deleting) return;
     if (!window.confirm("确认删除该素材？将一并清除其解析文本、片段与检索索引，此操作不可恢复。")) return;
     setDeleting(true);
     setError(null);
@@ -259,7 +272,7 @@ export function MaterialsPanel() {
 
   // 显式加工媒体素材（二期 P2.3a）；完成后刷新列表与阅读区。
   const handleProcess = async (mid: string) => {
-    if (!user || !caseId || processingIds.has(mid)) return;
+    if (!user || !caseId || !canManage || processingIds.has(mid)) return;
     setProcessingIds((prev) => new Set(prev).add(mid));
     setProcessStartedAt((prev) => ({ ...prev, [mid]: Date.now() }));
     patchLocalMaterial(mid, { status: "processing", note: "加工中：请求已发送，等待后端接手" });
@@ -353,6 +366,7 @@ export function MaterialsPanel() {
         ref={fileInputRef}
         type="file"
         multiple
+        disabled={!canManage}
         style={{ display: "none" }}
         onChange={(e) => void handleFiles(e.target.files)}
       />
@@ -363,9 +377,11 @@ export function MaterialsPanel() {
           <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>
             线索素材 ({materials ? (materialFilter.trim() ? `${filteredMaterials?.length ?? 0}/${materials.length}` : materials.length) : 0})
           </span>
-          <button type="button" className="btn btn--primary" style={{ padding: "4px 10px", fontSize: "11px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
-            {busy ? "汇入中…" : "+ 汇入"}
-          </button>
+          {canManage ? (
+            <button type="button" className="btn btn--primary" style={{ padding: "4px 10px", fontSize: "11px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+              {busy ? "汇入中…" : "+ 汇入"}
+            </button>
+          ) : null}
         </div>
         <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
           <input
@@ -403,7 +419,7 @@ export function MaterialsPanel() {
 
         {uploadIssues.length > 0 ? (
           <div style={{ padding: "10px 12px", fontSize: "11px", color: "var(--danger-light)", borderBottom: "1px solid var(--border)", lineHeight: "1.6" }}>
-            {uploadIssues.length} 个文件上传失败（其余已汇入）：
+            素材上传存在问题（已成功的项目仍保留）：
             {uploadIssues.map((it, i) => (
               <div key={i} style={{ marginTop: "2px" }}>· {it.name}：{it.message}</div>
             ))}
@@ -474,7 +490,7 @@ export function MaterialsPanel() {
                   </div>
                 </div>
                 <div className="materials-viewer__actions">
-                  {content.material.status === "done" ? (
+                  {canManage && content.material.status === "done" ? (
                     <button
                       type="button"
                       className="btn"
@@ -489,18 +505,20 @@ export function MaterialsPanel() {
                       {reindexing ? "重建中…" : "重建索引"}
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="btn btn--danger"
-                    style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                    disabled={deleting || reindexing || activeProcessing}
-                    onClick={() => void handleDelete(content.material.id)}
-                  >
-                    <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
-                    </svg>
-                    {deleting ? "删除中…" : "删除"}
-                  </button>
+                  {canManage ? (
+                    <button
+                      type="button"
+                      className="btn btn--danger"
+                      style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                      disabled={deleting || reindexing || activeProcessing}
+                      onClick={() => void handleDelete(content.material.id)}
+                    >
+                      <svg className="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+                      </svg>
+                      {deleting ? "删除中…" : "删除"}
+                    </button>
+                  ) : null}
                 </div>
               </div>
               <div className="materials-viewer__meta">
@@ -516,13 +534,14 @@ export function MaterialsPanel() {
               {isMediaModality(content.material.modality) ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      style={{ padding: "6px 14px", fontSize: "12px" }}
-                      onClick={() => void handleProcess(content.material.id)}
-                      disabled={activeProcessing || deleting || reindexing}
-                    >
+                    {canManage ? (
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        style={{ padding: "6px 14px", fontSize: "12px" }}
+                        onClick={() => void handleProcess(content.material.id)}
+                        disabled={activeProcessing || deleting || reindexing}
+                      >
                       {activeProcessing ? (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                           <svg className="icon-svg" style={{ width: "12px", height: "12px", animation: "spin 1s linear infinite" }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -559,7 +578,8 @@ export function MaterialsPanel() {
                           开始加工
                         </span>
                       )}
-                    </button>
+                      </button>
+                    ) : null}
                     <span style={{ fontSize: "12px", color: "var(--text-dim)" }}>{mediaStatusText(content)}</span>
                   </div>
                   {activeProcessing ? (

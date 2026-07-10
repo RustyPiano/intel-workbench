@@ -45,6 +45,7 @@ describe("CloudRerankAdapter.rerank（mock fetch）", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe("https://api.siliconflow.cn/v1/rerank");
     const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(init.redirect).toBe("error");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer k");
     expect(JSON.parse(init.body as string)).toEqual({
       model: "Qwen/Qwen3-Reranker-8B",

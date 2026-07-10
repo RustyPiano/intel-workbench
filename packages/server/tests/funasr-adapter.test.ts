@@ -44,6 +44,7 @@ describe("FunAsrAdapter.transcribe（mock fetch）", () => {
     expect(fetch.mock.calls[0][0]).toBe("http://127.0.0.1:8001/asr"); // 末尾斜杠规整
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("error");
     expect(init.body).toBeInstanceOf(FormData);
   });
 

@@ -37,6 +37,9 @@ interface CompletionChoiceShape {
   finish_reason: string | null;
 }
 
+const rejectRedirectsFetch: typeof fetch = (input, init) =>
+  globalThis.fetch(input, { ...init, redirect: "error" });
+
 function inferProviderErrorCategory(status: number | undefined, message: string): string {
   if (status === 401 || status === 403) {
     return "auth";
@@ -338,7 +341,7 @@ function mapStopReason(reason: string | null): GenerateResult["stopReason"] {
     return "max_tokens";
   }
 
-  return "end_turn";
+  return reason === "stop" ? "end_turn" : "error";
 }
 
 function responseKeys(response: unknown): string[] | undefined {
@@ -416,6 +419,9 @@ export class OpenAICompatibleModelAdapter implements ModelAdapter {
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
+      // Never replay an authenticated request body to a Location supplied by
+      // the configured endpoint (notably 307/308 redirects to another host).
+      fetch: rejectRedirectsFetch,
     });
   }
 

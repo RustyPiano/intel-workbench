@@ -125,7 +125,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
     expect(asked).toEqual(["乙？"]); // 甲（归一化去尾标点后）与已问过重复 → 跳过
   });
 
-  it("单题失败记录后继续下一题，不中断批次", async () => {
+  it("单题重试两次仍失败后继续下一题，并把批次标为 failed", async () => {
     const asked: string[] = [];
     const inquiries = {
       list: async () => [],
@@ -137,14 +137,30 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
     };
     const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲？", "乙？", "丙？"]), inquiries);
 
-    const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
-
-    expect(asked).toEqual(["甲？", "乙？", "丙？"]); // 失败题之后仍继续
-    expect(progress.status).toBe("done");
-    expect(progress.items.map((it) => it.status)).toEqual(["done", "failed", "done"]);
-    expect(progress.items[1]!.error).toBe("模型不可达");
+    await expect(auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal))).rejects.toMatchObject({
+      result: { status: "failed", items: [{ status: "done" }, { status: "failed", error: "模型不可达" }, { status: "done" }] },
+    });
+    expect(asked).toEqual(["甲？", "乙？", "乙？", "乙？", "丙？"]); // 失败题重试后仍继续
     const failEvent = (await audit.readCaseEvents(caseId)).find((e) => e.action === "auto-inquiry.question" && e.result === "error");
     expect(failEvent?.detail).toMatchObject({ index: 1, reason: "模型不可达" });
+  });
+
+  it("瞬时失败可在自动重试中恢复", async () => {
+    let attempts = 0;
+    const inquiries = {
+      list: async () => [],
+      ask: async (_a: Identity, _c: string, q: string) => {
+        attempts += 1;
+        if (attempts < 3) throw new Error("temporary");
+        return answered(q);
+      },
+    };
+    const auto = new AutoInquiryService(paths, audit, stubSuggestions(["甲？"]), inquiries);
+
+    const progress = await auto.run(OPERATOR, caseId, jobCtx(new AbortController().signal));
+
+    expect(attempts).toBe(3);
+    expect(progress).toMatchObject({ status: "done", items: [{ status: "done", attempts: 3 }] });
   });
 
   it("取消中止批次：AbortSignal 贯通到 ask，剩余题不再跑", async () => {

@@ -211,6 +211,90 @@ describe("ContradictionService", () => {
     expect(event?.detail).toMatchObject({ agentic: { mode: "agent", status: "committed", claims: 2, pairsJudged: 1 } });
   });
 
+  it("agent mode accumulates multiple commit_contradictions calls", async () => {
+    process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [{
+      filename: "multi.txt",
+      content: [
+        `Gate 3 status is open. ${"A".repeat(520)}`,
+        `Gate 3 status is closed. ${"B".repeat(520)}`,
+        `Gate 4 access is yes. ${"C".repeat(520)}`,
+        "Gate 4 access is no.",
+      ].join("\n\n"),
+    }]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if (input.tools.length === 0) {
+        const ids = chunkIds(input.messages[0]?.content ?? "");
+        if ((input.messages[0]?.content ?? "").includes("claim_a:")) return contradiction;
+        return {
+          claims: [
+            { entity: "Gate 3", attribute: "status", value: "open", chunk_id: ids[0] ?? chunks[0]!.chunk_id },
+            { entity: "Gate 3", attribute: "status", value: "closed", chunk_id: ids[1] ?? chunks[1]!.chunk_id },
+            { entity: "Gate 4", attribute: "access", value: "yes", chunk_id: ids[2] ?? chunks[2]!.chunk_id },
+            { entity: "Gate 4", attribute: "access", value: "no", chunk_id: ids[2] ?? chunks[2]!.chunk_id },
+          ],
+        };
+      }
+      const compares = toolResults(input, "compare_claims").length;
+      const commits = toolResults(input, "commit_contradictions").length;
+      if (toolResults(input, "list_materials").length === 0) return toolCall("list_materials", {}, "list");
+      if (toolResults(input, "read_material_window").length === 0) return toolCall("read_material_window", { material_id: firstListedMaterialId(input), start_chunk: 0, limit: 8 }, "read");
+      if (toolResults(input, "extract_claims_from_scope").length === 0) return toolCall("extract_claims_from_scope", { chunk_ids: windowChunkIds(input) }, "extract");
+      if (compares === 0) return toolCall("compare_claims", { claim_a_id: "claim-1", claim_b_id: "claim-2" }, "compare-1");
+      if (commits === 0) return toolCall("commit_contradictions", { contradictions: [{ claim_a_id: "claim-1", claim_b_id: "claim-2" }] }, "commit-1");
+      if (compares === 1) return toolCall("compare_claims", { claim_a_id: "claim-3", claim_b_id: "claim-4" }, "compare-2");
+      if (commits === 1) return toolCall("commit_contradictions", { contradictions: [{ claim_a_id: "claim-3", claim_b_id: "claim-4" }] }, "commit-2");
+      return final();
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(2);
+    expect(toolResults(adapter.inputs.at(-1)!, "commit_contradictions")).toHaveLength(2);
+  });
+
+  it("does not compare different attributes or planned facts with observations", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "plan.txt", content: "蓝海星号计划于22:30靠泊东3泊位。" },
+      { filename: "status.txt", content: "23:10蓝海星号仍在外锚地等待。" },
+    ]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if ((input.messages[0]?.content ?? "").includes("claim_a:")) return contradiction;
+      return {
+        claims: [
+          { entity: "蓝海星号", attribute: "靠泊状态", value: "东3泊位", modality: "planned", chunk_id: chunks[0]!.chunk_id },
+          { entity: "蓝海星号", attribute: "靠泊状态", value: "外锚地等待", modality: "asserted", chunk_id: chunks[1]!.chunk_id },
+        ],
+      };
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(0);
+    expect(adapter.inputs.filter((input) => input.messages[0]?.content.includes("claim_a:"))).toHaveLength(0);
+  });
+
+  it("does not treat values from different points in one time series as contradictions", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [{
+      filename: "ais.txt",
+      content: "2026-07-01 22:18:00 / SOG 0.1\n2026-07-01 23:27:00 / SOG 2.4",
+    }]);
+    const adapter = new CallbackJsonAdapter((input) => {
+      if ((input.messages[0]?.content ?? "").includes("claim_a:")) return new Error("different timestamps must not be judged");
+      return {
+        claims: [
+          { entity: "蓝海星号", attribute: "AIS 航速", value: "0.1", chunk_id: chunks[0]!.chunk_id },
+          { entity: "蓝海星号", attribute: "AIS 航速", value: "2.4", chunk_id: chunks[0]!.chunk_id },
+        ],
+      };
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(result.contradictions).toHaveLength(0);
+    expect(result.groundedPropositions.map((claim) => claim.time)).toEqual(["2026-07-01 22:18:00", "2026-07-01 23:27:00"]);
+  });
+
   it("agent mode falls back to batch detection when the agent does not commit", async () => {
     process.env.MINI_AGENT_CONTRADICTION_MODE = "agent";
     const { caseId, chunks } = await createCaseWithDocs(fixture, [
@@ -628,6 +712,35 @@ describe("ContradictionService", () => {
     expect(event?.detail).toMatchObject({ batches: 1, chunksCovered: 0, chunksTotal: 1, failedBatches: 1 });
   });
 
+  it("splits and retries a malformed multi-chunk extraction without accepting partial JSON", async () => {
+    const { caseId, chunks } = await createCaseWithDocs(fixture, [
+      { filename: "alpha.txt", content: "USS Gerald Ford displacement is 100000 tons." },
+      { filename: "bravo.txt", content: "USS Gerald Ford displacement is 85000 tons." },
+    ]);
+    let extractionCalls = 0;
+    const adapter = new CallbackJsonAdapter((input) => {
+      const content = input.messages[0]?.content ?? "";
+      if (content.includes("claim_a:")) return contradiction;
+      extractionCalls += 1;
+      if (extractionCalls === 1) return final('{"claims":[{"entity":"USS Gerald Ford"}');
+      const id = chunkIds(content)[0]!;
+      return {
+        claims: [{
+          entity: "USS Gerald Ford",
+          attribute: "displacement",
+          value: id === chunks[0]!.chunk_id ? "100000" : "85000",
+          chunk_id: id,
+        }],
+      };
+    });
+
+    const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
+
+    expect(extractionCalls).toBe(3);
+    expect(result).toMatchObject({ status: "succeeded", processedChunks: 2, totalChunks: 2, truncated: false });
+    expect(result.contradictions).toHaveLength(1);
+  });
+
   it("scores cross-source contradictions at least as high as same-source contradictions", async () => {
     const { caseId, chunks } = await createCaseWithDocs(fixture, [
       {
@@ -675,12 +788,12 @@ describe("ContradictionService", () => {
 
     const result = await createService(fixture, adapter).detect(OPERATOR, caseId);
 
-    expect(adapter.inputs.filter((input) => !input.messages[0]?.content.includes("claim_a:"))).toHaveLength(2);
+    expect(adapter.inputs.filter((input) => !input.messages[0]?.content.includes("claim_a:"))).toHaveLength(4);
     expect(result.contradictions).toHaveLength(1);
     expect(result.contradictions[0]?.claim_a.citation.content_hash).toBe(chunks[0]!.content_hash);
     expect(result.contradictions[0]?.claim_b.citation.content_hash).toBe(chunks[40]!.content_hash);
     const event = (await fixture.audit.readAll()).filter((item) => item.action === "contradiction.detect").pop();
-    expect(event?.detail).toMatchObject({ batches: 2, chunksCovered: 41, chunksTotal: 41, failedBatches: 0 });
+    expect(event?.detail).toMatchObject({ batches: 4, chunksCovered: 41, chunksTotal: 41, failedBatches: 0 });
   });
 
   it("grounds claims only against the chunks fed to that extraction batch", async () => {

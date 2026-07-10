@@ -64,7 +64,7 @@ function citedIds(input: GenerateInput): string[] {
     .filter((id): id is string => typeof id === "string");
 }
 
-type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "mixed-claim" | "duplicate-cites" | "window" | "structured-finding" | "tool-args-error" | "add-claim";
+type DynamicMode = "valid" | "invalid-cite" | "tampered" | "no-finalize" | "budget" | "context-only" | "nli-failure" | "two-spans" | "mixed-claim" | "duplicate-cites" | "window" | "structured-finding" | "structured-finding-unverified" | "tool-args-error" | "add-claim";
 
 class DynamicInquiryAdapter implements ModelAdapter {
   readonly name = "scripted-agent";
@@ -79,10 +79,12 @@ class DynamicInquiryAdapter implements ModelAdapter {
     this.inputs.push(input);
     if (input.tools.length === 0) {
       this.supportInputs.push(input);
-      if (this.mode === "nli-failure") throw new Error("support verifier failed");
+      if (this.mode === "nli-failure" || (this.mode === "structured-finding-unverified" && this.supportInputs.length === 1)) {
+        throw new Error("support verifier failed");
+      }
       const label = this.mode === "context-only" || (this.mode === "mixed-claim" && this.supportInputs.length === 2)
         ? "context-only"
-        : this.mode === "structured-finding" && this.supportInputs.length === 2
+        : (this.mode === "structured-finding" || this.mode === "structured-finding-unverified") && this.supportInputs.length === 2
           ? "contradicts"
           : "supports";
       return final(JSON.stringify({ label, rationale: "test support label" }));
@@ -162,7 +164,7 @@ class DynamicInquiryAdapter implements ModelAdapter {
       return final();
     }
 
-    if (this.mode === "structured-finding") {
+    if (this.mode === "structured-finding" || this.mode === "structured-finding-unverified") {
       if (!has("read_chunk")) return toolCall("read_chunk", { chunk_id: chunkId }, "read_structured_finding");
       const cites = toolResults(input, "cite").length;
       if (cites === 0) return toolCall("cite", { chunk_id: chunkId, claim: "门岗登记与OCR识别车辆数不一致", quote: "门岗登记记录车辆 2 辆" }, "cite_structured_support");
@@ -358,7 +360,8 @@ describe.sequential("InquiryService agent harness", () => {
 
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("mixed-claim")).ask(OPERATOR, caseId, "有哪些船只线索");
 
-    expect(inquiry.status).toBe("answered");
+    expect(inquiry.status).toBe("insufficient");
+    expect(inquiry.answer).not.toContain("同时发现蓝色货轮和红色拖船");
     expect(inquiry.claims).toHaveLength(1);
     expect(inquiry.claims[0]?.status).toBe("unverified");
     expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
@@ -375,6 +378,18 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.submitted_findings).toHaveLength(1);
     expect(inquiry.submitted_findings?.[0]?.supporting_citations[0]?.support_status).toBe("supported");
     expect(inquiry.submitted_findings?.[0]?.opposing_citations[0]?.support_label).toBe("contradicts");
+  });
+
+  it("keeps support-unverified evidence in claims but excludes the submitted Finding candidate", async () => {
+    const caseId = await createCaseWithDocs(fixture, "agent 未核支持候选", [
+      { filename: "gate.txt", content: "舰船线索：门岗登记记录车辆 2 辆。OCR 识别记录车辆 4 辆。" },
+    ]);
+
+    const inquiry = await createService(fixture, new DynamicInquiryAdapter("structured-finding-unverified"))
+      .ask(OPERATOR, caseId, "门岗登记与OCR识别是否一致");
+
+    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
+    expect(inquiry.submitted_findings).toBeUndefined();
   });
 
   it("does not count a finalized citation as grounded unless support verification says supports", async () => {
@@ -398,8 +413,8 @@ describe.sequential("InquiryService agent harness", () => {
 
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("nli-failure")).ask(OPERATOR, caseId, "有何舰船线索");
 
-    expect(inquiry.status).toBe("answered");
-    expect(inquiry.answer).toContain("发现舰船线索");
+    expect(inquiry.status).toBe("insufficient");
+    expect(inquiry.answer).not.toContain("发现舰船线索");
     expect(inquiry.claims[0]?.status).toBe("unverified");
     expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
     expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("unknown");

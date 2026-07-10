@@ -488,9 +488,9 @@ class ContextService {
 
 ## 参考资料
 
-- [代码审查报告](../report/comprehensive-code-review-2026-07-03.md)（如果创建）
-- [溯源问答架构文档](../architecture/inquiry-agent-harness.md)
-- [矛盾检测决策](./inquiry-agent-harness-decision.md)
+- [课程改造前专家评审输入](../archive/expert-review-brief-2026-07-02.md)
+- [溯源问答 Agent Harness 决策](../report/inquiry-agent-harness-decision.md)
+- [矛盾检测 Benchmark 与现行复测状态](../report/benchmark-summary.md)
 
 ---
 

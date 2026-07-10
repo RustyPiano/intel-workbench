@@ -111,6 +111,14 @@ describe("ElementService 要素抽取（§5.2 / §4.3）", () => {
     await expect(service(stubAdapter("{}"), []).extract(OPERATOR, caseId)).rejects.toMatchObject({ status: 403 });
   });
 
+  it("全部模型批次失败时任务失败而不是覆盖为空结果", async () => {
+    const adapter = callbackAdapter(() => new Error("model unavailable"));
+
+    await expect(service(adapter).extract(OPERATOR, caseId)).rejects.toThrow("要素抽取全部批次失败");
+    const event = (await audit.readAll()).filter((item) => item.action === "element.extract").pop();
+    expect(event).toMatchObject({ result: "error" });
+  });
+
   it("超过 40 块时分批覆盖全部块并确定性合并同名要素", async () => {
     const c2 = (await cases.create(OPERATOR, { name: "多块专题", clearance: "internal" })).id;
     await materials.ingest(OPERATOR, c2, Array.from({ length: 45 }, (_, i) => ({ filename: `m${i}.txt`, content: `目标甲出现于第 ${i} 份材料。` })));

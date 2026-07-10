@@ -17,7 +17,6 @@ import {
   stageHint,
   MANUAL_STAGE_KEYS,
   REPORT_STATUS_LABELS,
-  TASK_RUN_STORAGE_PREFIX,
   taskStageName,
   TASK_STAGE_TAB_PATHS,
   TASK_STATUS_LABELS,
@@ -34,13 +33,10 @@ export function TaskOverview({ caseId, enabled, canManage = true }: { caseId?: s
   useEffect(() => {
     if (!enabled || !caseId) return;
     let alive = true;
-    const storageKey = `${TASK_RUN_STORAGE_PREFIX}${caseId}`;
 
     const load = async () => {
       try {
         const [next, materialList] = await Promise.all([getCurrentTaskRun(caseId), listMaterials(caseId)]);
-        if (next) localStorage.setItem(storageKey, next.run.id);
-        else localStorage.removeItem(storageKey);
         if (!alive) return;
         setSnapshot(next);
         setVisibleMaterials(materialList);
@@ -66,7 +62,6 @@ export function TaskOverview({ caseId, enabled, canManage = true }: { caseId?: s
     setError(null);
     try {
       const next = await createTaskRun(caseId);
-      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
       setSnapshot(next);
     } catch (e) {
       setError((e as Error).message);
@@ -82,7 +77,6 @@ export function TaskOverview({ caseId, enabled, canManage = true }: { caseId?: s
     setError(null);
     try {
       const next = await confirmTaskStage(caseId, snapshot.run.id, current.key);
-      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
       setSnapshot(next);
     } catch (e) {
       setError((e as Error).message);
@@ -98,7 +92,6 @@ export function TaskOverview({ caseId, enabled, canManage = true }: { caseId?: s
     setError(null);
     try {
       const next = await advanceTaskStage(caseId, snapshot.run.id, stageKey, status);
-      localStorage.setItem(`${TASK_RUN_STORAGE_PREFIX}${caseId}`, next.run.id);
       setSnapshot(next);
     } catch (e) {
       setError((e as Error).message);

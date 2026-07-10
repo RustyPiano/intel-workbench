@@ -8,19 +8,17 @@ import type { Clearance, Role, SessionUser } from "./types";
 const BASE = "/api";
 
 /**
- * 会话令牌持久化至 sessionStorage，页面刷新不丢失。
- * 取舍：令牌可被 XSS 读取（不如内存变量安全），但内网演示系统接受该风险，换取刷新免重新登录。
+ * 会话令牌仅存于内存（模块级变量）。持久化（跨刷新恢复）由 SessionProvider
+ * 独占负责（见 state/session.tsx 的 sessionStorage 读写），此处不再重复存储。
  */
+let sessionToken: string | null = null;
+
 function getSessionToken(): string | null {
-  return sessionStorage.getItem("session_token");
+  return sessionToken;
 }
 
 export function setSessionToken(token: string | null): void {
-  if (token) {
-    sessionStorage.setItem("session_token", token);
-  } else {
-    sessionStorage.removeItem("session_token");
-  }
+  sessionToken = token;
 }
 
 /** 会话失效（任意鉴权请求返回 401）回调，由 SessionProvider 注册以自动登出回登录页。 */
@@ -1173,16 +1171,6 @@ export async function getCurrentTaskRun(caseId: string): Promise<ApiTaskRunSnaps
     throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
   }
   return body.snapshot ?? null;
-}
-
-export async function getTaskRun(caseId: string, runId: string): Promise<ApiTaskRunSnapshot> {
-  const res = await fetch(`${BASE}/cases/${encodeURIComponent(caseId)}/task-runs/${encodeURIComponent(runId)}`, { headers: headers() });
-  const body = (await res.json().catch(() => ({}))) as ApiTaskRunSnapshot & { ok?: boolean; message?: string };
-  if (!res.ok || body.ok === false) {
-    noteStatus(res);
-    throw new Error(body.message ?? `请求失败（HTTP ${res.status}）`);
-  }
-  return { template: body.template, run: body.run, overview: body.overview };
 }
 
 export async function createTaskRun(caseId: string): Promise<ApiTaskRunSnapshot> {

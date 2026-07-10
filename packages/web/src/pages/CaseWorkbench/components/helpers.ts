@@ -202,8 +202,6 @@ export function mentionSources(el: ApiElement): string {
   return [...new Set(el.mentions.map((m) => m.material_name))].join("、");
 }
 
-export const TASK_RUN_STORAGE_PREFIX = "iw-task-run:";
-
 export const TASK_STATUS_LABELS: Record<ApiTaskStageState["status"], string> = {
   pending: "待处理",
   active: "当前",

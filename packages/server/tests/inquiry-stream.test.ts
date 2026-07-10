@@ -144,7 +144,7 @@ describe.sequential("InquiryService askStream", () => {
     expect((done as Extract<InquiryStreamEvent, { type: "done" }>).run_id).toEqual(expect.any(String));
     expect(stableInquiry(inquiry)).toEqual(stableInquiry(viaAgent));
     expect(inquiry.status).toBe("answered");
-    expect(inquiry.claims[0]?.status).toBe("verified");
+    expect(inquiry.claims[0]?.support).toBe("supported");
     expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
   });
 
@@ -185,7 +185,7 @@ describe.sequential("InquiryService askStream", () => {
     expect(events.filter((event) => event.type === "token").map((event) => event.text).join("")).toBe("streamed narration");
     expect(inquiry.status).toBe("insufficient");
     expect(inquiry.answer).toContain("现有材料不足以判断");
-    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support).toBe("unsupported");
     expect(inquiry.claims[0]?.citations).toHaveLength(0);
   });
 

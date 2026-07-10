@@ -101,7 +101,7 @@ function averageConfidence(citations: readonly Citation[]): number {
 }
 
 function supportedCitations(citations: readonly Citation[]): Citation[] {
-  return citations.filter((citation) => citation.support_status === "supported");
+  return citations.filter((citation) => citation.verdict === "supports");
 }
 
 function citationKey(citation: Citation): string {
@@ -363,8 +363,8 @@ export class SuggestionService {
         // 模型提交前已自行筛选证据，不套用来源一的 ≥2 门槛，只要求至少 1 条支持引用通过校验。
         const supporting = await this.findings.filterValidCitations(actor, caseId, supportedCitations(sf.supporting_citations));
         if (supporting.length === 0) continue;
-        // 只保留裁判确认为对立（contradicts）的引用；裁判失败/unknown 的不进建议，但仍留在 Inquiry 记录里供人工查看。
-        const opposing = await this.findings.filterValidCitations(actor, caseId, sf.opposing_citations.filter((citation) => citation.support_label === "contradicts"));
+        // 只保留裁判确认为对立（contradicts）的引用；裁判失败/pending 的不进建议，但仍留在 Inquiry 记录里供人工查看。
+        const opposing = await this.findings.filterValidCitations(actor, caseId, sf.opposing_citations.filter((citation) => citation.verdict === "contradicts"));
         const reasoning = sf.reasoning
           ? `来自结构化研判：${sf.reasoning}`
           : `来自结构化研判：${supporting.length} 条支持引用已通过校验${opposing.length > 0 ? `，含 ${opposing.length} 条对立证据` : ""}。`;
@@ -385,8 +385,8 @@ export class SuggestionService {
     // 来源一：问答——已判定 supported 且引用数 ≥2 的结论。
     for (const inquiry of inquiryList) {
       for (const claim of inquiry.claims) {
-        if (claim.support_status !== "supported") continue;
-        if (claim.citations.some((citation) => citation.support_status !== "supported" || citation.support_label === "contradicts")) continue;
+        if (claim.support !== "supported") continue;
+        if (claim.citations.some((citation) => citation.verdict !== "supports")) continue;
         const supportChecked = supportedCitations(claim.citations);
         const supporting = await this.findings.filterValidCitations(actor, caseId, supportChecked);
         if (supporting.length < MIN_INQUIRY_CITATIONS) continue;
@@ -536,11 +536,11 @@ export class SuggestionService {
     return { suggestions, questions, inquiriesCreated, skippedExisting };
   }
 
-  /** 采纳一条 Finding 建议：委托 FindingService.create 落盘校验，另记一条采纳审计供统计采纳率。 */
+  /** 采纳一条 Finding 建议：委托 FindingService.createFromCitations 落盘校验（服务端内部 API，不经 HTTP），另记一条采纳审计供统计采纳率。 */
   async applyFinding(actor: Identity, caseId: string, suggestionId: string): Promise<Finding> {
     const suggestion = (await this.suggestFindings(actor, caseId)).find((item) => item.id === suggestionId);
     if (!suggestion) throw new AppError(404, "建议不存在或已失效");
-    const finding = await this.findings.create(actor, caseId, {
+    const finding = await this.findings.createFromCitations(actor, caseId, {
       conclusion: suggestion.conclusion,
       supporting_citations: suggestion.supporting_citations,
       opposing_citations: suggestion.opposing_citations,

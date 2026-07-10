@@ -48,8 +48,8 @@ describe("ReportService.generateAutoDraft", () => {
   async function approvedFinding(text: string): Promise<void> {
     await materials.ingest(actor, caseId, [{ filename: "intel.txt", content: `前情。${text}后续。` }]);
     const chunk = (await materials.loadCaseChunks(caseId))[0]!;
-    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, text), support_status: "supported" as const };
-    const finding = await findings.create(actor, caseId, { conclusion: text, supporting_citations: [citation], confidence: 0.9 });
+    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, text), verdict: "supports" as const };
+    const finding = await findings.createFromCitations(actor, caseId, { conclusion: text, supporting_citations: [citation], confidence: 0.9 });
     await findings.review(SECURITY, caseId, finding.id, { review_status: "approved" });
   }
 

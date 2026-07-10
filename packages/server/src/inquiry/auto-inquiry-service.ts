@@ -85,12 +85,12 @@ function normalizeKey(question: string): string {
 export function countCandidates(inquiry: Inquiry): number {
   let count = 0;
   for (const sf of inquiry.submitted_findings ?? []) {
-    if (sf.supporting_citations.length > 0 && sf.supporting_citations.every((c) => c.support_status === "supported")) count += 1;
+    if (sf.supporting_citations.length > 0 && sf.supporting_citations.every((c) => c.verdict === "supports")) count += 1;
   }
   for (const claim of inquiry.claims) {
-    if (claim.support_status !== "supported") continue;
-    if (claim.citations.some((c) => c.support_status !== "supported" || c.support_label === "contradicts")) continue;
-    if (claim.citations.filter((c) => c.support_status === "supported").length >= 2) count += 1;
+    if (claim.support !== "supported") continue;
+    if (claim.citations.some((c) => c.verdict !== "supports")) continue;
+    if (claim.citations.filter((c) => c.verdict === "supports").length >= 2) count += 1;
   }
   return count;
 }

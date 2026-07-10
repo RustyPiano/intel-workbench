@@ -59,7 +59,7 @@ describe("ReportService citation id and export-gate pool", () => {
   }
 
   async function createApprovedFinding(conclusion: string, citation: Citation): Promise<Finding> {
-    const finding = await findings.create(OPERATOR, caseId, {
+    const finding = await findings.createFromCitations(OPERATOR, caseId, {
       conclusion,
       supporting_citations: [citation],
       confidence: 0.9,
@@ -72,7 +72,7 @@ describe("ReportService citation id and export-gate pool", () => {
       { filename: "intel.txt", content: "目标甲在码头出现。" },
     ]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, "目标甲在码头出现。"), support_status: "supported" as const };
+    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, "目标甲在码头出现。"), verdict: "supports" as const };
     const first = await createApprovedFinding("目标甲在码头出现。", citation);
     await createApprovedFinding("码头出现目标甲。", citation);
 
@@ -131,7 +131,7 @@ describe("ReportService citation id and export-gate pool", () => {
       { filename: "intel.txt", content: "目标甲在码头出现。" },
     ]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, "目标甲在码头出现。"), support_status: "supported" as const };
+    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, "目标甲在码头出现。"), verdict: "supports" as const };
     await createApprovedFinding("码头出现目标甲。", citation);
     const remaining = await createApprovedFinding("目标甲在码头出现。", citation);
     await replaceFindings(paths, caseId, (await readFindings(paths, caseId)).filter((finding) => finding.id === remaining.id));

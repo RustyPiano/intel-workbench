@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditService } from "../src/audit/audit-service.js";
 import { CaseService } from "../src/cases/case-service.js";
 import { resolveDataPaths, type DataPaths } from "../src/data/paths.js";
-import type { Citation, ContradictionAcknowledgement, Finding, Identity, InquiryClaim } from "../src/domain/types.js";
+import type { Citation, ContradictionAcknowledgement, Finding, Identity, Inquiry, InquiryClaim } from "../src/domain/types.js";
 import { FindingService } from "../src/finding/finding-service.js";
 import { readContradictionAcknowledgements, saveContradictionAcknowledgement } from "../src/finding/finding-store.js";
 import { chunkToCitation } from "../src/inquiry/citation.js";
@@ -45,26 +45,38 @@ describe("FindingService", () => {
       { filename: "intel.txt", content: `前情。${text}后续。` },
     ]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    return { ...chunkToCitation(chunk, "intel.txt", 0.9, text), support_status: "supported" };
+    return { ...chunkToCitation(chunk, "intel.txt", 0.9, text), verdict: "supports" };
+  }
+
+  /** 落一条含单条 claim 的问答记录，返回晋升所需的 (inquiryId, claimId)。 */
+  async function seedClaim(claim: InquiryClaim, inquiryId = "inq-1"): Promise<{ inquiryId: string; claimId: string }> {
+    const inquiry: Inquiry = { id: inquiryId, ts: new Date().toISOString(), user: OPERATOR.id, question: "问题", status: "answered", answer: "", claims: [claim] };
+    const file = path.join(paths.caseDir(caseId), "inquiries.jsonl");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `${JSON.stringify(inquiry)}\n`, "utf8");
+    return { inquiryId, claimId: claim.id };
+  }
+
+  /** 断言晋升成功并返回 Finding。 */
+  async function promote(actor: Identity, ref: { inquiryId: string; claimId: string }, confidence?: number): Promise<Finding> {
+    const result = await findings.create(actor, caseId, { ...ref, ...(confidence !== undefined ? { confidence } : {}) });
+    if (!result.ok) throw new Error(`promotion rejected: ${result.reason}`);
+    return result.finding;
   }
 
   it("promotes a supported inquiry claim, lists it, reviews it, and audits each action", async () => {
     const cite = await validCitation();
-    const claim: InquiryClaim = {
-      text: "目标甲在码头出现。",
-      type: "fact",
-      status: "verified",
-      support_status: "supported",
-      citations: [cite],
-    };
+    const claim: InquiryClaim = { id: "claim-1", text: "目标甲在码头出现。", type: "fact", support: "supported", citations: [cite] };
+    const ref = await seedClaim(claim);
 
-    const created = await findings.create(OPERATOR, caseId, { claim, confidence: 0.88 });
+    const created = await promote(OPERATOR, ref, 0.88);
     expect(created).toMatchObject({
       caseId,
       conclusion: claim.text,
       confidence: 0.88,
       review_status: "draft",
       open_questions: [],
+      source_claim: ref,
     });
     expect(created.supporting_citations).toHaveLength(1);
 
@@ -80,27 +92,53 @@ describe("FindingService", () => {
     expect(actions).toContain("finding.review");
   });
 
-  it("filters unsupported citations when promoting a mixed inquiry claim", async () => {
+  it("filters span-invalid citations when promoting a mixed inquiry claim", async () => {
     const cite = await validCitation();
     const claim: InquiryClaim = {
+      id: "claim-1",
       text: "目标甲在码头出现。",
       type: "fact",
-      status: "verified",
-      support_status: "supported",
+      support: "supported",
       citations: [
         cite,
-        { ...cite, material_id: "missing-material", support_status: "unsupported" },
+        { ...cite, material_id: "missing-material" },
       ],
     };
+    const ref = await seedClaim(claim);
 
-    const created = await findings.create(OPERATOR, caseId, { claim });
+    const created = await promote(OPERATOR, ref);
 
     expect(created.supporting_citations).toEqual([cite]);
   });
 
+  it("rejects a claim whose valid citations are not all supports as not-supported", async () => {
+    const cite = await validCitation();
+    const claim: InquiryClaim = {
+      id: "claim-1",
+      text: "目标甲在码头出现。",
+      type: "fact",
+      support: "pending",
+      citations: [cite, { ...cite, verdict: "mentions" }],
+    };
+    const ref = await seedClaim(claim);
+
+    const result = await findings.create(OPERATOR, caseId, ref);
+    expect(result).toMatchObject({ ok: false, status: 400, reason: "not-supported" });
+  });
+
+  it("rejects re-promotion of an already-promoted claim", async () => {
+    const cite = await validCitation();
+    const claim: InquiryClaim = { id: "claim-1", text: "目标甲在码头出现。", type: "fact", support: "supported", citations: [cite] };
+    const ref = await seedClaim(claim);
+
+    await promote(OPERATOR, ref);
+    const again = await findings.create(OPERATOR, caseId, ref);
+    expect(again).toMatchObject({ ok: false, status: 409, reason: "already-promoted" });
+  });
+
   it("stores findings and contradiction acknowledgements in per-case JSON files", async () => {
     const cite = await validCitation();
-    const created = await findings.create(OPERATOR, caseId, {
+    const created = await findings.createFromCitations(OPERATOR, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [cite],
       confidence: 0.9,
@@ -127,39 +165,33 @@ describe("FindingService", () => {
     expect(await readContradictionAcknowledgements(paths, caseId)).toEqual([acknowledgement]);
   });
 
-  it("rejects unsupported claim promotion", async () => {
-    const claim: InquiryClaim = {
-      text: "无依据结论",
-      type: "fact",
-      status: "unverified",
-      support_status: "unsupported",
-      citations: [],
-    };
+  it("rejects promotion of a claim with no valid supports citation", async () => {
+    const claim: InquiryClaim = { id: "claim-1", text: "无依据结论", type: "fact", support: "unsupported", citations: [] };
+    const ref = await seedClaim(claim);
 
-    await expect(findings.create(OPERATOR, caseId, { claim })).rejects.toMatchObject({ status: 400 });
+    const result = await findings.create(OPERATOR, caseId, ref);
+    expect(result).toMatchObject({ ok: false, status: 400, reason: "no-valid-citation" });
   });
 
-  it("rejects support-unverified claim and citation promotion", async () => {
+  it("rejects promotion of a pending (unjudged) claim citation", async () => {
     const cite = await validCitation();
     const claim: InquiryClaim = {
+      id: "claim-1",
       text: "待核结论",
       type: "fact",
-      status: "unverified",
-      support_status: "support-unverified",
-      citations: [{ ...cite, support_status: "support-unverified" }],
+      support: "pending",
+      citations: [{ ...cite, verdict: "pending" }],
     };
+    const ref = await seedClaim(claim);
 
-    await expect(findings.create(OPERATOR, caseId, { claim })).rejects.toMatchObject({ status: 400 });
-    await expect(findings.create(OPERATOR, caseId, {
-      conclusion: "待核结论",
-      supporting_citations: [{ ...cite, support_status: "support-unverified" }],
-    })).rejects.toMatchObject({ status: 400 });
+    const result = await findings.create(OPERATOR, caseId, ref);
+    expect(result).toMatchObject({ ok: false, status: 400, reason: "no-valid-citation" });
   });
 
   it("T6: finding create denied for non-owner/non-admin and records deny audit", async () => {
     const cite = await validCitation();
 
-    await expect(findings.create(SECURITY, caseId, {
+    await expect(findings.createFromCitations(SECURITY, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [cite],
       confidence: 0.9,
@@ -170,7 +202,7 @@ describe("FindingService", () => {
   });
 
   it("T7: finding approve denied for non-security/non-admin and records deny audit", async () => {
-    const created = await findings.create(OPERATOR, caseId, {
+    const created = await findings.createFromCitations(OPERATOR, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [await validCitation()],
       confidence: 0.9,
@@ -187,19 +219,19 @@ describe("FindingService", () => {
     const { quote: _quote, quote_hash: _quoteHash, ...quoteLess } = cite;
 
     // 无 quote 的引用缺逐字 span，Finding 侧严格契约拒绝（证据红线，不得放宽）。
-    await expect(findings.create(OPERATOR, caseId, {
+    await expect(findings.createFromCitations(OPERATOR, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [quoteLess],
       confidence: 0.9,
     })).rejects.toMatchObject({ status: 400 });
 
-    await expect(findings.create(OPERATOR, caseId, {
+    await expect(findings.createFromCitations(OPERATOR, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [cite],
       confidence: 1.2,
     })).rejects.toMatchObject({ status: 400 });
 
-    await expect(findings.create(ADMIN, caseId, {
+    await expect(findings.createFromCitations(ADMIN, caseId, {
       conclusion: "目标甲在码头出现。",
       supporting_citations: [cite],
       confidence: 0.7,

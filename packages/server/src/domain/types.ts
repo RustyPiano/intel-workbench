@@ -94,9 +94,13 @@ export interface Chunk {
   content_hash: string;
 }
 
-/** 溯源引用（工程方案 §4.3）。指向被检索出的素材片段。 */
-export type CitationSupportLabel = "supports" | "mentions" | "contradicts" | "context-only" | "unknown";
-export type CitationSupportStatus = "supported" | "support-unverified" | "unsupported";
+/**
+ * 溯源引用（工程方案 §4.3）。指向被检索出的素材片段。
+ * `verdict` 是引用相对某条结论的单一判定（Batch A：三层同义状态收敛为单一判定链）：
+ * supports=支持，contradicts=对立，mentions=仅提及，context=背景，pending=未裁判/裁判异常。
+ * cite 工具新建引用默认 pending，LLM 裁判后写实际判定。
+ */
+export type CitationVerdict = "supports" | "contradicts" | "mentions" | "context" | "pending";
 
 export interface Citation {
   material_id: string;
@@ -112,16 +116,18 @@ export interface Citation {
   quote_char_start?: number;
   quote_char_end?: number;
   quote_hash?: string;
-  support_label?: CitationSupportLabel;
-  support_status?: CitationSupportStatus;
+  verdict: CitationVerdict;
 }
 
-/** 单条结论。校验不通过降级为"待核"（unverified，§7.3 step 4）。 */
+/** 单条结论支持度：服务端从其 citations 的 verdict 聚合派生。 */
+export type ClaimSupport = "supported" | "pending" | "unsupported";
+
+/** 单条结论。`id` 由服务端 add_claim 时分配、稳定唯一，供 Finding 晋升精确引用。 */
 export interface InquiryClaim {
+  id: string;
   text: string;
   type: "fact" | "inference";
-  status: "verified" | "unverified";
-  support_status?: CitationSupportStatus;
+  support: ClaimSupport;
   citations: Citation[];
 }
 
@@ -138,6 +144,8 @@ export interface Finding {
   reviewed_by?: string;
   reviewed_at?: string;
   open_questions: string[];
+  /** 由某条问答结论晋升而来时记录来源，供 already-promoted 判定（Batch A）。 */
+  source_claim?: { inquiryId: string; claimId: string };
 }
 
 /** agent submit_finding 提交的结构化候选：随 Inquiry 落盘，供建议引擎生成带对立证据的候选。 */

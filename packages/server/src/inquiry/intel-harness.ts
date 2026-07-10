@@ -9,7 +9,7 @@ import type { Citation, Chunk, ChunkLocator, Identity, Material, Modality } from
 import { cropImage, extractFrame } from "../materials/ffmpeg.js";
 import type { AsrAdapter, OcrAdapter, VlmAdapter } from "../model/slots.js";
 import type { OfflineGuard } from "../security/offline-guard.js";
-import { sha256, sha256Bytes } from "../util/hash.js";
+import { sha256, sha256Bytes, shortId } from "../util/hash.js";
 import { chunkToCitation } from "./citation.js";
 
 export interface SubmittedFinding {
@@ -22,12 +22,19 @@ export interface SubmittedFinding {
   open_questions: string[];
 }
 
+/** 结论草稿：id 由 add_claim 时服务端分配、稳定唯一（供 Finding 晋升精确引用）。 */
+export interface DraftClaim {
+  id: string;
+  text: string;
+  cite_ids: string[];
+}
+
 export interface CitationLedger {
   retrieved: Map<string, Chunk>;
   cited: Map<string, Citation>;
   /** add_claim 逐条累积的待封卷结论；finalize_answer 空参调用时封为 finalize。 */
-  draftClaims: { text: string; cite_ids: string[] }[];
-  finalize: { claims: { text: string; cite_ids: string[] }[] } | null;
+  draftClaims: DraftClaim[];
+  finalize: { claims: DraftClaim[] } | null;
   submittedFindings: SubmittedFinding[];
   readBytes: number;
   nextCiteSeq: number;
@@ -546,7 +553,7 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
         if (deps.ledger.draftClaims.length >= MAX_FINAL_CLAIMS) {
           return { ok: false, content: `结论数量已达上限 ${MAX_FINAL_CLAIMS}，请 finalize_answer 封卷。` };
         }
-        deps.ledger.draftClaims.push({ text, cite_ids });
+        deps.ledger.draftClaims.push({ id: shortId("claim-"), text, cite_ids });
         return { ok: true, content: JSON.stringify({ claim_index: deps.ledger.draftClaims.length, total: deps.ledger.draftClaims.length }) };
       },
     },
@@ -559,9 +566,9 @@ export function createIntelTools(deps: IntelToolDeps): RuntimeTool[] {
       }),
       async execute(args) {
         const { claims } = args as { claims?: { text: string; cite_ids: string[] }[] };
-        // 带 claims（非空）→ 维持一次性提交的旧语义（向后兼容）。
+        // 带 claims（非空）→ 维持一次性提交的旧语义（向后兼容）；服务端补分配稳定 id。
         if (claims && claims.length > 0) {
-          deps.ledger.finalize = { claims };
+          deps.ledger.finalize = { claims: claims.map((claim) => ({ id: shortId("claim-"), text: claim.text, cite_ids: claim.cite_ids })) };
           return { ok: true, content: "已提交最终结论。" };
         }
         // 空参 → 封存 add_claim 逐条累积的 draftClaims。

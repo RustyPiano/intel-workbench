@@ -7,15 +7,29 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { CaseManifest, Chunk, Citation, Finding, FindingReviewStatus, Identity, InquiryClaim } from "../domain/types.js";
-import { validateCitationIntegrity } from "../inquiry/citation.js";
+import type { CaseManifest, Chunk, Citation, Finding, FindingReviewStatus, Identity, Inquiry } from "../domain/types.js";
+import { aggregateSupport, validateCitationIntegrity } from "../inquiry/citation.js";
+import { parseInquiries } from "../inquiry/inquiry-service.js";
 import { findingsFilePath, readFindings, replaceFindings } from "./finding-store.js";
 import { shortId } from "../util/hash.js";
 
+/** HTTP 晋升入参（Batch A）：只收结论引用，服务端从 inquiries.jsonl 加载并重校验，杜绝客户端伪造支持性。 */
 export interface CreateFindingInput {
-  claim?: InquiryClaim;
-  conclusion?: string;
-  supporting_citations?: Citation[];
+  inquiryId?: string;
+  claimId?: string;
+  confidence?: number;
+}
+
+export type PromotionReason = "not-supported" | "no-valid-citation" | "already-promoted";
+
+export type CreateFindingResult =
+  | { ok: true; finding: Finding }
+  | { ok: false; status: number; reason: PromotionReason };
+
+/** 服务端内部 API（不经 HTTP）：从 conclusion + 已校验引用建 Finding，供建议采纳（含矛盾/时间线来源）。 */
+export interface CreateFromCitationsInput {
+  conclusion: string;
+  supporting_citations: Citation[];
   opposing_citations?: Citation[];
   confidence?: number;
   open_questions?: string[];
@@ -34,48 +48,111 @@ export class FindingService {
     private readonly cases: CaseService,
   ) {}
 
-  async create(actor: Identity, caseId: string, input: CreateFindingInput): Promise<Finding> {
+  /**
+   * 从某条问答结论晋升为 Finding（HTTP 入口）。服务端自 inquiries.jsonl 加载对应 claim，
+   * 逐条 span 重校验取有效引用，基于有效引用的 verdict 重算 support；仅当 support===supported
+   * 且至少一条有效 supports 引用、且该 claim 未晋升过才创建。支持性语义一律由服务端裁定，杜绝客户端伪造。
+   */
+  async create(actor: Identity, caseId: string, input: CreateFindingInput): Promise<CreateFindingResult> {
     const manifest = await this.cases.get(actor, caseId);
     if (!this.canCreate(actor, manifest)) {
       await this.auditCreateDeny(actor, caseId, "role");
       throw new AppError(403, "仅专题创建者或管理员可创建 Finding");
     }
-    const fromClaim = input.claim;
-    if (fromClaim && !this.canPromoteClaim(fromClaim)) {
-      await this.auditCreateDeny(actor, caseId, "unsupported-claim");
-      throw new AppError(400, "仅可从 supported 结论创建 Finding");
+    const inquiryId = (input.inquiryId ?? "").trim();
+    const claimId = (input.claimId ?? "").trim();
+    if (!inquiryId || !claimId) {
+      await this.auditCreateDeny(actor, caseId, "missing-claim-ref");
+      throw new AppError(400, "创建 Finding 需提供 inquiryId 与 claimId");
     }
 
-    const conclusion = (fromClaim?.text ?? input.conclusion ?? "").trim();
+    const inquiry = (await this.loadInquiries(caseId)).find((item) => item.id === inquiryId);
+    const claim = inquiry?.claims.find((item) => item.id === claimId);
+    if (!claim) {
+      await this.auditCreateDeny(actor, caseId, "claim-not-found");
+      throw new AppError(404, "对应的问答结论不存在");
+    }
+
+    // already-promoted：同一 (inquiryId, claimId) 已晋升过。
+    const existing = await readFindings(this.paths, caseId);
+    if (existing.some((finding) => finding.source_claim?.inquiryId === inquiryId && finding.source_claim?.claimId === claimId)) {
+      await this.auditCreateDeny(actor, caseId, "already-promoted");
+      return { ok: false, status: 409, reason: "already-promoted" };
+    }
+
+    // 逐条 span 重校验 → 有效引用；基于有效引用的 verdict 重算 support。
+    const chunks = await this.loadCaseChunks(manifest);
+    const valid = claim.citations.filter((citation) => this.citationStillValid(citation, chunks));
+    if (valid.length === 0 || !valid.some((citation) => citation.verdict === "supports")) {
+      await this.auditCreateDeny(actor, caseId, "no-valid-citation");
+      return { ok: false, status: 400, reason: "no-valid-citation" };
+    }
+    if (aggregateSupport(valid, true) !== "supported") {
+      await this.auditCreateDeny(actor, caseId, "not-supported");
+      return { ok: false, status: 400, reason: "not-supported" };
+    }
+
+    const conclusion = claim.text.trim();
+    const confidence = input.confidence ?? this.defaultConfidence(valid);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      await this.auditCreateDeny(actor, caseId, "confidence");
+      throw new AppError(400, "Finding 置信度必须在 0 到 1 之间");
+    }
+    const finding: Finding = {
+      id: shortId("f-"),
+      caseId,
+      conclusion,
+      supporting_citations: valid,
+      opposing_citations: [],
+      confidence,
+      review_status: "draft",
+      open_questions: [],
+      source_claim: { inquiryId, claimId },
+    };
+    await this.mutate(caseId, (findings) => {
+      findings.push(finding);
+    });
+    await this.audit.append({
+      user: actor.id,
+      action: "finding.create",
+      object: `finding:${finding.id}`,
+      caseId,
+      detail: { caseId, findingId: finding.id, inquiryId, claimId, citationCount: valid.length },
+    });
+    return { ok: true, finding };
+  }
+
+  /**
+   * 服务端内部 API：从 conclusion + 已校验引用建 Finding。仅供 SuggestionService.applyFinding 采纳
+   * 建议使用（内容由服务端生成，含矛盾/时间线/结构化研判来源，不可伪造），不暴露于任何 HTTP 请求体。
+   * 引用须逐条 span 重校验；支持性已由建议引擎上游按 verdict 过滤。
+   */
+  async createFromCitations(actor: Identity, caseId: string, input: CreateFromCitationsInput): Promise<Finding> {
+    const manifest = await this.cases.get(actor, caseId);
+    if (!this.canCreate(actor, manifest)) {
+      await this.auditCreateDeny(actor, caseId, "role");
+      throw new AppError(403, "仅专题创建者或管理员可创建 Finding");
+    }
+    const conclusion = input.conclusion.trim();
     if (!conclusion) {
       await this.auditCreateDeny(actor, caseId, "empty-conclusion");
       throw new AppError(400, "Finding 结论不能为空");
     }
-
-    const chunks = await this.loadCaseChunks(manifest);
-    const supporting = fromClaim
-      ? this.promotableCitations(fromClaim).filter((citation) => this.citationStillValid(citation, chunks))
-      : (input.supporting_citations ?? []);
+    const supporting = input.supporting_citations;
     const opposing = input.opposing_citations ?? [];
-    const unverifiedSupporting = supporting.some((citation) => citation.support_status === "support-unverified" || citation.support_status === "unsupported");
-    const unverifiedOpposing = opposing.some((citation) => citation.support_status === "support-unverified"
-      || (citation.support_status === "unsupported" && citation.support_label !== "contradicts"));
-    if (unverifiedSupporting || unverifiedOpposing) {
-      await this.auditCreateDeny(actor, caseId, "citation:not-supported");
-      throw new AppError(400, "Finding 不得包含未通过支持性校验的引用");
-    }
     if (supporting.length === 0) {
       await this.auditCreateDeny(actor, caseId, "missing-supporting-citation");
       throw new AppError(400, "Finding 至少需要一条支持引用");
+    }
+    const chunks = await this.loadCaseChunks(manifest);
+    if (![...supporting, ...opposing].every((citation) => this.citationStillValid(citation, chunks))) {
+      await this.auditCreateDeny(actor, caseId, "citation:invalid");
+      throw new AppError(400, "Finding 引用必须匹配当前素材 span");
     }
     const confidence = input.confidence ?? this.defaultConfidence(supporting);
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
       await this.auditCreateDeny(actor, caseId, "confidence");
       throw new AppError(400, "Finding 置信度必须在 0 到 1 之间");
-    }
-    if (![...supporting, ...opposing].every((citation) => this.citationStillValid(citation, chunks))) {
-      await this.auditCreateDeny(actor, caseId, "citation:invalid");
-      throw new AppError(400, "Finding 引用必须匹配当前素材 span");
     }
     const finding: Finding = {
       id: shortId("f-"),
@@ -87,7 +164,6 @@ export class FindingService {
       review_status: "draft",
       open_questions: (input.open_questions ?? []).map((q) => q.trim()).filter(Boolean),
     };
-
     await this.mutate(caseId, (findings) => {
       findings.push(finding);
     });
@@ -96,7 +172,7 @@ export class FindingService {
       action: "finding.create",
       object: `finding:${finding.id}`,
       caseId,
-      detail: { caseId, findingId: finding.id, fromClaim: Boolean(fromClaim), citationCount: supporting.length },
+      detail: { caseId, findingId: finding.id, fromCitations: true, citationCount: supporting.length },
     });
     return finding;
   }
@@ -148,15 +224,13 @@ export class FindingService {
     return actor.role === "admin" || manifest.owner === actor.id;
   }
 
-  private canPromoteClaim(claim: InquiryClaim): boolean {
-    if (claim.support_status === "unsupported" || claim.support_status === "support-unverified") return false;
-    if (claim.support_status === "supported") return this.promotableCitations(claim).length > 0;
-    return claim.status === "verified" && this.promotableCitations(claim).length > 0;
-  }
-
-  private promotableCitations(claim: InquiryClaim): Citation[] {
-    // 旧版 verified claim 没有 support_status，保留兼容；显式 unverified/unsupported 不得晋升。
-    return claim.citations.filter((citation) => citation.support_status === undefined || citation.support_status === "supported");
+  private async loadInquiries(caseId: string): Promise<Inquiry[]> {
+    try {
+      return parseInquiries(await readFile(path.join(this.paths.caseDir(caseId), "inquiries.jsonl"), "utf8"));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw e;
+    }
   }
 
   private defaultConfidence(citations: Citation[]): number {

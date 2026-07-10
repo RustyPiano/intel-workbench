@@ -1,4 +1,4 @@
-import type { Chunk, Citation } from "../domain/types.js";
+import type { Chunk, Citation, CitationVerdict, ClaimSupport } from "../domain/types.js";
 import { sha256 } from "../util/hash.js";
 
 /**
@@ -7,7 +7,7 @@ import { sha256 } from "../util/hash.js";
  * 其 content_hash 与当前素材一致时才有效（杜绝凭空捏造 / 素材变更后失效）。
  */
 
-export function chunkToCitation(chunk: Chunk, materialName: string, confidence = 0.6, quote?: string, quoteStart?: number): Citation {
+export function chunkToCitation(chunk: Chunk, materialName: string, confidence = 0.6, quote?: string, quoteStart?: number, verdict: CitationVerdict = "pending"): Citation {
   const start = quote === undefined ? -1 : quoteStart ?? chunk.text.indexOf(quote);
   if (quote !== undefined && (start < 0 || chunk.text.slice(start, start + quote.length) !== quote)) {
     throw new Error("quote is not a substring of chunk.text");
@@ -21,6 +21,7 @@ export function chunkToCitation(chunk: Chunk, materialName: string, confidence =
     snippet: quote ?? chunk.text.slice(0, 200),
     confidence,
     content_hash: chunk.content_hash,
+    verdict,
     ...(quote === undefined ? {} : {
       quote,
       quote_char_start: start,
@@ -30,7 +31,10 @@ export function chunkToCitation(chunk: Chunk, materialName: string, confidence =
   };
 }
 
-/** 解析候选 chunk_id 列表为有效 Citation（丢弃不存在或 hash 不一致的）。 */
+/**
+ * 解析候选 chunk_id 列表为有效 Citation（丢弃不存在或 hash 不一致的）。
+ * 结构化路径与要素抽取直接以模型给定的绑定为准，判定记 supports（受控管线已过 hash 接地）。
+ */
 export function resolveValidCitations(
   ids: readonly string[],
   retrievedById: Map<string, Chunk>,
@@ -40,9 +44,21 @@ export function resolveValidCitations(
   for (const id of ids) {
     const chunk = retrievedById.get(id);
     if (!chunk || sha256(chunk.text) !== chunk.content_hash) continue;
-    citations.push(chunkToCitation(chunk, nameById.get(chunk.material_id) ?? chunk.material_id));
+    citations.push(chunkToCitation(chunk, nameById.get(chunk.material_id) ?? chunk.material_id, 0.6, undefined, undefined, "supports"));
   }
   return citations;
+}
+
+/**
+ * 结论支持度聚合（Batch A：原 support_status 聚合语义改名迁移）。
+ * hashGrounded=false（存在未接地引用）直接判 unsupported；否则全 supports → supported，
+ * 全非 supports/pending → unsupported，其余（混入 pending）→ pending。
+ */
+export function aggregateSupport(citations: readonly Citation[], hashGrounded: boolean): ClaimSupport {
+  if (!hashGrounded || citations.length === 0) return "unsupported";
+  if (citations.every((citation) => citation.verdict === "supports")) return "supported";
+  if (citations.every((citation) => citation.verdict !== "supports" && citation.verdict !== "pending")) return "unsupported";
+  return "pending";
 }
 
 export interface CitationIntegrity {

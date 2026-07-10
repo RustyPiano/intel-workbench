@@ -236,7 +236,7 @@ describe("AutoInquiryService（阶段三 M3 自动研判批处理）", () => {
       // 问答记录已持久化（含结构化候选）。
       const list = await inquiries.list(OPERATOR, gateCaseId);
       expect(list).toHaveLength(1);
-      expect(list[0]!.submitted_findings?.[0]?.supporting_citations[0]?.support_status).toBe("supported");
+      expect(list[0]!.submitted_findings?.[0]?.supporting_citations[0]?.verdict).toBe("supports");
       // 既有「问答候选 → Finding 候选池」机制入池。
       const pool = await suggestionsForPool.suggestFindings(OPERATOR, gateCaseId);
       const structured = pool.filter((s) => s.source === "inquiry-structured");

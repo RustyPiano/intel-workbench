@@ -52,8 +52,8 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
       { filename: "intel.txt", content: `前情。${conclusion}后续。` },
     ]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, conclusion), support_status: "supported" as const };
-    const finding = await findings.create(OPERATOR, caseId, {
+    const citation = { ...chunkToCitation(chunk, "intel.txt", 0.9, conclusion), verdict: "supports" as const };
+    const finding = await findings.createFromCitations(OPERATOR, caseId, {
       conclusion,
       supporting_citations: [citation],
       confidence: 0.9,
@@ -426,10 +426,10 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
     const chunk = (await materials.loadCaseChunks(caseId))[0];
     const citation = {
       ...chunkToCitation(chunk, "classified.txt", 0.9, "目标甲在码头出现。"),
-      support_status: "supported" as const,
+      verdict: "supports" as const,
       classification: "topsecret",
     } as Citation & { classification: string };
-    const finding = await findings.create(OPERATOR, caseId, { conclusion: "目标甲在码头出现。", supporting_citations: [citation] });
+    const finding = await findings.createFromCitations(OPERATOR, caseId, { conclusion: "目标甲在码头出现。", supporting_citations: [citation] });
     await findings.review(SECURITY, caseId, finding.id, { review_status: "approved" });
     await seedCompleteContradictions();
 
@@ -442,7 +442,7 @@ describe("ReportService 复核闸门状态机（§7.4）", () => {
   it("旧数据中含 support-unverified 引用的 Finding 不进入报告候选", async () => {
     await materials.ingest(OPERATOR, caseId, [{ filename: "unverified.txt", content: "待核线索。" }]);
     const chunk = (await materials.loadCaseChunks(caseId))[0];
-    const citation = { ...chunkToCitation(chunk, "unverified.txt", 0.8, "待核线索。"), support_status: "support-unverified" as const };
+    const citation = { ...chunkToCitation(chunk, "unverified.txt", 0.8, "待核线索。"), verdict: "pending" as const };
     const legacy: Finding = {
       id: "f-unverified",
       caseId,

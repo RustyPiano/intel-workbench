@@ -461,7 +461,7 @@ export class ReportService {
   private validateFindingCitations(finding: Finding, chunks: Chunk[], reasons: Set<string>): { hasValidSpan: boolean } {
     let hasValidSpan = false;
     for (const citation of finding.supporting_citations) {
-      if (citation.support_status === "support-unverified" || citation.support_status === "unsupported") {
+      if (citation.verdict !== "supports") {
         reasons.add("citation:support-unverified");
         continue;
       }
@@ -651,7 +651,7 @@ export class ReportService {
 
   private isReportableFinding(finding: Finding): boolean {
     return finding.supporting_citations.length > 0
-      && finding.supporting_citations.every((citation) => citation.support_status !== "support-unverified" && citation.support_status !== "unsupported");
+      && finding.supporting_citations.every((citation) => citation.verdict === "supports");
   }
 
   private requiredClassification(manifest: CaseManifest, findings: Finding[]): Clearance {

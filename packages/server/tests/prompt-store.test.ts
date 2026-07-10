@@ -112,9 +112,10 @@ function adapterReturning(content: () => string, inputs: GenerateInput[]): Model
   };
 }
 
-function stripInquiry(inquiry: Inquiry): Omit<Inquiry, "id" | "ts"> {
-  const { id: _id, ts: _ts, ...stable } = inquiry;
-  return stable;
+function stripInquiry(inquiry: Inquiry): unknown {
+  // 服务端为每条 claim 分配随机稳定 id，等价性比较前一并剔除。
+  const { id: _id, ts: _ts, claims, ...stable } = inquiry;
+  return { ...stable, claims: claims.map(({ id: _cid, ...claim }) => claim) };
 }
 
 function stripElement(element: Element): Omit<Element, "id"> {

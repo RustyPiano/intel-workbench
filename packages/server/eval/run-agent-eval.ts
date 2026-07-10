@@ -51,8 +51,7 @@ const QUESTIONS: EvalQuestion[] = [
 /** 每条结论摘要（离线核对内容质量用；不进指标，只记录）。 */
 interface ClaimSummary {
   text: string;
-  status: Inquiry["claims"][number]["status"];
-  support_status?: string;
+  support: Inquiry["claims"][number]["support"];
   citations: number;
   materials: string[];
 }
@@ -143,8 +142,7 @@ async function readInquiryDetail(audit: AuditService, caseId: string, inquiryId:
 function summarizeClaims(inquiry: Inquiry): ClaimSummary[] {
   return inquiry.claims.map((claim) => ({
     text: claim.text,
-    status: claim.status,
-    ...(claim.support_status ? { support_status: claim.support_status } : {}),
+    support: claim.support,
     citations: claim.citations.length,
     materials: [...new Set(claim.citations.map((c) => c.material_name))],
   }));

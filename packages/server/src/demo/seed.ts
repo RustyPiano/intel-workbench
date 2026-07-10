@@ -68,7 +68,7 @@ function citation(built: BuiltMaterial[], materialId: string, quote: string, con
   const item = built.find((candidate) => candidate.material.id === materialId);
   const chunk = item?.chunks.find((candidate) => candidate.text.includes(quote));
   if (!item || !chunk) throw new Error(`demo quote not found: ${materialId} ${quote}`);
-  return { ...chunkToCitation(chunk, item.material.filename, confidence, quote), support_status: "supported" };
+  return { ...chunkToCitation(chunk, item.material.filename, confidence, quote), verdict: "supports" };
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> {
@@ -380,10 +380,10 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       status: "answered",
       answer: "关键证据分为靠泊时间线、车辆登记缺口、LH-7712 异常流转、封志/查验流程、地磅状态五类。",
       claims: [
-        { text: "靠泊记录称 22:30 已完成靠泊，但 AIS、VTS 和泊位计划均指向更晚的靠泊时间。", type: "fact", status: "verified", support_status: "supported", citations: [cBrief, cAis, cVts, cBerthPlan] },
-        { text: "三号门人工登记为两辆，OCR 与堆场复核为四辆，差额车辆缺少补录审批。", type: "fact", status: "verified", support_status: "supported", citations: [cGateTwo, cOcrFour, cYardFour, cSopNoApproval] },
-        { text: "LH-7712 在仓储系统未到仓，但堆场、聊天和照片材料都指向其夜间出现在东三泊位北侧。", type: "fact", status: "verified", support_status: "supported", citations: [cWarehouseLh, cYardLh, cDriverLh, cPhotoSealMissing] },
-        { text: "查验前不得拆封的流程要求与 23:18 封志缺失、00:20 封志完好的记录发生冲突。", type: "fact", status: "verified", support_status: "supported", citations: [cCustomsNoOpen, cPhotoSealMissing, cSealPerfect] },
+        { id: "claim-pke-1", text: "靠泊记录称 22:30 已完成靠泊，但 AIS、VTS 和泊位计划均指向更晚的靠泊时间。", type: "fact", support: "supported", citations: [cBrief, cAis, cVts, cBerthPlan] },
+        { id: "claim-pke-2", text: "三号门人工登记为两辆，OCR 与堆场复核为四辆，差额车辆缺少补录审批。", type: "fact", support: "supported", citations: [cGateTwo, cOcrFour, cYardFour, cSopNoApproval] },
+        { id: "claim-pke-3", text: "LH-7712 在仓储系统未到仓，但堆场、聊天和照片材料都指向其夜间出现在东三泊位北侧。", type: "fact", support: "supported", citations: [cWarehouseLh, cYardLh, cDriverLh, cPhotoSealMissing] },
+        { id: "claim-pke-4", text: "查验前不得拆封的流程要求与 23:18 封志缺失、00:20 封志完好的记录发生冲突。", type: "fact", support: "supported", citations: [cCustomsNoOpen, cPhotoSealMissing, cSealPerfect] },
       ],
     },
     {
@@ -394,9 +394,9 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       status: "answered",
       answer: "现有材料不支持 22:30 已靠泊。更可信的时间线是 23:10 仍在外锚地，23:20 后等待引航确认，预计 23:30 左右进入港池。",
       claims: [
-        { text: "值班简报的 22:30 已靠泊与 AIS 的 23:10 外锚地记录冲突。", type: "fact", status: "verified", support_status: "supported", citations: [cBrief, cAis] },
-        { text: "VTS 和泊位计划都指向 23:20 后引航确认、23:30 左右靠泊。", type: "fact", status: "verified", support_status: "supported", citations: [cVts, cVts2330, cBerthPlan] },
-        { text: "潮汐与能见度背景不足以解释 AIS 与靠泊日志的冲突。", type: "inference", status: "verified", support_status: "supported", citations: [cWeatherStable, cTideStable] },
+        { id: "claim-b2230-1", text: "值班简报的 22:30 已靠泊与 AIS 的 23:10 外锚地记录冲突。", type: "fact", support: "supported", citations: [cBrief, cAis] },
+        { id: "claim-b2230-2", text: "VTS 和泊位计划都指向 23:20 后引航确认、23:30 左右靠泊。", type: "fact", support: "supported", citations: [cVts, cVts2330, cBerthPlan] },
+        { id: "claim-b2230-3", text: "潮汐与能见度背景不足以解释 AIS 与靠泊日志的冲突。", type: "inference", support: "supported", citations: [cWeatherStable, cTideStable] },
       ],
     },
     {
@@ -407,9 +407,9 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       status: "answered",
       answer: "存在较强风险：该箱未列入夜间卸载清单，仓储系统未到仓，现场材料显示其 23 点前后出现在东三泊位北侧，并出现封志缺失。",
       claims: [
-        { text: "LH-7712 未列入 7 月 1 日夜间卸载清单，且仓储系统状态为未到仓。", type: "fact", status: "verified", support_status: "supported", citations: [cBerthNoLh, cWarehouseLh] },
-        { text: "堆场记录、司机聊天和现场照片均指向 LH-7712 23 点前后在东三泊位北侧出现。", type: "fact", status: "verified", support_status: "supported", citations: [cYardLh, cDriverLh, cPhotoSealMissing] },
-        { text: "封志状态在现场照片与 00:20 巡检之间冲突，且巡检照片缺少 EXIF。", type: "fact", status: "verified", support_status: "supported", citations: [cPhotoSealMissing, cSealPerfect, cSealNoExif] },
+        { id: "claim-lh-1", text: "LH-7712 未列入 7 月 1 日夜间卸载清单，且仓储系统状态为未到仓。", type: "fact", support: "supported", citations: [cBerthNoLh, cWarehouseLh] },
+        { id: "claim-lh-2", text: "堆场记录、司机聊天和现场照片均指向 LH-7712 23 点前后在东三泊位北侧出现。", type: "fact", support: "supported", citations: [cYardLh, cDriverLh, cPhotoSealMissing] },
+        { id: "claim-lh-3", text: "封志状态在现场照片与 00:20 巡检之间冲突，且巡检照片缺少 EXIF。", type: "fact", support: "supported", citations: [cPhotoSealMissing, cSealPerfect, cSealNoExif] },
       ],
     },
     {
@@ -420,9 +420,9 @@ export async function seedDemoWorkspace(paths: DataPaths, audit: AuditService): 
       status: "answered",
       answer: "还缺三号门原始视频、地磅照片、现场照片原图 EXIF、补录审批、海关实际查验结果，以及下载后的公开多媒体附件。",
       claims: [
-        { text: "夜间异常车辆进入限制区时应保存登记表、OCR 截图、放行口令和补录审批。", type: "fact", status: "verified", support_status: "supported", citations: [cSopApproval] },
-        { text: "当前 seed 只保存公开素材来源索引和派生摘要，大型图片、视频、音频二进制未打包。", type: "fact", status: "verified", support_status: "supported", citations: [cSourceMedia, cMediaIndex] },
-        { text: "原始三号门视频、地磅照片、补录审批和海关查验结果仍是闭环缺口。", type: "inference", status: "unverified", support_status: "support-unverified", citations: [cSopNoApproval, cFollowupAck, cCustomsNoApproval] },
+        { id: "claim-miss-1", text: "夜间异常车辆进入限制区时应保存登记表、OCR 截图、放行口令和补录审批。", type: "fact", support: "supported", citations: [cSopApproval] },
+        { id: "claim-miss-2", text: "当前 seed 只保存公开素材来源索引和派生摘要，大型图片、视频、音频二进制未打包。", type: "fact", support: "supported", citations: [cSourceMedia, cMediaIndex] },
+        { id: "claim-miss-3", text: "原始三号门视频、地磅照片、补录审批和海关查验结果仍是闭环缺口。", type: "inference", support: "pending", citations: [cSopNoApproval, cFollowupAck, cCustomsNoApproval] },
       ],
     },
   ];

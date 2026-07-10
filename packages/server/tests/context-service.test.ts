@@ -36,6 +36,7 @@ function cite(hash: string, confidence = 0.8): Citation {
     snippet: hash,
     confidence,
     content_hash: hash,
+    verdict: "supports",
   };
 }
 
@@ -69,7 +70,7 @@ function contradictionResult(contradictions: Contradiction[]): ContradictionDete
 }
 
 function inquiry(id: string, question: string): Inquiry {
-  const claim: InquiryClaim = { text: `${question}的答案`, type: "fact", status: "verified", support_status: "supported", citations: [cite(id)] };
+  const claim: InquiryClaim = { id: `claim-${id}`, text: `${question}的答案`, type: "fact", support: "supported", citations: [cite(id)] };
   return { id, ts: new Date().toISOString(), user: OPERATOR.id, question, status: "answered", answer: "", claims: [claim] };
 }
 
@@ -128,7 +129,7 @@ describe("ContextService", () => {
     await materials.ingest(OPERATOR, caseId, [{ filename: `intel-${Date.now()}-${Math.random()}.txt`, content: `前情。${text}后续。` }]);
     const chunks = await materials.loadCaseChunks(caseId);
     const chunk = chunks[chunks.length - 1]!;
-    return { ...chunkToCitation(chunk, "intel.txt", 0.9, text), support_status: "supported" };
+    return { ...chunkToCitation(chunk, "intel.txt", 0.9, text), verdict: "supports" };
   }
 
   describe("estimateTokens", () => {
@@ -213,10 +214,10 @@ describe("ContextService", () => {
 
     it("token 预算裁剪：按置信度优先保留 finding，从最低置信度开始丢弃，materials 至少保留 1 条", async () => {
       const supportCitation = await validCitation();
-      await findings.create(OPERATOR, caseId, { conclusion: "结论A", supporting_citations: [supportCitation], confidence: 0.9 });
-      await findings.create(OPERATOR, caseId, { conclusion: "结论B", supporting_citations: [supportCitation], confidence: 0.8 });
-      await findings.create(OPERATOR, caseId, { conclusion: "结论C", supporting_citations: [supportCitation], confidence: 0.4 });
-      await findings.create(OPERATOR, caseId, { conclusion: "结论D", supporting_citations: [supportCitation], confidence: 0.2 });
+      await findings.createFromCitations(OPERATOR, caseId, { conclusion: "结论A", supporting_citations: [supportCitation], confidence: 0.9 });
+      await findings.createFromCitations(OPERATOR, caseId, { conclusion: "结论B", supporting_citations: [supportCitation], confidence: 0.8 });
+      await findings.createFromCitations(OPERATOR, caseId, { conclusion: "结论C", supporting_citations: [supportCitation], confidence: 0.4 });
+      await findings.createFromCitations(OPERATOR, caseId, { conclusion: "结论D", supporting_citations: [supportCitation], confidence: 0.2 });
 
       const full = await context.buildContext(OPERATOR, caseId, "generate-report", { maxTokens: 1_000_000 });
       expect(full.findings).toHaveLength(4);
@@ -231,7 +232,7 @@ describe("ContextService", () => {
 
     it("极小预算下裁剪到只剩 1 条素材，其余数组清空", async () => {
       const supportCitation = await validCitation();
-      await findings.create(OPERATOR, caseId, { conclusion: "结论A", supporting_citations: [supportCitation], confidence: 0.9 });
+      await findings.createFromCitations(OPERATOR, caseId, { conclusion: "结论A", supporting_citations: [supportCitation], confidence: 0.9 });
       await writeElements([el("e1", "要素一", "person", 5)]);
       await writeContradictions([contradiction("c1", "甲", 0.9)]);
       await writeInquiries([inquiry("i1", "问题一")]);

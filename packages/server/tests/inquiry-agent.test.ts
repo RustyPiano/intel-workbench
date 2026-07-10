@@ -311,12 +311,12 @@ describe.sequential("InquiryService agent harness", () => {
 
     expect(inquiry.status).toBe("answered");
     expect(inquiry.answer).toContain("1. 发现舰船线索");
-    expect(inquiry.claims[0]?.status).toBe("verified");
+    expect(inquiry.claims[0]?.support).toBe("supported");
     expect(inquiry.claims[0]?.citations[0]?.material_name).toBe("intel.txt");
     expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
-    expect(inquiry.claims[0]?.support_status).toBe("supported");
-    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("supported");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("supports");
+    expect(inquiry.claims[0]?.support).toBe("supported");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("supports");
     expect(adapter.supportInputs[0]?.systemPrompt).toContain("如果 quote 是 claim 所述对比或差异中的一方原始记录");
     expect(inquiry.answer).not.toContain("raw final text");
   });
@@ -331,10 +331,10 @@ describe.sequential("InquiryService agent harness", () => {
 
     expect(inquiry.status).toBe("answered");
     expect(inquiry.answer).toContain("1. 发现舰船线索");
-    expect(inquiry.claims[0]?.status).toBe("verified");
+    expect(inquiry.claims[0]?.support).toBe("supported");
     expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
-    expect(inquiry.claims[0]?.support_status).toBe("supported");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[0]?.support).toBe("supported");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("supports");
   });
 
   it("keeps two claims on one chunk bound to their own quoted spans", async () => {
@@ -348,8 +348,8 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.claims).toHaveLength(2);
     expect(inquiry.claims[0]?.citations[0]?.quote).toBe("雷达记录到蓝色货轮");
     expect(inquiry.claims[1]?.citations[0]?.quote).toBe("港口日志显示红色拖船");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
-    expect(inquiry.claims[1]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("supports");
+    expect(inquiry.claims[1]?.citations[0]?.verdict).toBe("supports");
     expect(inquiry.claims[0]?.citations[0]?.quote_hash).not.toBe(inquiry.claims[1]?.citations[0]?.quote_hash);
   });
 
@@ -363,9 +363,9 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.status).toBe("insufficient");
     expect(inquiry.answer).not.toContain("同时发现蓝色货轮和红色拖船");
     expect(inquiry.claims).toHaveLength(1);
-    expect(inquiry.claims[0]?.status).toBe("unverified");
-    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
-    expect(inquiry.claims[0]?.citations.map((citation) => citation.support_status)).toEqual(["supported", "unsupported"]);
+    expect(inquiry.claims[0]?.support).toBe("pending");
+    expect(inquiry.claims[0]?.support).toBe("pending");
+    expect(inquiry.claims[0]?.citations.map((citation) => citation.verdict)).toEqual(["supports", "context"]);
   });
 
   it("stores a structured submit_finding candidate with verified supporting/opposing citations", async () => {
@@ -376,8 +376,8 @@ describe.sequential("InquiryService agent harness", () => {
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("structured-finding")).ask(OPERATOR, caseId, "门岗登记与OCR识别是否一致");
 
     expect(inquiry.submitted_findings).toHaveLength(1);
-    expect(inquiry.submitted_findings?.[0]?.supporting_citations[0]?.support_status).toBe("supported");
-    expect(inquiry.submitted_findings?.[0]?.opposing_citations[0]?.support_label).toBe("contradicts");
+    expect(inquiry.submitted_findings?.[0]?.supporting_citations[0]?.verdict).toBe("supports");
+    expect(inquiry.submitted_findings?.[0]?.opposing_citations[0]?.verdict).toBe("contradicts");
   });
 
   it("keeps support-unverified evidence in claims but excludes the submitted Finding candidate", async () => {
@@ -388,7 +388,7 @@ describe.sequential("InquiryService agent harness", () => {
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("structured-finding-unverified"))
       .ask(OPERATOR, caseId, "门岗登记与OCR识别是否一致");
 
-    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
+    expect(inquiry.claims[0]?.support).toBe("pending");
     expect(inquiry.submitted_findings).toBeUndefined();
   });
 
@@ -400,10 +400,10 @@ describe.sequential("InquiryService agent harness", () => {
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("context-only")).ask(OPERATOR, caseId, "有何舰船线索");
 
     expect(inquiry.status).toBe("insufficient");
-    expect(inquiry.claims[0]?.status).toBe("unverified");
-    expect(inquiry.claims[0]?.support_status).toBe("unsupported");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("context-only");
-    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("unsupported");
+    expect(inquiry.claims[0]?.support).toBe("unsupported");
+    expect(inquiry.claims[0]?.support).toBe("unsupported");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("context");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("context");
   });
 
   it("labels NLI failures unknown, returns the inquiry, and audits the failure", async () => {
@@ -415,10 +415,10 @@ describe.sequential("InquiryService agent harness", () => {
 
     expect(inquiry.status).toBe("insufficient");
     expect(inquiry.answer).not.toContain("发现舰船线索");
-    expect(inquiry.claims[0]?.status).toBe("unverified");
-    expect(inquiry.claims[0]?.support_status).toBe("support-unverified");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("unknown");
-    expect(inquiry.claims[0]?.citations[0]?.support_status).toBe("support-unverified");
+    expect(inquiry.claims[0]?.support).toBe("pending");
+    expect(inquiry.claims[0]?.support).toBe("pending");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("pending");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("pending");
     const events = await fixture.audit.readAll();
     expect(events.some((event) => event.action === "inquiry.support_verify" && event.result === "error")).toBe(true);
   });
@@ -444,7 +444,7 @@ describe.sequential("InquiryService agent harness", () => {
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("invalid-cite")).ask(OPERATOR, caseId, "舰船线索");
 
     expect(inquiry.status).toBe("insufficient");
-    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support).toBe("unsupported");
     expect(inquiry.claims[0]?.citations).toHaveLength(0);
   });
 
@@ -458,7 +458,7 @@ describe.sequential("InquiryService agent harness", () => {
     const inquiry = await createService(fixture, new DynamicInquiryAdapter("tampered")).ask(OPERATOR, caseId, "舰船线索");
 
     expect(inquiry.status).toBe("insufficient");
-    expect(inquiry.claims[0]?.status).toBe("unverified");
+    expect(inquiry.claims[0]?.support).toBe("unsupported");
     expect(inquiry.claims[0]?.citations).toHaveLength(0);
   });
 
@@ -643,7 +643,7 @@ describe.sequential("InquiryService agent harness", () => {
 
     const invalidOnly = await createService(fixture, new DynamicInquiryAdapter("invalid-cite")).ask(OPERATOR, noFinalizeCase, "舰船线索");
     expect(invalidOnly.status).toBe("insufficient");
-    expect(invalidOnly.claims[0]?.status).toBe("unverified");
+    expect(invalidOnly.claims[0]?.support).toBe("unsupported");
   });
 
   it("defaults to the agent ledger path when MINI_AGENT_INQUIRY_MODE is unset", async () => {
@@ -658,7 +658,7 @@ describe.sequential("InquiryService agent harness", () => {
     expect(inquiry.status).toBe("answered");
     expect(adapter.inputs[0]?.tools.map((tool) => tool.name)).toContain("cite");
     expect(inquiry.claims[0]?.citations[0]?.quote).toBe("舰船线索");
-    expect(inquiry.claims[0]?.citations[0]?.support_label).toBe("supports");
+    expect(inquiry.claims[0]?.citations[0]?.verdict).toBe("supports");
   });
 
   it("keeps the single-shot path only when MINI_AGENT_INQUIRY_MODE=single", async () => {

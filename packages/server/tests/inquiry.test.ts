@@ -85,7 +85,7 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
     });
     const inquiry = await service(stubAdapter(json)).ask(OPERATOR, caseId, "有何可疑舰船活动");
     expect(inquiry.status).toBe("answered");
-    expect(inquiry.claims[0].status).toBe("verified");
+    expect(inquiry.claims[0].support).toBe("supported");
     expect(inquiry.claims[0].citations[0].material_name).toBe("intel.txt");
     expect(inquiry.claims[0].citations[0].content_hash).toBeTruthy();
   });
@@ -97,7 +97,7 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
     });
     const inquiry = await service(stubAdapter(json)).ask(OPERATOR, caseId, "有何可疑舰船活动");
     expect(inquiry.status).toBe("insufficient");
-    expect(inquiry.claims[0].status).toBe("unverified");
+    expect(inquiry.claims[0].support).toBe("unsupported");
   });
 
   it("模型返回 insufficient:true → 拒答", async () => {
@@ -180,7 +180,7 @@ describe("InquiryService 问答带溯源（§7.3）", () => {
       const json = JSON.stringify({ claims: [{ text: "捏造结论", type: "fact", citations: ["m#999"] }], insufficient: false });
       const inq = await service(stubAdapter(json)).ask(OPERATOR, caseId, "任意问题");
       expect(inq.status).toBe("insufficient");
-      expect(inq.claims[0].status).toBe("unverified");
+      expect(inq.claims[0].support).toBe("unsupported");
     });
   });
 });

@@ -214,7 +214,7 @@ describe("add_claim 逐条提交与 finalize_answer 封卷", () => {
 
     const sealed = await find("finalize_answer").execute({}) as ToolReply;
     expect(sealed.ok).toBe(true);
-    expect(ledger.finalize).toEqual({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] });
+    expect(ledger.finalize).toEqual({ claims: [{ id: expect.any(String), text: "码头有异常装载", cite_ids: [citeId] }] });
   });
 
   it("超出单条引用数或结论总数上限时拒绝", async () => {
@@ -245,6 +245,6 @@ describe("add_claim 逐条提交与 finalize_answer 封卷", () => {
     const result = await find("finalize_answer").execute({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] }) as ToolReply;
 
     expect(result.ok).toBe(true);
-    expect(ledger.finalize).toEqual({ claims: [{ text: "码头有异常装载", cite_ids: [citeId] }] });
+    expect(ledger.finalize).toEqual({ claims: [{ id: expect.any(String), text: "码头有异常装载", cite_ids: [citeId] }] });
   });
 });

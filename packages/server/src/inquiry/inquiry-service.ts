@@ -8,14 +8,14 @@ import type { AuditService } from "../audit/audit-service.js";
 import type { CaseService } from "../cases/case-service.js";
 import type { DataPaths } from "../data/paths.js";
 import { AppError } from "../domain/identity.js";
-import type { Chunk, Citation, CitationSupportLabel, CitationSupportStatus, Identity, Inquiry, InquiryClaim, InquirySubmittedFinding, Material, Modality } from "../domain/types.js";
+import type { Chunk, Citation, CitationVerdict, Identity, Inquiry, InquiryClaim, InquirySubmittedFinding, Material, Modality } from "../domain/types.js";
 import type { MaterialService } from "../materials/material-service.js";
 import { readCtxBudgetTokens, readQueryRewriteMode, readRerankMinCandidates } from "../model/rag-config.js";
 import type { AsrAdapter, EmbeddingAdapter, OcrAdapter, RerankerAdapter, VlmAdapter } from "../model/slots.js";
 import { generateJson, type LlmDeps } from "../model/structured.js";
 import { guardModelAdapter } from "../security/guarded-adapter.js";
 import { shortId } from "../util/hash.js";
-import { resolveValidCitations } from "./citation.js";
+import { aggregateSupport, resolveValidCitations } from "./citation.js";
 import { createCitationLedger, createIntelTools, type CitationLedger } from "./intel-harness.js";
 import { rewriteForRetrieval, type RewriteMode } from "./query-rewrite.js";
 import { rerankTopK, retrieveHybrid, selectContext } from "./retrieval.js";
@@ -118,18 +118,39 @@ interface RawOutput {
   insufficient?: boolean;
 }
 
-type VerifiedSupportLabel = Exclude<CitationSupportLabel, "unknown">;
+/** LLM 裁判输出标签（提示词词表保持不变，内部映射到 Citation.verdict）。 */
+type JudgeLabel = "supports" | "mentions" | "contradicts" | "context-only";
 
-function asSupportLabel(raw: Record<string, unknown>): VerifiedSupportLabel {
+function asJudgeLabel(raw: Record<string, unknown>): JudgeLabel {
   const label = raw.label;
   if (label === "supports" || label === "mentions" || label === "contradicts" || label === "context-only") return label;
   throw new Error("support verifier returned an invalid label");
 }
 
-function supportStatusForLabel(label: CitationSupportLabel): CitationSupportStatus {
-  if (label === "supports") return "supported";
-  if (label === "unknown") return "support-unverified";
-  return "unsupported";
+/** 裁判标签 → 引用判定：context-only → context，其余同名（裁判异常另判 pending）。 */
+function verdictForJudgeLabel(label: JudgeLabel): CitationVerdict {
+  return label === "context-only" ? "context" : label;
+}
+
+/** 从 inquiries.jsonl 文本解析为 Inquiry[]；遇缺 id/support/verdict 的旧格式记录抛明确错误（零兼容）。 */
+export function parseInquiries(raw: string): Inquiry[] {
+  return raw
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const inquiry = JSON.parse(line) as Inquiry;
+      for (const claim of inquiry.claims ?? []) {
+        if (typeof claim.id !== "string" || typeof claim.support !== "string") {
+          throw new AppError(500, "inquiries.jsonl 为旧格式（结论缺 id/support 字段）：请重置数据根（data/cases）后重新运行。");
+        }
+        for (const citation of claim.citations ?? []) {
+          if (typeof citation.verdict !== "string") {
+            throw new AppError(500, "inquiries.jsonl 为旧格式（引用缺 verdict 字段）：请重置数据根（data/cases）后重新运行。");
+          }
+        }
+      }
+      return inquiry;
+    });
 }
 
 function dedupeStrings(ids: readonly string[]): string[] {
@@ -221,28 +242,31 @@ export class InquiryService {
         const sys = await this.promptBody(promptId, DEFAULT_PROMPT_BODIES[promptId]);
         retrievalQ = await rewriteForRetrieval(this.deps, actor.id, q, rewriteMode, sys);
         appliedRewriteMode = rewriteMode;
-        await this.audit
-          .append({
-            user: actor.id,
-            action: "inquiry.rewrite",
-            object: `case:${caseId}`,
-            caseId,
-            detail: { caseId, mode: rewriteMode, original: q, rewritten: retrievalQ },
-          })
-          .catch(() => undefined);
       } catch (e) {
         retrievalQ = q;
         const message = e instanceof Error ? e.message : String(e);
-        await this.audit
-          .append({
+        // 错误路径审计：失败则 console.error 后仍抛原始业务错误，绝不静默吞。
+        await this.auditErrorOrThrow(
+          {
             user: actor.id,
             action: "inquiry.rewrite",
             object: `case:${caseId}`,
             caseId,
             result: "error",
             detail: { caseId, mode: rewriteMode, message },
-          })
-          .catch(() => undefined);
+          },
+          e,
+        );
+      }
+      // 成功路径审计：失败向上抛（不静默吞）。
+      if (appliedRewriteMode) {
+        await this.audit.append({
+          user: actor.id,
+          action: "inquiry.rewrite",
+          object: `case:${caseId}`,
+          caseId,
+          detail: { caseId, mode: rewriteMode, original: q, rewritten: retrievalQ },
+        });
       }
     }
     // token 预算路由（§5.1）：预算内全上下文、超预算检索；未设预算退一期 top-k。
@@ -259,16 +283,18 @@ export class InquiryService {
         mode = hybrid.reranked ? "hybrid+rerank" : "hybrid";
       } catch (e) {
         // embed/rerank query 出站失败（云端点不可达/超时）绝不能让整次问答失败：降级回已选 BM25 候选。
-        await this.audit
-          .append({
+        // 错误路径审计：失败则 console.error 后仍抛原始业务错误，绝不静默吞。
+        await this.auditErrorOrThrow(
+          {
             user: actor.id,
             action: "inquiry.retrieve",
             object: `case:${caseId}`,
             result: "error",
             caseId,
             detail: { caseId, reason: "dense-degraded", message: e instanceof Error ? e.message : String(e) },
-          })
-          .catch(() => undefined);
+          },
+          e,
+        );
         mode = "bm25-degraded";
       }
     }
@@ -622,11 +648,7 @@ export class InquiryService {
   async list(actor: Identity, caseId: string): Promise<Inquiry[]> {
     await this.cases.get(actor, caseId); // 访问校验
     try {
-      const raw = await readFile(this.inquiriesFile(caseId), "utf8");
-      return raw
-        .split("\n")
-        .filter((l) => l.length > 0)
-        .map((l) => JSON.parse(l) as Inquiry);
+      return parseInquiries(await readFile(this.inquiriesFile(caseId), "utf8"));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw e;
@@ -670,26 +692,30 @@ export class InquiryService {
     }
     const retrievedById = new Map(retrieved.map((c) => [c.chunk_id, c]));
     const claims = (Array.isArray(raw.claims) ? raw.claims : []).map((rc) => this.validateClaim(rc, retrievedById, nameById));
-    const verified = claims.filter((c) => c.status === "verified");
-    if (verified.length === 0) {
+    const supported = claims.filter((c) => c.support === "supported");
+    if (supported.length === 0) {
       // 全部结论无有效引用 → 拒答（§7.3 step 4），但保留待核结论供人工参考。
       return this.make(actor, question, "insufficient", INSUFFICIENT, claims);
     }
-    const answer = verified.map((c, i) => `${i + 1}. ${c.text}`).join("\n");
+    const answer = supported.map((c, i) => `${i + 1}. ${c.text}`).join("\n");
     return this.make(actor, question, "answered", answer, claims);
   }
 
-  /** CitationService 校验（§7.3 step 4）：每条引用须命中检索集且 content_hash 一致。 */
+  /**
+   * CitationService 校验（§7.3 step 4）：每条引用须命中检索集且 content_hash 一致。
+   * 结构化路径不跑 LLM 支持性裁判，接地引用记 supports；全部接地 → support=supported，否则 unsupported。
+   */
   private validateClaim(rc: RawClaim, retrievedById: Map<string, Chunk>, nameById: Map<string, string>): InquiryClaim {
     const type = rc.type === "inference" ? "inference" : "fact";
     const ids = Array.isArray(rc.citations) ? rc.citations.filter((x): x is string => typeof x === "string") : [];
     const citations = resolveValidCitations(ids, retrievedById, nameById);
     // 结论须被完全支撑：所有引用都有效且至少一条。
-    const verified = ids.length > 0 && citations.length === ids.length;
+    const hashGrounded = ids.length > 0 && citations.length === ids.length;
     return {
+      id: shortId("claim-"),
       text: String(rc.text ?? "").trim(),
       type,
-      status: verified ? "verified" : "unverified",
+      support: aggregateSupport(citations, hashGrounded),
       citations,
     };
   }
@@ -729,20 +755,14 @@ export class InquiryService {
           citations.push(await verified);
         }
       } else {
-        citations.push(...cited.map((citation) => ({ ...citation, support_status: "unsupported" as const })));
+        // 存在未接地引用：不裁判，原样保留（verdict 仍为 cite 时的 pending），claim 整体判 unsupported。
+        citations.push(...cited);
       }
-      const support_status = !hashGrounded
-        ? "unsupported"
-        : citations.every((citation) => citation.support_status === "supported")
-          ? "supported"
-          : citations.every((citation) => citation.support_status === "unsupported")
-            ? "unsupported"
-            : "support-unverified";
       claims.push({
+        id: claim.id,
         text,
         type: "fact" as const,
-        status: support_status === "supported" ? "verified" as const : "unverified" as const,
-        support_status,
+        support: aggregateSupport(citations, hashGrounded),
         citations,
       });
     }
@@ -752,8 +772,8 @@ export class InquiryService {
     const attachSubmittedFindings = (inquiry: Inquiry): Inquiry =>
       submittedFindings.length > 0 ? { ...inquiry, submitted_findings: submittedFindings } : inquiry;
 
-    // support-unverified 仍保留在 claims 台账供人工查看，但不得进入最终 answer。
-    const answerable = claims.filter((claim) => claim.support_status === "supported");
+    // pending / unsupported 仍保留在 claims 台账供人工查看，但不得进入最终 answer。
+    const answerable = claims.filter((claim) => claim.support === "supported");
     if (answerable.length === 0) {
       return attachSubmittedFindings(this.make(actor, question, "insufficient", INSUFFICIENT, claims));
     }
@@ -793,12 +813,12 @@ export class InquiryService {
     for (const sf of ledger.submittedFindings) {
       const supportingIds = dedupeStrings(sf.supporting_cite_ids);
       const supporting_citations = await resolveCitations(sf.conclusion, supportingIds);
-      // 结构化候选必须全部支持引用都已被裁判为 supports；unknown 仅留在 Inquiry 原始记录。
+      // 结构化候选必须全部支持引用都已被裁判为 supports；pending 仅留在 Inquiry 原始记录。
       if (supportingIds.length === 0
         || supporting_citations.length !== supportingIds.length
-        || supporting_citations.some((citation) => citation.support_status !== "supported")) continue;
+        || supporting_citations.some((citation) => citation.verdict !== "supports")) continue;
       const opposing_citations = (await resolveCitations(sf.conclusion, dedupeStrings(sf.opposing_cite_ids)))
-        .filter((citation) => citation.support_label === "contradicts");
+        .filter((citation) => citation.verdict === "contradicts");
       resolved.push({
         conclusion: sf.conclusion,
         supporting_citations,
@@ -823,7 +843,7 @@ export class InquiryService {
         caseId,
         detail: { caseId, label, quote_hash: citation.quote_hash, content_hash: citation.content_hash },
       });
-      return { ...citation, support_label: label, support_status: supportStatusForLabel(label) };
+      return { ...citation, verdict: verdictForJudgeLabel(label) };
     } catch (e) {
       if (signal?.aborted) throw e;
       const message = e instanceof Error ? e.message : String(e);
@@ -835,11 +855,12 @@ export class InquiryService {
         caseId,
         detail: { caseId, label: "unknown", error: message, quote_hash: citation.quote_hash, content_hash: citation.content_hash },
       });
-      return { ...citation, support_label: "unknown", support_status: "support-unverified" };
+      // 裁判异常 → pending（未裁判/裁判失败）。
+      return { ...citation, verdict: "pending" };
     }
   }
 
-  private async judgeCitationSupport(actor: Identity, claim: string, quote: string, signal?: AbortSignal): Promise<VerifiedSupportLabel> {
+  private async judgeCitationSupport(actor: Identity, claim: string, quote: string, signal?: AbortSignal): Promise<JudgeLabel> {
     if (!this.deps.adapter || !this.deps.modelEndpoint) throw new Error("文本 LLM 未配置：支持性校验不可用");
     await this.deps.guard.authorize(this.deps.modelEndpoint, { user: actor.id, purpose: "inquiry-support-verify" });
     const raw = await generateJson(
@@ -852,7 +873,7 @@ export class InquiryService {
       ].join("\n"),
       { maxTokens: 800, thinking: "disabled", signal },
     );
-    return asSupportLabel(raw);
+    return asJudgeLabel(raw);
   }
 
   private async getInquiryAgent(): Promise<RuntimeAgent> {
@@ -939,5 +960,15 @@ export class InquiryService {
     const file = this.inquiriesFile(caseId);
     await mkdir(path.dirname(file), { recursive: true });
     await appendFile(file, `${JSON.stringify(inquiry)}\n`, "utf8");
+  }
+
+  /** 错误路径审计：审计写入失败时 console.error 后仍抛原始业务错误，绝不静默吞。 */
+  private async auditErrorOrThrow(input: Parameters<AuditService["append"]>[0], original: unknown): Promise<void> {
+    try {
+      await this.audit.append(input);
+    } catch (auditErr) {
+      console.error("[inquiry] 审计写入失败", auditErr);
+      throw original;
+    }
   }
 }

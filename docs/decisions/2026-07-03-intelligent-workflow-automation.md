@@ -488,7 +488,6 @@ class ContextService {
 
 ## 参考资料
 
-- [课程改造前专家评审输入](../archive/expert-review-brief-2026-07-02.md)
 - [溯源问答 Agent Harness 决策](../report/inquiry-agent-harness-decision.md)
 - [矛盾检测 Benchmark 与现行复测状态](../report/benchmark-summary.md)
 

@@ -1,96 +1,39 @@
 # 文档索引
 
-本索引分两栏：**现行**（持续维护、代表项目当前状态）与**历史存档**（点位快照，不再更新，仅供追溯）。判断某份文档"现在还准不准"，一律以现行栏顶部的 [AGENTS.md](../AGENTS.md) 为准 —— 它是唯一现行 onboarding 入口，且内含"里程碑编号消歧表"，专门解决历史文档之间的编号/叙事冲突。
+## 课程材料
 
-## 现行
+- [交付材料索引](delivery/README.md)
+- [架构与评估](delivery/architecture-and-evaluation.md)
+- [演示脚本](delivery/demo-script.md)
+- [答辩问题](delivery/defense-qa.md)
 
-### 项目入口（先读这些）
+## 运行与维护
 
-| 文档 | 作用 |
-| --- | --- |
-| [AGENTS.md](../AGENTS.md)（根） | **唯一现行 onboarding 入口**。项目一句话、架构、当前进度（阶段一/二/三）、关键约定与红线、如何运行、里程碑编号消歧表。 |
-| [implementation-notes.md](../implementation-notes.md)（根） | **权威变更日志**。按时间倒序记录 2026-07-10 可靠性加固、真实模型复测和阶段一~三的实现/偏离。 |
-| [docs/plans/2026-07-06-phase3-guided-autopilot-plan.md](./plans/2026-07-06-phase3-guided-autopilot-plan.md) | 阶段三（目标驱动工作台 M1–M5）的原始计划。 |
-| [docs/claims-and-limitations.md](./claims-and-limitations.md) | **现行宣称与诚实边界**。规定可以讲什么、不能夸大什么，以及当前已知限制。 |
-| [docs/how-to/run-the-workbench.md](./how-to/run-the-workbench.md) | 如何把工作台跑起来。 |
-| [docs/delivery/](./delivery/README.md) | 当前答辩脚本、架构/评测速览、必答问题和最终报告导航。 |
+- [本地启动](../README.md)
+- [运行手册](how-to/run-the-workbench.md)
+- [连接模型](how-to/connect-openai-compatible-models.md)
+- [阿里云百炼配置](how-to/configure-alibaba-bailian.md)
+- [火山引擎 TOS 配置](how-to/configure-volcengine-tos.md)
+- [备份与恢复](operations/backup-restore.md)
+- [功能与验证记录](claims-and-limitations.md)
 
-### 运行时文档簇（随代码演进持续维护）
+## 技术参考
 
-- **Tutorial**：[Quickstart](./tutorials/quickstart.md)
-- **How-to**：
-  [连接 OpenAI 兼容模型](./how-to/connect-openai-compatible-models.md) ·
-  [配置阿里云百炼 / DashScope](./how-to/configure-alibaba-bailian.md) ·
-  [配置火山引擎 TOS（本地媒体）](./how-to/configure-volcengine-tos.md) ·
-  [跑起工作台](./how-to/run-the-workbench.md) ·
-  [写一个 skill](./how-to/write-a-skill.md)
-- **Reference**：
-  [CLI 与配置](./reference/cli-and-config.md) ·
-  [模型适配器](./reference/model-adapter.md) ·
-  [会话格式](./reference/session-format.md) ·
-  [工具契约](./reference/tool-contracts.md) ·
-  [Workbench API](./reference/workbench-api.md) ·
-  [Workbench 数据与持久化](./reference/workbench-storage.md)
-- **Explanation**：[运行时架构](./explanation/runtime-architecture.md)（同目录下的 `spec-author-handoff-*` 三份属更早版本历史，见下方"历史存档"）
+- [运行时架构](explanation/runtime-architecture.md)
+- [命令行与配置](reference/cli-and-config.md)
+- [模型适配器](reference/model-adapter.md)
+- [会话格式](reference/session-format.md)
+- [工具接口](reference/tool-contracts.md)
+- [工作台接口](reference/workbench-api.md)
+- [工作台存储](reference/workbench-storage.md)
+- [产品规格](specs/intel-workbench-product-spec.md)
 
-### 决策 / 规格 / 报告（参考资料，随项目演进追加，不追溯改写）
+## 实验与报告
 
-- **Decisions**（`docs/decisions/`）：
-  [Agent harness 自主性设计](./decisions/2026-07-03-agent-harness-autonomy-design.md) ·
-  [智能工作流自动化决策](./decisions/2026-07-03-intelligent-workflow-automation.md) ·
-  [核验候选池产品流程](./decisions/2026-07-03-verification-pool-product-flow.md)
-- **Specs**（`docs/specs/`）：
-  [情报分析工作台 · 产品设计 + 界面规格](./specs/intel-workbench-product-spec.md) ·
-  [一期工程实现方案](./specs/intel-workbench-phase1-engineering-plan.md) ·
-  [二期工程实现方案](./specs/intel-workbench-phase2-engineering-plan.md) ·
-  [二期多模态 RAG 规格](./specs/intel-workbench-phase2-multimodal-rag-spec.md) ·
-  [三期 Agent Harness 计划](./specs/intel-workbench-phase3-agent-harness-plan.md)（早期 P3.0–P3.D 技术轨，编号已被"阶段一/二/三"取代，见 AGENTS.md 消歧表） ·
-  [av-dialogue-insight spec](./specs/av-dialogue-insight-spec.md) ·
-  [intel-bulletin spec](./specs/intel-bulletin-spec.md)
-- **Report**（`docs/report/`）：
-  **[技术总结报告 2026-07-10](./report/技术总结报告-2026-07-10.md)（课程实验报告，现行）** ·
-  [真实模型端到端复测](./report/2026-07-10-real-model-e2e.md) ·
-  [Benchmark 汇总](./report/benchmark-summary.md)（矛盾检测 2026-07-07 数字为历史基线，新策略待复测） ·
-  [溯源问答 Agent Harness 决策记录](./report/inquiry-agent-harness-decision.md) ·
-  [RAG 质量决策日志](./report/rag-quality-decision-log.md)
-- **Releases**（`docs/releases/`）：[v1.1.0 release notes](./releases/v1.1.0.md)
-- **Plans**（`docs/plans/`，除上方阶段三计划外）：
-  [P0/P1/P2 重构计划](./plans/2026-06-22-p0p1p2-refactor-plan.md) ·
-  [课程交付改造计划](./plans/2026-07-02-course-delivery-refit-plan.md)
+- [实用性与可信性评估](report/2026-07-26-practical-trustworthiness-assessment.md)
+- [评估汇总](report/benchmark-summary.md)
+- [技术报告](report/技术总结报告-2026-07-10.md)
+- [模型端到端验证](report/2026-07-10-real-model-e2e.md)
+- [早期课程材料](archive/README.md)
 
-## 历史存档
-
-### `docs/archive/`（本次清理归档，详见 [archive/README.md](./archive/README.md)）
-
-曾经充当过"项目入口 / 现状汇总"的文档，内容已被 AGENTS.md / implementation-notes.md 取代。每份文件顶部都有存档横幅。
-
-| 文件 | 快照日期 |
-| --- | --- |
-| [HANDOFF.md](./archive/HANDOFF.md) | 2026-06-23（P3 harness 旧技术轨） |
-| [HANDOVER.md](./archive/HANDOVER.md) | 2026-07-03（Phase 1-2 建议服务叙事） |
-| [EXECUTIVE-SUMMARY.md](./archive/EXECUTIVE-SUMMARY.md) | 2026-07-03 |
-| [QUICKSTART-PHASE1-2.md](./archive/QUICKSTART-PHASE1-2.md) | 2026-07-03 |
-| [architecture.html](./archive/architecture.html) | 2026-06-22（P3.D 老技术轨） |
-| [architecture-explained.html](./archive/architecture-explained.html) | 2026-06-22（P3.D 老技术轨） |
-| [答辩汇报底册-2026-07-03.md](./archive/答辩汇报底册-2026-07-03.md) | 2026-07-03 |
-| [答辩-代码讲解脚本-2026-07-03.md](./archive/答辩-代码讲解脚本-2026-07-03.md) | 2026-07-03 |
-| [expert-review-brief-2026-07-02.md](./archive/expert-review-brief-2026-07-02.md) | 2026-07-02（课程改造前的专家评审输入） |
-| [implementation-roadmap-2026-07-03.md](./archive/implementation-roadmap-2026-07-03.md) | 2026-07-03（已放弃 FeedbackService 的旧三周路线图） |
-| [2026-07-03-phase1-2-implementation-report.md](./archive/2026-07-03-phase1-2-implementation-report.md) | 2026-07-03（建议服务 Phase1-2 实施快照） |
-| [practice-report-2026-07-02.md](./archive/practice-report-2026-07-02.md) | 2026-07-02（阶段一至三之前的课程报告） |
-
-### 更早版本历史（原位保留，未移动到 archive/）
-
-再往前一代的历史记录 —— mini-agent 运行时从 v1 到 v1.2 的版本化规格与交接文档。这些原本就以"point-in-time record"自居，不参与本次归档整理，仍在原路径：
-
-- [Runtime v1 spec](./mini-agent-runtime-spec.md)
-- [Runtime v1.1 spec](./mini-agent-runtime-v1.1-spec.md)
-- [Runtime v1.2 spec](./mini-agent-runtime-v1.2-spec.md)
-- [v1.1 entry gate](./mini-agent-v1.1-entry-gate.md)
-- [Spec author handoff：v1 status](./explanation/spec-author-handoff-2026-04-13.md)
-- [Spec author handoff：v1.1 completion](./explanation/spec-author-handoff-v1.1-completion-2026-04-13.md)
-- [Spec author handoff：v1.2 observable runtime](./explanation/spec-author-handoff-v1.2-observable-runtime-2026-04-13.md)
-- [Runtime v1 plan](./superpowers/plans/2026-04-13-agent-runtime-v1.md)
-- [Runtime v1.1 plan](./superpowers/plans/2026-04-13-mini-agent-runtime-v1.1.md)
-- [Audio path: Doubao ASR plan](./superpowers/plans/2026-05-30-audio-path-doubao-asr.md)
-- [Multimodal hardening then skill cleanup plan](./superpowers/plans/2026-05-30-multimodal-hardening-then-skill-cleanup.md)
+原始评估结果保存在 `packages/server/eval/` 和 `packages/server/e2e/`。
